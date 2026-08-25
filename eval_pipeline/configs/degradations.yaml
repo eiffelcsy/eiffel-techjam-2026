@@ -1,0 +1,22 @@
+# The transform grid. Six transforms, each with an explicit parameter list.
+# L1 sweeps this grid exhaustively; L2/L3 sample from it.
+
+grid:
+  jpeg:            {param: quality,  values: [90, 70, 50, 30]}      # social re-encode
+  gaussian_blur:   {param: sigma,    values: [0.5, 1.0, 2.0]}       # out-of-focus
+  resize:          {param: scale,    values: [0.5, 0.25]}           # thumbnailing
+  gaussian_noise:  {param: sigma,    values: [0.02, 0.05, 0.10]}    # low-light sensor
+  color_jitter:    {param: strength, values: [0.2]}                 # filter / auto-enhance
+  center_crop:     {param: keep,     values: [0.8]}                 # profile-pic framing
+
+# Composition levels.
+#   0 clean    reference
+#   1 single   the 14 grid conditions, one at a time
+#   2 pair     two distinct transforms, random params, random order
+#   3 multi    three to five distinct transforms, same sampling
+levels: [0, 1, 2, 3]
+
+# Independent re-draws of L2/L3 over the same images. Each replicate samples a
+# fresh set of recipes: tightens the CI and widens coverage of the combination
+# space without growing the eval set.
+n_replicates: 3

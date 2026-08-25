@@ -1,0 +1,11 @@
+# One run = one detector x a set of datasets.
+# Everything not named here takes its default -- see configs/defaults.yaml.
+
+run_id: sdxl_on_sid_set
+
+detector: configs/detectors/sdxl.yaml
+
+datasets:
+  - configs/datasets/sid_set.yaml
+
+degrade: {}     # the standard sweep: all four levels, all six transforms

@@ -1,0 +1,84 @@
+# Reference: every key of every config kind, shown with its default.
+# The harness never loads this file -- copy the bits you need.
+#
+# Three kinds of config, one file each, one directory each:
+#
+#   configs/datasets/<name>.yaml    what a dataset IS
+#   configs/detectors/<name>.yaml   what a detector IS
+#   configs/runs/<name>.yaml        one detector x a set of datasets
+#
+# Adding a dataset is one new file under datasets/. Adding a detector is one
+# new file under detectors/. Pairing them is one new file under runs/.
+#
+#   python scripts/build_manifest.py --config configs/datasets/<name>.yaml
+#   python scripts/run_eval.py       --config configs/runs/<name>.yaml
+
+
+# ---------------------------------------------------------------- dataset ----
+# configs/datasets/<name>.yaml
+# `name` and `manifest` are required. `source` is read only by
+# build_manifest.py; once the manifest exists, evaluation ignores it.
+
+name: my-dataset
+manifest: data/my-dataset/manifest.parquet
+split: null                 # which split to score; null = every row
+
+source:
+  target: pipeline.data.sources.HFImageDatasetSource
+  args:
+    dataset_id: some-org/some-dataset
+    split: test
+    fake_classes: [FAKE]    # class names meaning *generated*
+    real_classes: null      # name these on a dataset with >2 classes; anything
+                            # in neither set is then dropped rather than folded
+                            # into real
+    generator: UNKNOWN      # what produced the fakes
+    image_column: image
+    label_column: label
+    limit: null             # per class; null = all
+    streaming: false        # true for large repos -- see README
+
+
+# --------------------------------------------------------------- detector ----
+# configs/detectors/<name>.yaml
+# `name` and `target` are required.
+
+name: my-detector           # display name, used in result filenames
+target: pipeline.detectors.hf.HFImageClassifier
+args:
+  model_id: some-org/some-detector
+  # fake_labels: [artificial]   # only if the head's id2label is unusual
+device: auto                # auto -> cuda | mps | cpu; or "cuda:1"
+
+
+# -------------------------------------------------------------------- run ----
+# configs/runs/<name>.yaml
+# `run_id`, `detector` and `datasets` are required. Loader knobs live here, not
+# on the dataset: batch_size and num_workers are properties of this machine and
+# max_images is a scope decision for this run.
+#
+# A minimal run config is four lines:
+#
+#   run_id: my_run
+#   detector: configs/detectors/my-detector.yaml
+#   datasets: [configs/datasets/my-dataset.yaml]
+#   degrade: {}
+
+run_id: my_run
+detector: configs/detectors/my-detector.yaml   # path, or the mapping inline
+datasets:                                      # paths, or mappings inline
+  - configs/datasets/my-dataset.yaml
+
+out_dir: results/           # -> results/{run_id}__{detector}__{dataset}.json
+max_images: null            # per class; null = all. The one knob that moves
+                            # wall-clock by an order of magnitude.
+batch_size: 32
+num_workers: 4              # raise on a cluster node, lower on a laptop
+retention_floor: 0.5        # `operating_envelope` = deepest level at or above this
+
+degrade: {}                 # `{}` accepts every default below
+  # grid_file: configs/degradations.yaml
+  # levels: [0, 1, 2, 3]    # 0 clean, 1 single, 2 pair, 3 multi. 0 is mandatory.
+  # n_replicates: 3         # independent L2/L3 re-draws over the same images
+  # transforms: null        # null = all six
+  # seed: 0                 # fixes the eval subset and every degradation draw

@@ -1,0 +1,13 @@
+# Organika/sdxl-detector -- a Swin image classifier.
+# Its id2label is {0: artificial, 1: human}, i.e. the FAKE class is at index 0.
+# The adapter resolves that from the model's own label map ("artificial" is in
+# DEFAULT_FAKE_LABELS), so no fake_labels override is needed here.
+#
+# Device placement is the pipeline's job -- `device: auto` picks cuda/mps/cpu.
+# Do not pass accelerate's device_map: a sharded model cannot then be .to()'d.
+
+name: sdxl-detector
+target: pipeline.detectors.hf.HFImageClassifier
+args:
+  model_id: Organika/sdxl-detector
+device: auto

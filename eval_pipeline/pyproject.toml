@@ -1,0 +1,31 @@
+[project]
+name = "robust-aigc-eval"
+version = "0.1.0"
+description = "Evaluation harness and inference for robust AI-generated image detection"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "torchvision",
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "pillow",
+    "scikit-learn",
+    "matplotlib",
+    "pyyaml",
+    "tqdm",
+    "tabulate",
+    "transformers",
+    "datasets",
+    "huggingface-hub",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["pipeline*"]
