@@ -1,0 +1,14 @@
+# The distorted half of ntire_val. Same manifest file, other split.
+#
+# Build it with:
+#
+#   python scripts/build_manifest.py --config configs/datasets/ntire_val.yaml
+#
+# 5000 images the challenge degraded itself, with its own 19-transform grid.
+# Score this at LEVEL 0 ONLY -- our degradation grid stacked on top of an
+# unknown prior transform makes both the L0 reference and L1's one-cause claim
+# untrue. See the long note in ntire_val.yaml.
+
+name: ntire_val_distorted
+manifest: ../data/ntire_val/manifest.parquet
+split: distorted

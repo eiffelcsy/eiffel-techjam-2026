@@ -9,10 +9,17 @@ no container statistic is left correlated with the label.
 
 import numpy as np
 import torch
-from PIL import Image
+from PIL import Image, PngImagePlugin
 from torch.utils.data import Dataset
 
 from pipeline.utils.io import list_images
+
+# PIL caps how far it will inflate a PNG's ancillary chunks (1MB by default) as
+# a zlib-bomb guard, and raises on anything larger -- an ICC profile fatter than
+# the image is rare but does occur upstream. We decode local dataset
+# directories, not untrusted uploads, and the profile is discarded a line later
+# anyway, so the guard only costs us images. Raised, not removed.
+PngImagePlugin.MAX_TEXT_CHUNK = 64 * 1024 * 1024
 
 
 def load_normalized(path: str) -> Image.Image:

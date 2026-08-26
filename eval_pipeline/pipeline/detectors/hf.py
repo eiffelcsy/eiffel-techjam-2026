@@ -64,6 +64,46 @@ class _ProcessorPreprocess:
         return self.processor(img, return_tensors="pt").pixel_values[0]
 
 
+class _CropPreprocess:
+    """Crop at native resolution, then normalize. No resize.
+
+    The processor's own transform resizes the whole image to the model's square
+    input, which for a 1024px source is a ~4.6x downsample. That destroys the
+    high-frequency generation traces a forensic detector exists to read: by the
+    time the trunk sees the image, the only thing left to separate real from
+    generated is *content*, and a probe on a semantic backbone will happily fit
+    that instead. Cropping keeps pixels at the scale they were generated at.
+
+    Center crop, not random: `sha_preprocess` runs the transform twice and
+    refuses a stochastic one, because a cache keyed on a transform that returns
+    different tensors for the same image is not a cache. The harness needs the
+    same property for a different reason -- per-condition score tables line up
+    row for row only if an image yields the same crop under every condition.
+
+    Images smaller than the crop are scaled up to it. Padding would be the
+    alternative and is worse: a border whose width is a function of the source
+    resolution is exactly the container statistic the decode path exists to
+    strip.
+    """
+
+    def __init__(self, processor, size: int):
+        self.processor = processor
+        self.size = int(size)
+
+    def __call__(self, img: Image.Image) -> torch.Tensor:
+        w, h = img.size
+        if w < self.size or h < self.size:
+            scale = self.size / min(w, h)
+            img = img.resize(
+                (max(self.size, round(w * scale)), max(self.size, round(h * scale))),
+                Image.BICUBIC,
+            )
+            w, h = img.size
+        left, top = (w - self.size) // 2, (h - self.size) // 2
+        img = img.crop((left, top, left + self.size, top + self.size))
+        return self.processor(img, do_resize=False, return_tensors="pt").pixel_values[0]
+
+
 class HFImageClassifier(FrozenDetector):
     """Any `AutoModelForImageClassification` checkpoint, used as a frozen detector.
 

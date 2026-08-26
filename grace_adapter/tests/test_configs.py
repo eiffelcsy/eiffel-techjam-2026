@@ -197,7 +197,7 @@ def test_manifest_paths_resolve_the_same_from_either_package(path):
 
     `run_eval.py` runs with the CWD at `eval_pipeline/`; `build_cache.py`,
     `train_probe.py` and `train_adapter.py` run with the CWD at `grace_adapter/`.
-    Config paths resolve against the CWD, so a bare `data/sid_poc/...` names
+    Config paths resolve against the CWD, so a bare `data/ntire/train/...` names
     `eval_pipeline/data/...` for one caller and `grace_adapter/data/...` for the
     other -- it works for whoever built it and raises `FileNotFoundError` for
     everyone else. That is exactly the shape of bug this catches.

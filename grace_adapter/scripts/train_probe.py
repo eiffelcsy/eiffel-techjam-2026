@@ -1,6 +1,6 @@
 """Stage 0: fit the PoC detector's classification head on clean features.
 
-    python scripts/train_probe.py configs/probe/dinov3_sid.yaml
+    python scripts/train_probe.py configs/probe/dinov3_ntire.yaml
 
 Run this once, before build_cache.py. Nothing else in the pipeline trains a
 detector; this exists because the PoC detector is a DINOv3 trunk plus a head

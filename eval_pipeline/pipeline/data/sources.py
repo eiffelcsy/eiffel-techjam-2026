@@ -62,8 +62,17 @@ def _check_split(n_fake: int, n_real: int, fake_classes) -> None:
 
 
 def _save(img: Image.Image, path: Path) -> None:
+    """Write pixels and nothing else.
+
+    PIL's PNG writer falls back to `im.info["icc_profile"]`, so a plain save()
+    copies the upstream container's colour profile into our PNG -- a per-source
+    marker sitting in a file whose whole point is that its container says
+    nothing about where it came from. Rebuilding from raw bytes leaves an empty
+    info dict, so every materialized image carries the same (no) metadata.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    img.convert("RGB").save(path, "PNG")
+    rgb = img.convert("RGB")
+    Image.frombytes("RGB", rgb.size, rgb.tobytes()).save(path, "PNG")
 
 
 class HFImageDatasetSource:

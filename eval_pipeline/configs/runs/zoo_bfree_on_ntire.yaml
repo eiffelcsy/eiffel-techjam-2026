@@ -15,7 +15,7 @@ run_id: zoo_bfree
 detector: configs/detectors/bfree.yaml
 
 datasets:
-  - configs/datasets/sid_set.yaml
+  - configs/datasets/ntire_val.yaml
 
 batch_size: 1
 

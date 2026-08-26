@@ -50,9 +50,40 @@ import torch.nn as nn
 from PIL import Image
 
 from pipeline.detectors.base import FrozenDetector
-from pipeline.detectors.hf import _ProcessorPreprocess
+from pipeline.detectors.hf import _CropPreprocess, _ProcessorPreprocess
 
 DEFAULT_BACKBONE = "facebook/dinov3-vits16-pretrain-lvd1689m"
+
+INPUT_MODES = ("resize", "crop")
+"""How a source image becomes the model's 224x224 input.
+
+    resize   the processor's own transform: squash the whole image to 224x224
+    crop     center 224x224 window at the source's native resolution
+
+`resize` is what the processor config asks for (`size: {224, 224}`,
+`do_center_crop: null`, `default_to_square: true`) and it is the right default
+for DINOv3's *intended* use, where the task is semantic and seeing the whole
+frame matters.
+
+It is the wrong default here, and measurably so. The finding that produced this
+flag was made on SID_Set, the dataset this project used before NTIRE, and it is
+recorded because the mechanism is a property of the preprocessing rather than of
+that dataset: under `resize`, a probe reached 0.9999 val AUC and then held 0.985
+AUC after the image was downscaled to 32x32 and back -- a resolution at which no
+generation trace of any kind survives. That is not a forensic detector; it is a
+content classifier, and it cannot show the degradation collapse GRACE exists to
+repair (retention stayed at 100% through JPEG-30, blur sigma=2.0 and 4x
+downscale).
+
+The 32x32 round trip is worth keeping as a standing check on any head fit here,
+whatever the dataset: a head reading generation traces must fall toward chance
+under it, and one that does not has learned content.
+
+`crop` is the fix, and it is a fix to preprocessing rather than to the head:
+the traces live at the pixel scale, so the trunk has to be shown pixels at that
+scale or the head has nothing forensic to fit. A 224 window of a 1024px image is
+also ~5% of its area, which cuts how much scene semantics is on offer.
+"""
 
 POOLS = ("cls", "patchmean", "cls+patchmean")
 """How the token sequence becomes one vector.
@@ -132,6 +163,7 @@ class DINOv3MLPDetector(FrozenDetector):
         backbone_id: str = DEFAULT_BACKBONE,
         head_checkpoint: str | None = None,
         pool: str = "cls+patchmean",
+        input_mode: str = "resize",
         hidden: int = 512,
         n_layers: int = 2,
         dropout: float = 0.0,
@@ -141,9 +173,13 @@ class DINOv3MLPDetector(FrozenDetector):
         super().__init__()
         from transformers import AutoImageProcessor, AutoModel
 
+        if input_mode not in INPUT_MODES:
+            raise ValueError(f"input_mode must be one of {INPUT_MODES}, got {input_mode!r}")
+
         self.backbone_id = backbone_id
         self.name = name or "dinov3-vits16"
         self.pool = pool
+        self.input_mode = input_mode
         self.processor = AutoImageProcessor.from_pretrained(backbone_id, revision=revision)
         self.backbone = AutoModel.from_pretrained(backbone_id, revision=revision)
 
@@ -155,7 +191,9 @@ class DINOv3MLPDetector(FrozenDetector):
         payload = None
         if head_checkpoint is not None:
             payload = torch.load(head_checkpoint, map_location="cpu", weights_only=False)
-            _assert_head_matches(payload, head_checkpoint, backbone_id, pool, self.feature_dim)
+            _assert_head_matches(
+                payload, head_checkpoint, backbone_id, pool, self.feature_dim, input_mode
+            )
             hidden = payload["hidden"]
             n_layers = payload["n_layers"]
             dropout = payload.get("dropout", 0.0)
@@ -165,7 +203,11 @@ class DINOv3MLPDetector(FrozenDetector):
         if payload is not None:
             self.head_module.load_state_dict(payload["state_dict"])
 
-        self._preprocess = _ProcessorPreprocess(self.processor)
+        self._preprocess = (
+            _CropPreprocess(self.processor, self.input_size)
+            if input_mode == "crop"
+            else _ProcessorPreprocess(self.processor)
+        )
         self.freeze()
 
     # -- the seam ------------------------------------------------------------
@@ -209,13 +251,26 @@ def _input_size(processor) -> int:
     return 224
 
 
-def _assert_head_matches(payload, path, backbone_id, pool, feature_dim) -> None:
+def _assert_head_matches(payload, path, backbone_id, pool, feature_dim, input_mode) -> None:
     """A head trained on other features is the silent failure worth guarding.
 
-    Both mismatches produce a model that loads, runs, and scores nonsense: a
+    Every mismatch here produces a model that loads, runs, and scores nonsense: a
     `cls`-pooled head on `cls+patchmean` features fails loudly on the shape, but
-    a head trained against a *different backbone* of the same width does not.
+    a head trained against a *different backbone* of the same width does not, and
+    neither does one trained on crops and handed resized images.
     """
+    # `input_mode` predates no checkpoint -- it was added after the first heads
+    # were trained, and `resize` is the only thing those can have been fit on.
+    # Defaulting to it (rather than skipping the check, as the optional keys
+    # below do) is what makes an old head refuse a `crop` detector.
+    stored_mode = payload.get("input_mode", "resize")
+    if stored_mode != input_mode:
+        raise ValueError(
+            f"{path} was trained on input_mode={stored_mode!r} but this detector "
+            f"feeds input_mode={input_mode!r}. The trunk sees a different image "
+            f"scale in each mode, so the features are not the same space. Retrain "
+            f"the probe, or fix `input_mode` in the detector config."
+        )
     stored_pool = payload.get("pool")
     if stored_pool is not None and stored_pool != pool:
         raise ValueError(

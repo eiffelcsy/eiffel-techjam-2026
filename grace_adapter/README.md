@@ -280,7 +280,7 @@ python scripts/build_cache.py configs/cache/rine.yaml --dry-run
 python scripts/build_cache.py configs/cache/rine.yaml
 
 # 2. the premise, before anything is TRAINED on it -- reads the cache, no GPU
-python scripts/analyze_drift.py --cache cache/rine --dataset ../eval_pipeline/configs/datasets/sid_set.yaml
+python scripts/analyze_drift.py --cache cache/rine --dataset ../eval_pipeline/configs/datasets/ntire_train.yaml
 
 # 3. stage 1, minutes per run
 python scripts/train_adapter.py configs/train/rine_clean.yaml
@@ -413,7 +413,7 @@ not exist yet. `scripts/train_probe.py` fits one, once, and it is the only scrip
 in the project that trains a detector.
 
 ```bash
-python scripts/train_probe.py configs/probe/dinov3_sid.yaml
+python scripts/train_probe.py configs/probe/dinov3_ntire.yaml
 ```
 
 Two passes and a 400k-parameter fit: one trunk forward per image ever (the trunk
@@ -451,11 +451,11 @@ WANDB=1 bash scripts/poc.sh      # every stage tracked under one group
 or by hand:
 
 ```bash
-# 0. dataset -- SID_Set train + validation into ONE manifest, disjoint dirs
-cd ../eval_pipeline && python scripts/build_manifest.py --config configs/datasets/sid_poc.yaml
+# 0. dataset -- NTIRE shards 0-4 (train) + shard 5 (selection) into ONE manifest
+cd ../eval_pipeline && python scripts/build_manifest.py --config configs/datasets/ntire_train.yaml
 
 # 1. stage 0 -- fit the head on clean features
-cd ../grace_adapter && python scripts/train_probe.py configs/probe/dinov3_sid.yaml
+cd ../grace_adapter && python scripts/train_probe.py configs/probe/dinov3_ntire.yaml
 
 # 2. the baseline this is all measured against -- run it BEFORE training anything
 cd ../eval_pipeline && python scripts/run_eval.py --config configs/runs/dinov3_poc_baseline.yaml
@@ -467,9 +467,9 @@ python scripts/build_cache.py       configs/cache/dinov3.yaml
 
 # 4. E0 -- AFTER the render (it compares the clean view against a degraded one),
 #    but before anything is trained
-python scripts/analyze_drift.py --cache cache/dinov3-sid \
-  --dataset  ../eval_pipeline/configs/datasets/sid_poc.yaml \
-  --detector ../eval_pipeline/configs/detectors/dinov3-sid.yaml \
+python scripts/analyze_drift.py --cache cache/dinov3-ntire \
+  --dataset  ../eval_pipeline/configs/datasets/ntire_train.yaml \
+  --detector ../eval_pipeline/configs/detectors/dinov3-ntire.yaml \
   --split    grace.splits.dinov3.DINOv3Split
 
 # 5. stage 1 (both arms), 6. stage 2
@@ -481,7 +481,7 @@ python scripts/train_discrepancy.py configs/train/dinov3_discrepancy.yaml
 cd ../eval_pipeline && python scripts/run_eval.py --config configs/runs/dinov3_poc_grace.yaml
 ```
 
-`configs/datasets/sid_poc.yaml` puts **two** splits in one manifest, which no
+`configs/datasets/ntire_train.yaml` puts **two** splits in one manifest, which no
 other dataset config does — evaluation needs one held-out set, but stage 0 needs
 a training set drawn from the same distribution and provably disjoint from it.
 `ConcatSource` gives each child its own image subdirectory, and that is

@@ -1,6 +1,6 @@
 # Stage 0 -- fit the PoC detector's classification head. PoC only.
 #
-#   python scripts/train_probe.py configs/probe/dinov3_sid.yaml
+#   python scripts/train_probe.py configs/probe/dinov3_ntire.yaml
 #
 # The one script in this project that trains a detector, and it exists because a
 # DINOv3 trunk has no classifier: GRACE cannot adapt a seam whose head does not
@@ -14,11 +14,11 @@
 # Clean images only, no degradation augmentation -- that is the premise. See
 # grace/probe/train.py.
 
-run_id: dinov3_sid
+run_id: dinov3_ntire
 
-detector: ../eval_pipeline/configs/detectors/dinov3-sid.yaml
-dataset: ../eval_pipeline/configs/datasets/sid_poc.yaml         # split: train
-val_dataset: ../eval_pipeline/configs/datasets/sid_poc_eval.yaml # split: validation
+detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
+dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml         # split: train
+val_dataset: ../eval_pipeline/configs/datasets/ntire_train_eval.yaml # split: validation
 
 split: grace.splits.dinov3.DINOv3Split
 out: ""             # "" = take it from the detector config's head_checkpoint

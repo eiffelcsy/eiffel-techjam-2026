@@ -38,10 +38,10 @@
 # trained under augmentation would have partly solved the problem GRACE exists to
 # solve, and every retention number downstream would measure the augmentation.
 
-run_id: dinov3_sid
-detector: ../eval_pipeline/configs/detectors/dinov3-sid.yaml
-dataset: ../eval_pipeline/configs/datasets/sid_poc.yaml        # split: train
-val_dataset: ../eval_pipeline/configs/datasets/sid_poc_eval.yaml
+run_id: dinov3_ntire
+detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
+dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml        # split: train
+val_dataset: ../eval_pipeline/configs/datasets/ntire_train_eval.yaml
 split: grace.splits.dinov3.DINOv3Split
 
 out: ""                     # "" = the head_checkpoint the DETECTOR config names,
@@ -79,7 +79,7 @@ wandb:                      # off by default. summary.json next to the checkpoin
 
 detector: ../eval_pipeline/configs/detectors/rine-ldm.yaml
 split: grace.splits.rine.RINESplit     # dotted path to the SplitDetector
-dataset: ../eval_pipeline/configs/datasets/sid_set.yaml
+dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
 
 out_dir: cache/
 n_epochs: 12                # degraded views to render. Each is one full trunk
@@ -115,7 +115,7 @@ cache_dir: cache/rine
 
 detector: ../eval_pipeline/configs/detectors/rine-ldm.yaml
 split: grace.splits.rine.RINESplit
-dataset: ../eval_pipeline/configs/datasets/sid_set.yaml
+dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
 # The detector is loaded even in `source: cache` mode: the frozen head is what
 # head_kl and the Jacobian weighting differentiate through, so the model is
 # needed whether or not the trunk ever runs.
@@ -195,7 +195,7 @@ adapter_checkpoint: checkpoints/grace/rine_clean/ema.pt
 
 detector: ../eval_pipeline/configs/detectors/rine-ldm.yaml
 split: grace.splits.rine.RINESplit
-dataset: ../eval_pipeline/configs/datasets/sid_set.yaml
+dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
 
 epochs: 4
 batch_size: 256

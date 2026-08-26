@@ -201,7 +201,7 @@ def test_dataset_configs_load(path):
     Not that it builds -- that needs the data, which this suite deliberately
     does not have -- only that the spec is well-formed and the target resolves.
     A `source:` block is optional: a config that only names a manifest built by
-    another config (sid_poc_eval) is a legitimate spec with nothing to import.
+    another config (ntire_val) is a legitimate spec with nothing to import.
     """
     from pipeline.config import load_dataset_config
     from pipeline.utils.imports import locate
@@ -285,7 +285,7 @@ def test_csv_metadata_source_selects_by_path_and_labels_by_column(tmp_path):
 VENDORED = ("pipeline.detectors.bfree.", "pipeline.detectors.gapl.", "pipeline.detectors.rine.")
 """Detectors whose weights come from a repo cloned by hand under `third_party/`.
 
-Selected by target rather than by name: `sdxl` and `dinov3-sid` load from the
+Selected by target rather than by name: `sdxl` and `dinov3-ntire` load from the
 Hub and would fail this test with a network or licence error that says nothing
 about a missing clone, and a fourth Hub detector added later should not have to
 remember to opt out."""
@@ -314,7 +314,7 @@ def test_run_config_takes_one_detector_or_many(tmp_path):
     def write(body: str) -> Path:
         path = tmp_path / "run.yaml"
         path.write_text(
-            f"run_id: r\ndatasets: [configs/datasets/sid_set.yaml]\n{body}"
+            f"run_id: r\ndatasets: [configs/datasets/ntire_train.yaml]\n{body}"
         )
         return path
 

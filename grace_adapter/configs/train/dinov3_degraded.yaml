@@ -12,11 +12,11 @@
 
 run_id: dinov3_degraded
 
-detector: ../eval_pipeline/configs/detectors/dinov3-sid.yaml
+detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
 split: grace.splits.dinov3.DINOv3Split
-dataset: ../eval_pipeline/configs/datasets/sid_poc.yaml
+dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
 
-cache_dir: cache/dinov3-sid
+cache_dir: cache/dinov3-ntire
 epochs: 12
 seed: 0
 target_view: degraded

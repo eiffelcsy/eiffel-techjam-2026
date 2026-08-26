@@ -1,7 +1,7 @@
 """Compare an adapted detector against its baseline on a shared denominator.
 
-    python scripts/compare.py --baseline ../eval_pipeline/results/zoo__rine__sid_set.json \
-                              --adapted  ../eval_pipeline/results/grace__rine+grace__sid_set.json
+    python scripts/compare.py --baseline ../eval_pipeline/results/zoo__rine__ntire_val.json \
+                              --adapted  ../eval_pipeline/results/grace__rine+grace__ntire_val.json
 
 The harness normalizes retention by *each detector's own* clean AUC, which is the
 right convention for describing one detector and the wrong one for comparing two.

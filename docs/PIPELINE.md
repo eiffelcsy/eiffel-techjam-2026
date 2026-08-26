@@ -210,11 +210,11 @@ The PoC path (`grace_adapter/README.md` §8) is the one that runs end to end tod
 — the zoo splits still wait on their clones:
 
 ```bash
-# 0. Dataset — SID_Set train + validation into ONE manifest, disjoint image dirs.
-cd ../eval_pipeline && python scripts/build_manifest.py --config configs/datasets/sid_poc.yaml
+# 0. Dataset — NTIRE shards 0-4 (train) + shard 5 (selection) into ONE manifest.
+cd ../eval_pipeline && python scripts/build_manifest.py --config configs/datasets/ntire_train.yaml
 
 # 1. Stage 0 — fit the detector's own head on CLEAN features. Seconds.
-cd ../grace_adapter && python scripts/train_probe.py configs/probe/dinov3_sid.yaml
+cd ../grace_adapter && python scripts/train_probe.py configs/probe/dinov3_ntire.yaml
 
 # 2-6. As below, with `dinov3` in place of `rine`. Or all of it at once:
 bash scripts/poc.sh
@@ -229,7 +229,7 @@ python scripts/build_cache.py configs/cache/rine.yaml
 
 # 2. E0 — the premise, before anything is TRAINED on it. Reads the cache, no GPU.
 python scripts/analyze_drift.py --cache cache/rine \
-       --dataset ../eval_pipeline/configs/datasets/sid_set.yaml
+       --dataset ../eval_pipeline/configs/datasets/ntire_train.yaml
 
 # 3. Stage 1 — minutes per run.
 python scripts/train_adapter.py configs/train/rine_clean.yaml

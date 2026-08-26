@@ -22,6 +22,6 @@ detectors:
   - ../grace_adapter/configs/detectors/dinov3+grace-d.yaml
 
 datasets:
-  - configs/datasets/sid_poc_eval.yaml
+  - configs/datasets/ntire_val.yaml
 
 degrade: {}

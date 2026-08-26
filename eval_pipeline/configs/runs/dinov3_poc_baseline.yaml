@@ -12,9 +12,9 @@
 
 run_id: dinov3_poc_baseline
 
-detector: configs/detectors/dinov3-sid.yaml
+detector: configs/detectors/dinov3-ntire.yaml
 
 datasets:
-  - configs/datasets/sid_poc_eval.yaml
+  - configs/datasets/ntire_val.yaml
 
 degrade: {}     # the standard sweep: all four levels, all eleven transforms

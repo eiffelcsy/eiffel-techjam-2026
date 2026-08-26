@@ -6,7 +6,7 @@
 #
 # A run of this detector MUST set batch_size: 1 -- it takes the image at native
 # resolution, so the tensors in a batch are not the same size and cannot stack.
-# See configs/runs/zoo_bfree_on_sid_set.yaml.
+# See configs/runs/zoo_bfree_on_ntire.yaml.
 
 name: b-free
 target: pipeline.detectors.bfree.BFree

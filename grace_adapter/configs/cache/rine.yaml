@@ -10,7 +10,7 @@
 
 detector: ../eval_pipeline/configs/detectors/rine-ldm.yaml
 split: grace.splits.rine.RINESplit
-dataset: ../eval_pipeline/configs/datasets/sid_set.yaml
+dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
 
 out_dir: cache/
 n_epochs: 12

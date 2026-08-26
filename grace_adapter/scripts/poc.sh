@@ -11,7 +11,7 @@
 # Prerequisite, once: the DINOv3 backbone is a licence-gated Hub repo. Accept it
 # at https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m and run
 # `hf auth login`. Or point `backbone_id` in
-# ../eval_pipeline/configs/detectors/dinov3-sid.yaml at a mirror you have.
+# ../eval_pipeline/configs/detectors/dinov3-ntire.yaml at a mirror you have.
 #
 # Set WANDB=1 to track every stage under one group.
 set -euo pipefail
@@ -33,24 +33,24 @@ fi
 step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 
 # ---------------------------------------------------------------------------
-step "0/7  dataset -- SID_Set train + validation into one manifest"
+step "0/7  dataset -- NTIRE shards 0-4 (train) + shard 5 (selection) into one manifest"
 # Two splits, one table, disjoint image directories. Skipped if already built:
 # rebuilding it changes `manifest_sha` and invalidates every cached feature.
 # `data/` is at the REPO ROOT, not inside either package: both read it, and a
 # dataset config's `../data/...` resolves to the same directory whether the CWD
 # is eval_pipeline/ or grace_adapter/.
 ( cd "$HARNESS"
-  if [[ -f ../data/sid_poc/manifest.parquet ]]; then
-    echo "   ../data/sid_poc/manifest.parquet exists -- skipping (never rebuild a"
+  if [[ -f ../data/ntire_train/manifest.parquet ]]; then
+    echo "   ../data/ntire_train/manifest.parquet exists -- skipping (never rebuild a"
     echo "   manifest a cache was rendered against)"
   else
-    python scripts/build_manifest.py --config configs/datasets/sid_poc.yaml
+    python scripts/build_manifest.py --config configs/datasets/ntire_train.yaml
   fi )
 
 step "1/7  stage 0 -- fit the MLP head on CLEAN features"
 # The one step that trains a detector. Writes to the head_checkpoint path the
 # detector config names, so nothing else needs telling where it went.
-python scripts/train_probe.py configs/probe/dinov3_sid.yaml $SMOKE "${WB[@]}"
+python scripts/train_probe.py configs/probe/dinov3_ntire.yaml $SMOKE "${WB[@]}"
 
 step "2/7  baseline -- the retention curve GRACE is measured against"
 # Run before training an adapter: if retention does not collapse here, there is
@@ -67,9 +67,9 @@ step "4/7  E0 -- does RA-Det's drift asymmetry hold on this data?"
 # still comes before anything is *trained*, which is the sense in which it is
 # "first" -- both outcomes are useful and one of them saves a day.
 python scripts/analyze_drift.py \
-  --cache cache/dinov3-sid \
-  --dataset ../eval_pipeline/configs/datasets/sid_poc.yaml \
-  --detector ../eval_pipeline/configs/detectors/dinov3-sid.yaml \
+  --cache cache/dinov3-ntire \
+  --dataset ../eval_pipeline/configs/datasets/ntire_train.yaml \
+  --detector ../eval_pipeline/configs/detectors/dinov3-ntire.yaml \
   --split grace.splits.dinov3.DINOv3Split \
   --out results/dinov3_poc_drift.json
 
@@ -96,8 +96,8 @@ Done. What to read, in order:
      not, stop: the split is wrong and nothing below means anything.
 
        python scripts/compare.py \
-         --baseline ../eval_pipeline/results/dinov3_poc_baseline__dinov3-sid__sid_poc_eval.json \
-         --adapted  ../eval_pipeline/results/dinov3_poc_grace__dinov3+identity__sid_poc_eval.json
+         --baseline ../eval_pipeline/results/dinov3_poc_baseline__dinov3-ntire__ntire_val.json \
+         --adapted  ../eval_pipeline/results/dinov3_poc_grace__dinov3+identity__ntire_val.json
 
   2. E2 -- arm B against arm A. checkpoints/grace/dinov3_{clean,degraded}/summary.json.
      If the degraded-target control matches the clean-teacher arm, the clean
@@ -106,8 +106,8 @@ Done. What to read, in order:
   3. The headline -- retention recovered, against the BASELINE's clean AUC:
 
        python scripts/compare.py \
-         --baseline ../eval_pipeline/results/dinov3_poc_baseline__dinov3-sid__sid_poc_eval.json \
-         --adapted  ../eval_pipeline/results/dinov3_poc_grace__dinov3+grace__sid_poc_eval.json
+         --baseline ../eval_pipeline/results/dinov3_poc_baseline__dinov3-ntire__ntire_val.json \
+         --adapted  ../eval_pipeline/results/dinov3_poc_grace__dinov3+grace__ntire_val.json
 
   4. gate().mean() in checkpoints/grace/dinov3_clean/summary.json. It should
      climb off 0.018 and plateau around 0.1-0.5. Still at init = the alignment

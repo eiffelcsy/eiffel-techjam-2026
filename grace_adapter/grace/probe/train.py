@@ -117,6 +117,7 @@ def train_probe(cfg, split, manifest, val_manifest=None) -> dict:
         cfg.wandb, run_id=cfg.run_id, job_type="stage0_probe",
         config={**flatten_config(cfg), "backbone_id": split.detector.backbone_id,
                 "pool": split.detector.pool, "feature_dim": spec.dim,
+                "input_mode": getattr(split.detector, "input_mode", "resize"),
                 "n_train": int(len(y_train)),
                 "n_val": int(len(y_val)) if f_val is not None else 0,
                 "head_params": sum(p.numel() for p in head.parameters())},
@@ -163,6 +164,7 @@ def train_probe(cfg, split, manifest, val_manifest=None) -> dict:
             # and to refuse it if it does not belong to the trunk being loaded.
             "backbone_id": split.detector.backbone_id,
             "pool": split.detector.pool,
+            "input_mode": getattr(split.detector, "input_mode", "resize"),
             "feature_dim": spec.dim,
             "hidden": cfg.hidden,
             "n_layers": cfg.n_layers,

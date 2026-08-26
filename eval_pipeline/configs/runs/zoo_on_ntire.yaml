@@ -8,7 +8,7 @@
 #
 # B-Free is NOT here: it takes images at native resolution and needs
 # batch_size: 1, and batch_size is shared across a run. See
-# configs/runs/zoo_bfree_on_sid_set.yaml, which writes into the same out_dir, so
+# configs/runs/zoo_bfree_on_ntire.yaml, which writes into the same out_dir, so
 # `scripts/report.py --results results/` still compares all four.
 
 run_id: zoo
@@ -19,6 +19,6 @@ detectors:
   - configs/detectors/rine-4class.yaml
 
 datasets:
-  - configs/datasets/sid_set.yaml
+  - configs/datasets/ntire_val.yaml
 
 degrade: {}     # the standard sweep: all four levels, all eleven transforms

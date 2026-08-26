@@ -1,0 +1,91 @@
+# NTIRE 2026 Robust AI-Generated Image Detection -- training set.
+# https://huggingface.co/datasets/deepfakesMSU/NTIRE-RobustAIGenDetection-train
+#
+# TWO splits in one manifest, for the same
+# reason: stage 0 fits the detector head on `split: train` and selects on
+# `split: validation`, and `train_probe.py` refuses the two if their manifest
+# indices overlap. That check only works within one manifest -- `load_manifest`
+# keeps the original row number as the index, so two separately-built manifests
+# both start at 0 and would collide spuriously. One file, two splits.
+#
+#   split: train         <- this file. Shards 0-4.
+#   split: validation    <- configs/datasets/ntire_train_eval.yaml, SAME manifest.
+#                           Shard 5, held out.
+#
+# The challenge's own validation set (configs/datasets/ntire_val.yaml) is
+# deliberately NOT used for model selection. It is the benchmark; selecting on it
+# would make every number reported against it optimistic. The dataset card states
+# all shards share a distribution and "can be used separately", so a held-out
+# shard is the honest selection set.
+#
+# Layout on disk -- unpack each shard_*.zip under ../data/ntire_train/:
+#
+#   ../data/ntire_train/shard_0/images/*.jpg
+#   ../data/ntire_train/shard_0/labels.csv     image_name,label (0 real, 1 generated)
+#   ... through shard_5
+#
+# 277,650 images, ~114 GB unpacked. Delete the shard entries you have not
+# downloaded -- `on_missing: error` will otherwise stop on the first absent file,
+# which is the intended behaviour for a shard you *meant* to have. Set `limit`
+# (per class, per shard) to work against a subset without touching the layout.
+#
+# CsvMetadataSource references images in place and copies nothing. That is
+# load-bearing here: these are JPEGs, and re-encoding them to PNG the way
+# HFImageDatasetSource must would resample away the compression artefacts a
+# detector keys on.
+#
+# CAVEAT -- read before fitting a head on this.
+# The NTIRE train set already contains "in-the-wild" transformations (crop,
+# resize, compression, blur) mixed into both classes, and unlike the validation
+# set its labels.csv carries no `is_distorted` flag to separate them. GRACE's
+# premise is a head fit on CLEAN images whose accuracy then collapses under
+# degradation; a head fit here has already seen degraded data, so the retention
+# curve measures something weaker than it did on a clean-only training set.
+# There is no way to filter it from the table -- it is a property of the dataset.
+
+name: ntire_train
+manifest: ../data/ntire_train/manifest.parquet
+split: train
+
+source:
+  target: pipeline.data.sources.ConcatSource
+  args:
+    sources:
+      - target: pipeline.data.sources.CsvMetadataSource
+        args: &shard
+          csv_path: ../data/ntire_train/shard_0/labels.csv
+          root: ../data/ntire_train/shard_0/images
+          path_column: image_name
+          label_column: label
+          fake_values: [1]
+          real_values: [0]
+          generator: NTIRE-2026-train   # the card does not name the generators
+          split: train
+          limit: null                   # per class, per shard
+      - target: pipeline.data.sources.CsvMetadataSource
+        args:
+          <<: *shard
+          csv_path: ../data/ntire_train/shard_1/labels.csv
+          root: ../data/ntire_train/shard_1/images
+      - target: pipeline.data.sources.CsvMetadataSource
+        args:
+          <<: *shard
+          csv_path: ../data/ntire_train/shard_2/labels.csv
+          root: ../data/ntire_train/shard_2/images
+      - target: pipeline.data.sources.CsvMetadataSource
+        args:
+          <<: *shard
+          csv_path: ../data/ntire_train/shard_3/labels.csv
+          root: ../data/ntire_train/shard_3/images
+      - target: pipeline.data.sources.CsvMetadataSource
+        args:
+          <<: *shard
+          csv_path: ../data/ntire_train/shard_4/labels.csv
+          root: ../data/ntire_train/shard_4/images
+      # Held out for stage-0 model selection. Same distribution, disjoint rows.
+      - target: pipeline.data.sources.CsvMetadataSource
+        args:
+          <<: *shard
+          csv_path: ../data/ntire_train/shard_5/labels.csv
+          root: ../data/ntire_train/shard_5/images
+          split: validation

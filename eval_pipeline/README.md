@@ -297,8 +297,8 @@ polarity check only notices when a whole class disappears.
 dataset gets a *train* split. Evaluation never needs one -- the harness scores a
 held-out set and nothing else -- but `../grace_adapter` fits a classification
 head and trains an adapter, and both must be provably disjoint from what is
-scored. `configs/datasets/sid_poc.yaml` is the worked example: SID_Set's train
-and validation splits in one table, keyed by disjoint manifest indices.
+scored. `configs/datasets/ntire_train.yaml` is the worked example: NTIRE's shards
+0-4 and its held-out shard 5 in one table, keyed by disjoint manifest indices.
 
 Its `prefix: true` default is load-bearing, not tidy. `HFImageDatasetSource`
 names files by position within the split it is iterating, so two splits of the
@@ -386,8 +386,8 @@ Weights:
 Then:
 
 ```bash
-python scripts/run_eval.py --config configs/runs/zoo_on_sid_set.yaml
-python scripts/run_eval.py --config configs/runs/zoo_bfree_on_sid_set.yaml
+python scripts/run_eval.py --config configs/runs/zoo_on_ntire.yaml
+python scripts/run_eval.py --config configs/runs/zoo_bfree_on_ntire.yaml
 python scripts/report.py --results results/
 ```
 
