@@ -1,0 +1,30 @@
+# The PoC cache: DINOv3 ViT-S/16, pooled to one 768-d vector per image.
+#
+# `vector` layout, 768 dims x 2 bytes = 1.5 KB per image per view -- against
+# RINE's 48 KB. At 15 views (clean + 12 train + 2 val) that is 22 KB per image,
+# so a 1200-image PoC manifest renders to ~27 MB and the whole thing fits in page
+# cache. This is why the PoC is the arm you can iterate on: stage 1 reads it at
+# memory bandwidth and a full run is seconds.
+#
+#   python scripts/build_cache.py configs/cache/dinov3.yaml --dry-run
+#   python scripts/build_cache.py configs/cache/dinov3.yaml
+#
+# Cached on the TRAIN split (sid_poc.yaml). The harness scores sid_poc_eval.yaml,
+# whose rows are disjoint -- both by manifest index and by source split.
+#
+# Stage 0 must have run first: build_cache loads the detector, and the detector
+# loads a head checkpoint that does not exist until then. (The features
+# themselves depend only on the trunk, so re-fitting the probe later does not
+# invalidate this cache -- `detector_sha` hashes the config, and the head path in
+# it names weights these features never saw.)
+
+detector: ../eval_pipeline/configs/detectors/dinov3-sid.yaml
+split: grace.splits.dinov3.DINOv3Split
+dataset: ../eval_pipeline/configs/datasets/sid_poc.yaml
+
+out_dir: cache/
+n_epochs: 12
+n_val_epochs: 2
+batch_size: 32
+
+schedule: {}      # the standard training mix: all eleven transforms, default weights

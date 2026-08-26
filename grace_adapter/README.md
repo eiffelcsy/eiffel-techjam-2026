@@ -227,7 +227,9 @@ grace/
 ├── splits/          the trunk/head seam, added AROUND detectors
 │   ├── base.py        FeatureSpec, SplitDetector, assert_frozen
 │   ├── verify.py      head(trunk(x)) == detector(x), checked at construction
-│   └── rine.py bfree.py gapl.py
+│   ├── rine.py bfree.py gapl.py    reconstruct a seam inside a vendored repo
+│   └── dinov3.py      delegates to a seam that is already there            ← §8
+├── probe/train.py   stage 0 — fit the PoC detector's own head. PoC ONLY.  ← §8.2
 ├── cache/
 │   ├── schedule.py    (index, epoch) -> degradation, as a pure function  ← §3
 │   ├── spec.py        four fingerprints + the FUTURE `taps` field
@@ -245,36 +247,57 @@ grace/
 │   ├── losses.py      alignment, sliced-Wasserstein, identity, KL, severity
 │   ├── diagnostics.py cos(Δ,j), drift asymmetry, posterior spread
 │   ├── data.py        CachedPairDataset | LivePairDataset — one config flag
+│   ├── tracker.py     W&B as a null object — off by default, never fatal   ← §9
 │   └── loop.py        stage 1 (label-free) and stage 2 (supervised)
 └── detectors/adapted.py   AdaptedDetector — a FrozenDetector, for the harness
 ```
 
+Configs, four kinds, one directory each:
+
+```
+configs/
+├── probe/        PoC only — fit a frozen detector's own classification head
+├── cache/        what to render, for which detector
+├── train/        one stage-1 or stage-2 run against a cache
+├── detectors/    the ADAPTED detector, in the HARNESS's config shape
+└── defaults.yaml annotated reference: every key with its default. Never loaded.
+```
+
 Detectors and datasets are **never redefined here**. Configs reference
 `../eval_pipeline/configs/` by path, so each is described in exactly one place and
-GRACE cannot drift from what was benchmarked.
+GRACE cannot drift from what was benchmarked. The PoC detector obeys the same
+rule: `DINOv3MLPDetector` lives in `pipeline/detectors/dinov3.py` with the rest
+of the zoo, and `grace/` contributes only its seam and the script that fits its
+head.
 
 ---
 
 ## 7. The pipeline, and the experiments
 
 ```bash
-# 0. the premise, before anything is built on it -- cache only, no training
-python scripts/analyze_drift.py --cache cache/rine --dataset ../eval_pipeline/configs/datasets/sid_set.yaml
-
 # 1. render, once per detector -- resumable at view granularity
 python scripts/build_cache.py configs/cache/rine.yaml --dry-run
 python scripts/build_cache.py configs/cache/rine.yaml
 
-# 2. stage 1, minutes per run
+# 2. the premise, before anything is TRAINED on it -- reads the cache, no GPU
+python scripts/analyze_drift.py --cache cache/rine --dataset ../eval_pipeline/configs/datasets/sid_set.yaml
+
+# 3. stage 1, minutes per run
 python scripts/train_adapter.py configs/train/rine_clean.yaml
 
-# 3. stage 2, seconds per run
+# 4. stage 2, seconds per run
 python scripts/train_discrepancy.py configs/train/rine_discrepancy.yaml
 
-# 4. score through the SAME harness that produced the baseline
+# 5. score through the SAME harness that produced the baseline
 cd ../eval_pipeline && python scripts/run_eval.py --config configs/runs/<run>.yaml
 python scripts/compare.py --baseline <baseline.json> --adapted <adapted.json>
 ```
+
+**The render comes first, and E0 is second.** `analyze_drift.py` opens the cache
+in its first statement and reads clean *and* degraded features out of it; it
+exits with `no rendered epochs under <dir>` if no degraded view has been
+finalized. "E0 first" means *before anything is trained* — the render is the
+step E0 itself is built on, not one of the things it decides.
 
 | # | Arm | Config | Asks |
 |---|---|---|---|
@@ -286,7 +309,7 @@ python scripts/compare.py --baseline <baseline.json> --adapted <adapted.json>
 | E5 | GRACE-D | `detectors/rine+grace-d.yaml` | does the fused score beat retention 1.0? |
 | E6 | cached vs live | `train/rine_live.yaml` | is the finite epoch set being exploited? |
 
-**E0 comes first and both outcomes are useful.** Asymmetry present → the
+**E0 is the first thing to look at, and both outcomes are useful.** Asymmetry present → the
 discrepancy branch has signal and the label-free objective is knowingly discarding
 it. Asymmetry absent → stage 2 will be weak here; say so, keep the restoration
 result, and save a day. The parallel/orthogonal decomposition matters as much as
@@ -309,6 +332,10 @@ A falling `auc_aux` as stage 1 improves is direct evidence that restoring featur
 erases forensic evidence, and the retention-versus-drift-preservation curve is the
 figure. It costs almost nothing because stage 2 is seconds.
 
+Every arm above has a PoC twin: swap `rine` for `dinov3` in the config name and
+it runs today, in seconds, on a detector whose seam cannot be wrong. See §8.4 for
+which of these the PoC can actually answer and which it can only gesture at.
+
 **Run E1 first regardless.** If the identity adapter does not reproduce the Day-1
 JSON to the last decimal, the split is wrong and everything downstream compares
 against a model that was never benchmarked.
@@ -320,7 +347,204 @@ claimed.
 
 ---
 
-## 8. Future additions — blueprint only
+---
+
+## 8. The proof-of-concept path: DINOv3 ViT-S/16 + an MLP head
+
+Everything above describes adapting *somebody else's* detector, and section 11
+says why none of it can be run yet: the three zoo splits compose modules from
+repos cloned by hand under `third_party/`, and `RINESplit._head_forward` is
+written against documented structure rather than against a clone. Until those
+exist, a retention number could come from a wrongly composed head and nothing in
+the curve would say so.
+
+So there is a fourth detector, built here rather than downloaded, whose only job
+is to make the seam not a question:
+
+```
+trunk  frozen DINOv3 ViT-S/16 (distilled), pooled  -> (B, 768)   layout "vector"
+GRACE  the adapter, spliced at that seam           -> (B, 768)
+head   LayerNorm -> Linear -> GELU -> Linear       -> (B,)  one logit
+```
+
+`head(trunk(x)) == detector(x)` holds because `DINOv3MLPDetector.forward` *is*
+`self.head(self.trunk(x))`, and `DINOv3Split` delegates to both rather than
+reconstructing either. E1 — the identity adapter reproducing the baseline
+exactly — becomes a tautology instead of a nail-biter, which is precisely what
+you want from the arm you debug the rest of the pipeline in.
+
+### 8.1 Why this backbone, and what it costs
+
+`facebook/dinov3-vits16-pretrain-lvd1689m` is the ViT-S/16 **distilled from the
+ViT-7B teacher** on LVD-1689M, which is why a 21M-parameter trunk carries
+features worth correcting at all. It is a licence-gated Hub repo: accept it on
+the model page and `hf auth login` once, or point `backbone_id` at a mirror you
+already have — nothing in the code assumes the official id.
+
+Pooling is `cls+patchmean` (768-d), DINOv3's own linear-probe recipe. It also
+matters for *this* project specifically: generation traces are a local
+high-frequency phenomenon, so a detector reading only the CLS token would lean on
+semantics and lose accuracy for reasons unrelated to the artefacts JPEG and blur
+destroy — exactly the confound the retention curve must not contain.
+
+| | RINE | DINOv3 PoC |
+|---|---|---|
+| layout | `layers` (24, 1024) | `vector` (768,) |
+| cache | 48 KB/image/view | **1.5 KB**/image/view |
+| 15 views x 1200 images | 864 MB | **27 MB** |
+| per-layer damage profile | yes — the figure | no |
+
+**The cost is real and worth stating.** A `vector` split has one gate vector, so
+there is no "which encoder block does blur destroy" plot, and the stage-2
+discrepancy head sees **one** drift norm where RINE's would see 24. The PoC
+therefore tests GRACE-D in its weakest form, and a null result there is much
+weaker evidence against the branch than a null result on a `layers` detector
+would be. Report it that way.
+
+The `layers` variant is a small change when it is wanted — emit per-block CLS
+tokens as `(B, 12, 384)` and give the head an importance weighting over them.
+Nothing downstream of the split needs touching: `grace.models.factory` picks the
+`(L, D)` gate off `FeatureSpec.layout` alone.
+
+### 8.2 Stage 0 — the one place a detector is trained
+
+A DINOv3 trunk has no classifier, and GRACE cannot adapt a seam whose head does
+not exist yet. `scripts/train_probe.py` fits one, once, and it is the only script
+in the project that trains a detector.
+
+```bash
+python scripts/train_probe.py configs/probe/dinov3_sid.yaml
+```
+
+Two passes and a 400k-parameter fit: one trunk forward per image ever (the trunk
+is frozen and the images are not degraded, so the features are constant), then
+AdamW on the head against those features. Seconds. Same argument as section 2,
+one scale down.
+
+**Clean images only, no augmentation.** This is the premise, not a shortcut. The
+whole claim concerns a detector fit on clean data whose accuracy collapses under
+degradation; a head trained with degradation augmentation would have partly
+solved the problem GRACE exists to solve, and every retention number downstream
+would be measuring the augmentation instead of the adapter. If you want that arm,
+it is a separate detector config and a separate baseline, not a flag.
+
+Model selection is on held-out **images**, by AUC. A 768-in/512-hidden head
+reaches training AUC 1.0 within a few epochs on a PoC-sized manifest, and the
+last epoch is not the one to ship — an overfit head has a near-arbitrary
+Jacobian, and section 4.1's weighting differentiates through it to decide where
+the adapter spends its capacity.
+
+The head is written to the path the **detector config** names in
+`args.head_checkpoint`, so the file the probe produces and the file the detector
+loads are one string in one place. The trunk never sees the head, so re-fitting
+the probe does not invalidate a rendered cache: `detector_sha` hashes the config,
+and the head path in it names weights the cached features never saw.
+
+### 8.3 Running it
+
+```bash
+bash scripts/poc.sh              # the whole path
+bash scripts/poc.sh --smoke      # 2 epochs, 2 cache views -- minutes, proves wiring
+WANDB=1 bash scripts/poc.sh      # every stage tracked under one group
+```
+
+or by hand:
+
+```bash
+# 0. dataset -- SID_Set train + validation into ONE manifest, disjoint dirs
+cd ../eval_pipeline && python scripts/build_manifest.py --config configs/datasets/sid_poc.yaml
+
+# 1. stage 0 -- fit the head on clean features
+cd ../grace_adapter && python scripts/train_probe.py configs/probe/dinov3_sid.yaml
+
+# 2. the baseline this is all measured against -- run it BEFORE training anything
+cd ../eval_pipeline && python scripts/run_eval.py --config configs/runs/dinov3_poc_baseline.yaml
+
+# 3. render the cache
+cd ../grace_adapter
+python scripts/build_cache.py       configs/cache/dinov3.yaml --dry-run
+python scripts/build_cache.py       configs/cache/dinov3.yaml
+
+# 4. E0 -- AFTER the render (it compares the clean view against a degraded one),
+#    but before anything is trained
+python scripts/analyze_drift.py --cache cache/dinov3-sid \
+  --dataset  ../eval_pipeline/configs/datasets/sid_poc.yaml \
+  --detector ../eval_pipeline/configs/detectors/dinov3-sid.yaml \
+  --split    grace.splits.dinov3.DINOv3Split
+
+# 5. stage 1 (both arms), 6. stage 2
+python scripts/train_adapter.py     configs/train/dinov3_clean.yaml       # arm B
+python scripts/train_adapter.py     configs/train/dinov3_degraded.yaml    # arm A
+python scripts/train_discrepancy.py configs/train/dinov3_discrepancy.yaml
+
+# 7. score all three arms through the SAME harness as the baseline
+cd ../eval_pipeline && python scripts/run_eval.py --config configs/runs/dinov3_poc_grace.yaml
+```
+
+`configs/datasets/sid_poc.yaml` puts **two** splits in one manifest, which no
+other dataset config does — evaluation needs one held-out set, but stage 0 needs
+a training set drawn from the same distribution and provably disjoint from it.
+`ConcatSource` gives each child its own image subdirectory, and that is
+load-bearing rather than tidy: `HFImageDatasetSource` names files by position
+within its split, so both splits start at `images/00000000_0.png` and without the
+prefix the second would overwrite the first, leaving a manifest whose train and
+validation rows point at the same pixels.
+
+### 8.4 What the PoC can and cannot answer
+
+| | answerable here | why |
+|---|---|---|
+| E1 identity | yes, trivially | the seam is a construction, not a reconstruction |
+| E2 arm A vs arm B | **yes** | the clean-teacher ablation needs no particular layout |
+| E3 loss ablations | **yes** | all four terms operate on the last axis |
+| E4 erasure trade-off | partially | Δ is one norm here, not a per-block profile |
+| E5 GRACE-D | weakly | the auxiliary head's weakest input |
+| E6 cached vs live | yes | `source: live` is layout-agnostic |
+| per-block damage figure | **no** | needs a `layers` split |
+
+E2 and E3 are the load-bearing ones and they run here in seconds. That is the
+argument for the PoC: the experiments that decide whether the *objective* works
+become cheap, and the ones that need a real published detector stay waiting on
+its clone — rather than everything waiting on it.
+
+---
+
+## 9. Tracking (Weights & Biases), optional
+
+Off by default. All three training stages log through
+`grace.train.tracker`, which is a null object when disabled — so there is no
+`if wandb is not None` anywhere in `loop.py` and no code path that only runs on
+somebody's machine.
+
+```bash
+python scripts/train_adapter.py configs/train/dinov3_clean.yaml \
+  --wandb --wandb-group e2_teacher
+```
+
+or `wandb: {enabled: true, group: e2_teacher}` in the run config. `--wandb-offline`
+writes to `./wandb/` for a node with no outbound network.
+
+Three properties the rest of the package depends on:
+
+* **W&B is never the record.** `summary.json` next to the checkpoints stays the
+  source of truth, written whether or not anything was tracked. Two people
+  comparing results compare files, not screenshots.
+* **W&B never fails a run.** A dead network, an expired key or a missing package
+  warns once and continues untracked. The one exception is `enabled: true` with
+  the package absent, which is a configuration error and is raised at second zero
+  rather than after the GPU time.
+* **The step axis is the training step**, passed explicitly. W&B's implicit
+  counter would interleave the 50-step diagnostics with the end-of-epoch rows and
+  make two runs with different `log_every` incomparable.
+
+`group` is what makes the sweeps in section 7 legible — set it to the experiment
+id and every arm lands in one comparison rather than in a flat list of forty
+runs. For E4 specifically, stage 2 logs `adapter_checkpoint` as run config, which
+is the x-axis of the erasure figure.
+
+---
+
+## 10. Future additions — blueprint only
 
 **`models/ladder.py`** — ladder / multi-seam adapter. Hook 4–6 intermediate
 blocks, project, fuse into the correction at the seam (side-tuning / LST).
@@ -345,7 +569,7 @@ recipe in `recipes.parquet` is a free confusion-matrix figure.
 
 ---
 
-## 9. The one upstream change
+## 11. The one upstream change
 
 `Condition.sample_recipe` short-circuited on `if self.level < 2`, because eval's
 L1 conditions carry an explicit fixed `steps` — the 19-point OFAT grid. Training
@@ -362,7 +586,7 @@ already said one. **Made**, and covered by
 `tests/test_schedule.py::test_eval_conditions_are_unaffected_by_that_change`; the
 harness's own 17 tests still pass.
 
-## 10. Gotchas
+## 12. Gotchas
 
 - **Cache/dataset index alignment** is the highest-risk bug in the project. It
   trains, it converges, it means nothing. `tests/test_cache_alignment.py` renders a
@@ -380,12 +604,19 @@ harness's own 17 tests still pass.
   it. Parameters stay frozen; only the input needs a graph.
 - Open memmaps **per worker**, never inherited across a fork.
 
-## 11. Status
+## 13. Status
 
 Implemented and tested: the adapter, weighting, losses, diagnostics, discrepancy
 branch, schedule, cache (writer/reader/spec), both training stages, the configs,
-and `AdaptedDetector`. 132 tests pass, including a real end-to-end render and a
-two-stage training smoke run.
+`AdaptedDetector`, the DINOv3 proof-of-concept path (§8) and optional W&B
+tracking (§9). 203 tests pass, including a real end-to-end render, a two-stage
+training smoke run, and the full PoC path — stage 0 → cache → stage 1 → stage 2 →
+identity check — against a small locally-constructed DINOv3.
+
+**Runnable today:** the PoC path, `bash scripts/poc.sh`. It needs the DINOv3
+backbone, which is a licence-gated Hub repo (§8.1), and nothing else. Its tests
+need neither: they build a 2-layer DINOv3 from a local config, so the wiring is
+covered with no network and no licence.
 
 **Not verified:** `splits/rine.py`, `splits/bfree.py` and `splits/gapl.py` compose
 modules from repos cloned by hand under `third_party/`, which are not in this tree.
@@ -394,3 +625,9 @@ modules from repos cloned by hand under `third_party/`, which are not in this tr
 split's `__init__`: a wrong composition fails immediately and loudly, listing the
 trainable modules it found, instead of scoring a model that was never benchmarked.
 B-Free and GAPL raise `NotImplementedError` in `trunk` pending their clones.
+
+That gap is the reason §8 exists. The experiments that decide whether the
+*objective* works — E2's clean-teacher ablation and E3's loss ablations — need no
+particular detector, and on the PoC they cost seconds. The experiments that need
+a published detector still wait on its clone, but they are now the only thing
+waiting.

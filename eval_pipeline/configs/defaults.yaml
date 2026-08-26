@@ -20,7 +20,8 @@
 # build_manifest.py; once the manifest exists, evaluation ignores it.
 
 name: my-dataset
-manifest: data/my-dataset/manifest.parquet
+manifest: ../data/my-dataset/manifest.parquet   # repo root, not this package:
+                                               # grace_adapter reads this file too
 split: null                 # which split to score; null = every row
 
 source:
@@ -37,6 +38,27 @@ source:
     label_column: label
     limit: null             # per class; null = all
     streaming: false        # true for large repos -- see README
+
+# ...or, for a dataset that ships as archives plus a metadata table rather than
+# through the Hub. Images are referenced in place, never copied or re-encoded.
+#
+# source:
+#   target: pipeline.data.sources.CsvMetadataSource
+#   args:
+#     csv_path: ../data/some-dataset/test_metadata.csv
+#     root: ../data/some-dataset/images   # what the table's paths hang off
+#     path_column: Image_path
+#     label_column: IsFake
+#     fake_values: ["1"]      # values of label_column meaning *generated*
+#     real_values: ["0"]      # as above: name these on a richer label
+#     path_prefix: null       # keep only these subtrees -- the subsetting knob
+#                             # for when no column distinguishes the part you want
+#     where: null             # {column: value | [values]} equality filter
+#     generator: UNKNOWN
+#     split: test             # recorded per row
+#     limit: null             # per class; null = all
+#     on_missing: error       # or "skip", when the table describes more of the
+#                             # dataset than you downloaded
 
 
 # --------------------------------------------------------------- detector ----

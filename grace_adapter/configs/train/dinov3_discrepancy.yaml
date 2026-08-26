@@ -1,0 +1,46 @@
+# PoC stage 2 -- GRACE-D's supervised auxiliary head, against a FROZEN adapter.
+#
+# The only part of GRACE that uses image labels. The adapter is frozen, so GRACE
+# and GRACE-D ship the same weights bit for bit.
+#
+#   python scripts/train_discrepancy.py configs/train/dinov3_discrepancy.yaml
+#
+# For E4, point --adapter at each intermediate stage-1 checkpoint in turn:
+#
+#   for ck in checkpoints/grace/dinov3_clean/step_*.pt; do
+#     python scripts/train_discrepancy.py configs/train/dinov3_discrepancy.yaml \
+#       --adapter "$ck" --run-id "e4_$(basename "$ck" .pt)"
+#   done
+#
+# then compare `auc_aux` across the summaries. Falling as stage 1 improves means
+# the adapter is destroying drift evidence it was never asked to preserve.
+#
+# NOTE on `vector` layout: DiscrepancyHead's per-group norm input is ONE number
+# here (n_groups == 1), where RINE's `layers` split would give it 24 -- the
+# per-block damage profile. The PoC therefore tests the branch's weakest form. A
+# null result here is much weaker evidence against GRACE-D than a null result on
+# a layers-layout detector would be, and should be reported that way.
+
+run_id: dinov3_disc
+cache_dir: cache/dinov3-sid
+adapter_checkpoint: checkpoints/grace/dinov3_clean/ema.pt
+
+detector: ../eval_pipeline/configs/detectors/dinov3-sid.yaml
+split: grace.splits.dinov3.DINOv3Split
+dataset: ../eval_pipeline/configs/datasets/sid_poc.yaml
+
+epochs: 4
+batch_size: 64
+seed: 0
+
+discrepancy:
+  hidden: 256
+  proj: 64
+  use_severity: true
+
+# Optional. `--wandb --wandb-group <experiment>` on the command line does the
+# same thing without editing a file, which is what a sweep wants.
+wandb:
+  enabled: true
+  project: grace-adapter
+  group: ""

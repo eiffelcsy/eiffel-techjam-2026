@@ -1,0 +1,18 @@
+# E1 for the PoC -- the null adapter: the split, wired up, with no trained weights.
+#
+# It MUST reproduce dinov3_poc_baseline to the last decimal. Run it before
+# trusting any adapted result. Here it is close to a tautology -- DINOv3Split
+# delegates to a detector whose `forward` IS `head(trunk(x))`, and `verify_split`
+# checks it at construction -- which is exactly why the PoC is the right place to
+# debug the rest of the pipeline: a mismatch cannot be blamed on the seam.
+#
+# Paths are relative to the eval harness's working directory, because that is
+# where run_eval.py is invoked from.
+
+name: dinov3+identity
+target: grace.detectors.adapted.AdaptedDetector
+args:
+  base: ../eval_pipeline/configs/detectors/dinov3-sid.yaml
+  split: grace.splits.dinov3.DINOv3Split
+  checkpoint: null
+device: auto

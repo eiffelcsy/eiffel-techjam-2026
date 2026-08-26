@@ -1,0 +1,47 @@
+2026-08-26 17:25:34,657 INFO    MainThread:56958 [wandb_setup.py:_flush():81] Current SDK version is 0.28.2
+2026-08-26 17:25:34,657 INFO    MainThread:56958 [wandb_setup.py:_flush():81] Configure stats pid to 56958
+2026-08-26 17:25:34,657 INFO    MainThread:56958 [wandb_setup.py:_flush():81] Loading settings from environment variables
+2026-08-26 17:25:34,657 INFO    MainThread:56958 [wandb_init.py:setup_run_log_directory():739] Logging user logs to /Users/chongeiffel/Projects/External/eiffel-techjam-2026/grace_adapter/wandb/run-20260826_172534-p9vyfyey/logs/debug.log
+2026-08-26 17:25:34,657 INFO    MainThread:56958 [wandb_init.py:setup_run_log_directory():740] Logging internal logs to /Users/chongeiffel/Projects/External/eiffel-techjam-2026/grace_adapter/wandb/run-20260826_172534-p9vyfyey/logs/debug-internal.log
+2026-08-26 17:25:34,657 INFO    MainThread:56958 [wandb_init.py:init():783] calling init triggers
+2026-08-26 17:25:34,657 INFO    MainThread:56958 [wandb_init.py:init():788] wandb.init called with sweep_config: {}
+config: {'run_id': 'dinov3_clean', 'cache_dir': 'cache/dinov3-sid', 'target_view': 'clean', 'source': 'cache', 'epochs': 12, 'batch_size': 64, 'lr': 0.001, 'weight_decay': 0.01, 'warmup_steps': 50, 'grad_clip': 1.0, 'ema_decay': 0.999, 'num_workers': 4, 'seed': 0, 'device': 'auto', 'out_dir': 'checkpoints/grace/', 'checkpoint_every': 2, 'detector': '../eval_pipeline/configs/detectors/dinov3-sid.yaml', 'split': 'grace.splits.dinov3.DINOv3Split', 'dataset': '../eval_pipeline/configs/datasets/sid_poc.yaml', 'log_every': 50, 'adapter/bottleneck': 128, 'adapter/n_blocks': 2, 'adapter/per_channel_gate': True, 'adapter/dropout': 0.0, 'adapter/noise_dim': 0, 'adapter/severity_film': True, 'sampling/k_train': 2, 'sampling/k_eval': 8, 'loss/weighting': 'jacobian', 'loss/eps_iso': 0.05, 'loss/w_cos': 1.0, 'loss/w_err': 1.0, 'loss/lam_sw': 0.1, 'loss/n_proj': 64, 'loss/lam_id': 0.5, 'loss/lam_kl': 0.1, 'loss/kl_temperature': 2.0, 'loss/lam_sev': 0.1, 'schedule/grid_file': '../eval_pipeline/configs/degradations.yaml', 'schedule/transforms': None, 'schedule/level_weights/0': 0.15, 'schedule/level_weights/1': 0.35, 'schedule/level_weights/2': 0.3, 'schedule/level_weights/3': 0.2, 'schedule/seed': 0, 'wandb/enabled': True, 'wandb/project': 'grace-adapter', 'wandb/entity': None, 'wandb/group': '', 'wandb/tags': [], 'wandb/mode': 'online', 'detector_name': 'dinov3-sid', 'feature_layout': 'vector', 'feature_dim': 768, 'adapter_params': 401920, 'arm': 'B_clean_teacher', '_wandb': {}}
+2026-08-26 17:25:34,657 INFO    MainThread:56958 [wandb_init.py:init():831] starting backend
+2026-08-26 17:25:34,657 INFO    MainThread:56958 [wandb_init.py:init():846] sending inform_init request
+2026-08-26 17:25:35,277 INFO    MainThread:56958 [wandb_init.py:init():851] backend started and connected
+2026-08-26 17:25:35,280 INFO    MainThread:56958 [wandb_init.py:init():921] updated telemetry
+2026-08-26 17:25:35,310 INFO    MainThread:56958 [wandb_init.py:init():944] communicating run to backend with 90.0 second timeout
+2026-08-26 17:25:36,317 INFO    MainThread:56958 [wandb_init.py:init():981] starting run threads in backend
+2026-08-26 17:25:36,352 INFO    MainThread:56958 [wandb_run.py:_console_start():2626] atexit reg
+2026-08-26 17:25:36,352 INFO    MainThread:56958 [wandb_run.py:_redirect():2476] redirect: wrap_raw
+2026-08-26 17:25:36,352 INFO    MainThread:56958 [wandb_run.py:_redirect():2545] Wrapping output streams.
+2026-08-26 17:25:36,352 INFO    MainThread:56958 [wandb_run.py:_redirect():2568] Redirects installed.
+2026-08-26 17:25:36,354 INFO    MainThread:56958 [wandb_init.py:init():1019] run started, returning control to user process
+2026-08-26 17:25:36,367 INFO    wandb-AsyncioManager-main:56958 [service_client.py:_forward_responses():122] [no run ID] Reached EOF.
+2026-08-26 17:25:36,367 INFO    wandb-AsyncioManager-main:56958 [mailbox.py:close():154] [no run ID] Closing mailbox, abandoning 2 handles.
+2026-08-26 17:25:36,368 ERROR   wandb-AsyncioManager-main:56958 [asyncio_manager.py:fn_wrap_exceptions():197] Uncaught exception in run_soon callback.
+Traceback (most recent call last):
+  File "/Users/chongeiffel/Projects/External/eiffel-techjam-2026/.venv/lib/python3.13/site-packages/wandb/sdk/lib/asyncio_manager.py", line 195, in fn_wrap_exceptions
+    await fn()
+  File "/Users/chongeiffel/Projects/External/eiffel-techjam-2026/.venv/lib/python3.13/site-packages/wandb/sdk/lib/run_messages.py", line 90, in loop
+    await asyncio_compat.race(
+    ...<2 lines>...
+    )
+  File "/Users/chongeiffel/Projects/External/eiffel-techjam-2026/.venv/lib/python3.13/site-packages/wandb/sdk/lib/asyncio_compat.py", line 279, in race
+    async with open_task_group(race=True) as tg:
+               ~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/Users/chongeiffel/miniconda3/lib/python3.13/contextlib.py", line 221, in __aexit__
+    await anext(self.gen)
+  File "/Users/chongeiffel/Projects/External/eiffel-techjam-2026/.venv/lib/python3.13/site-packages/wandb/sdk/lib/asyncio_compat.py", line 241, in open_task_group
+    await task_group._wait_all(race=race, timeout=exit_timeout)
+  File "/Users/chongeiffel/Projects/External/eiffel-techjam-2026/.venv/lib/python3.13/site-packages/wandb/sdk/lib/asyncio_compat.py", line 181, in _wait_all
+    raise exc
+  File "/Users/chongeiffel/Projects/External/eiffel-techjam-2026/.venv/lib/python3.13/site-packages/wandb/sdk/lib/run_messages.py", line 113, in _print_all
+    result = await handle.wait_async(timeout=None)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/chongeiffel/Projects/External/eiffel-techjam-2026/.venv/lib/python3.13/site-packages/wandb/sdk/mailbox/mailbox_handle.py", line 127, in wait_async
+    response = await self._handle.wait_async(timeout=timeout)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/chongeiffel/Projects/External/eiffel-techjam-2026/.venv/lib/python3.13/site-packages/wandb/sdk/mailbox/response_handle.py", line 123, in wait_async
+    raise HandleAbandonedError()
+wandb.sdk.mailbox.mailbox_handle.HandleAbandonedError

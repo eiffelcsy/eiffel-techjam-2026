@@ -1,0 +1,20 @@
+# The PoC baseline: the unadapted detector's retention curve.
+#
+# Not E0 -- that is scripts/analyze_drift.py, which reads the rendered cache.
+# This is the denominator every GRACE arm is compared against.
+#
+# This is the number every GRACE run is compared against, so it comes out of this
+# file and nothing else re-derives it. Run it before training an adapter -- if
+# retention does not collapse here, there is no gap for GRACE to close and the
+# PoC has answered its own question early.
+#
+#   python scripts/run_eval.py --config configs/runs/dinov3_poc_baseline.yaml
+
+run_id: dinov3_poc_baseline
+
+detector: configs/detectors/dinov3-sid.yaml
+
+datasets:
+  - configs/datasets/sid_poc_eval.yaml
+
+degrade: {}     # the standard sweep: all four levels, all eleven transforms

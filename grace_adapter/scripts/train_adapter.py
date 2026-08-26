@@ -16,6 +16,7 @@ import argparse
 from grace.cache.schedule import EpochSchedule
 from grace.config import load_train_config
 from grace.splits import build_split
+from grace.train.tracker import add_wandb_args, apply_wandb_args
 from grace.train.loop import train_adapter
 from pipeline.config import load_dataset_config, load_detector_config
 from pipeline.data.manifest import load_manifest
@@ -27,22 +28,25 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("config")
     p.add_argument("--seed", type=int)
+    p.add_argument("--epochs", type=int, help="cap the training epochs read from the cache")
     p.add_argument("--run-id")
     p.add_argument("--out-dir")
     p.add_argument("--bottleneck", type=int)
     p.add_argument("--n-blocks", type=int)
+    add_wandb_args(p)
     return p.parse_args()
 
 
 def main():
     args = parse_args()
     cfg = load_train_config(args.config)
-    for key in ("seed", "run_id", "out_dir"):
+    for key in ("seed", "epochs", "run_id", "out_dir"):
         if getattr(args, key) is not None:
             setattr(cfg, key, getattr(args, key))
     for key in ("bottleneck", "n_blocks"):
         if getattr(args, key) is not None:
             setattr(cfg.adapter, key, getattr(args, key))
+    apply_wandb_args(cfg, args)
 
     dataset_cfg = load_dataset_config(cfg.dataset)
     manifest = load_manifest(dataset_cfg.manifest, dataset_cfg.split)

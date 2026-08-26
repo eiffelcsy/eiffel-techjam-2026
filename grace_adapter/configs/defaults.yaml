@@ -2,8 +2,9 @@
 # Nothing loads this file -- copy the bits you need. Unknown keys raise rather
 # than being ignored, so a typo cannot silently train the default objective.
 #
-# Three kinds of config, one directory each:
+# Four kinds of config, one directory each:
 #
+#   configs/probe/<name>.yaml       PoC only -- fit the frozen detector's own head
 #   configs/cache/<name>.yaml       what to render, for which detector
 #   configs/train/<name>.yaml       one stage-1 or stage-2 run against a cache
 #   configs/detectors/<name>.yaml   the ADAPTED detector, read by the eval harness
@@ -11,12 +12,66 @@
 # Detectors and datasets are never redefined -- they are referenced by path into
 # ../eval_pipeline/configs/, so there is one description of each in the project.
 #
-#   python scripts/analyze_drift.py     --cache cache/rine --dataset <path>
-#   python scripts/build_cache.py       configs/cache/<name>.yaml --dry-run
+#   python scripts/train_probe.py       configs/probe/<name>.yaml        # PoC only
+#   python scripts/build_cache.py       configs/cache/<name>.yaml [--dry-run]
+#   python scripts/analyze_drift.py     --cache cache/<detector> --dataset <path>
+#                                       ^ E0. NEEDS the cache: it compares the
+#                                         clean view against a degraded one.
 #   python scripts/train_adapter.py     configs/train/<name>.yaml
 #   python scripts/train_discrepancy.py configs/train/<name>.yaml
 #   cd ../eval_pipeline && python scripts/run_eval.py --config configs/runs/<name>.yaml
 #   python scripts/compare.py --baseline <json> --adapted <json>
+
+
+# ---------------------------------------------------------- train, stage 0 ----
+# configs/probe/<name>.yaml -- the PROOF-OF-CONCEPT ONLY.
+#
+# The one config kind that trains a detector, and it exists because the PoC
+# detector is assembled here rather than downloaded: a DINOv3 trunk has no
+# classifier, and GRACE cannot adapt a seam whose head does not exist yet. Every
+# other detector arrives with its head already trained by its authors and never
+# touches this directory.
+#
+#   python scripts/train_probe.py configs/probe/<name>.yaml
+#
+# Clean images only, no degradation augmentation. That is the premise -- a head
+# trained under augmentation would have partly solved the problem GRACE exists to
+# solve, and every retention number downstream would measure the augmentation.
+
+run_id: dinov3_sid
+detector: ../eval_pipeline/configs/detectors/dinov3-sid.yaml
+dataset: ../eval_pipeline/configs/datasets/sid_poc.yaml        # split: train
+val_dataset: ../eval_pipeline/configs/datasets/sid_poc_eval.yaml
+split: grace.splits.dinov3.DINOv3Split
+
+out: ""                     # "" = the head_checkpoint the DETECTOR config names,
+                            # so the path written and the path loaded are one
+                            # string in one file
+
+hidden: 512                 # head geometry. Decided here; the checkpoint carries
+n_layers: 2                 # it and the detector rebuilds from the checkpoint, so
+dropout: 0.0                # a config/checkpoint mismatch cannot happen
+
+epochs: 40
+lr: 0.001
+weight_decay: 0.01
+batch_size: 32              # images per trunk forward, during feature extraction
+head_batch_size: 64         # features per optimizer step -- the trunk runs once
+num_workers: 4
+seed: 0
+device: auto
+
+wandb:                      # off by default. summary.json next to the checkpoints
+  enabled: false            # stays the record of every run either way -- this only
+  project: grace-adapter    # mirrors it somewhere a sweep can be sorted.
+  entity: null              # null = your default entity
+  group: ""                 # the experiment id (e3_losses, e4_erasure). Set it and
+                            # every arm of a sweep lands in one comparison.
+  tags: []
+  mode: online              # online | offline | disabled. `offline` writes to
+                            # ./wandb/ and syncs later -- for a node with no
+                            # outbound network.
+
 
 
 # ------------------------------------------------------------------ cache ----
@@ -82,6 +137,10 @@ device: auto
 out_dir: checkpoints/grace/
 checkpoint_every: 0         # >0 writes intermediate checkpoints for experiment
                             # E4 (the erasure trade-off curve)
+log_every: 50               # diagnostics cadence in steps: cos(delta, j), the mean
+                            # gate and the loss terms. The W&B tracker mirrors these
+                            # exact points, so a dashboard and a summary.json can
+                            # never disagree about what was measured when.
 
 adapter:
   bottleneck: 256
@@ -113,6 +172,17 @@ loss:
 
 schedule: {}                # must match the cache's, or its fingerprint rejects it
 
+wandb:                      # off by default. summary.json next to the checkpoints
+  enabled: false            # stays the record of every run either way -- this only
+  project: grace-adapter    # mirrors it somewhere a sweep can be sorted.
+  entity: null              # null = your default entity
+  group: ""                 # the experiment id (e3_losses, e4_erasure). Set it and
+                            # every arm of a sweep lands in one comparison.
+  tags: []
+  mode: online              # online | offline | disabled. `offline` writes to
+                            # ./wandb/ and syncs later -- for a node with no
+                            # outbound network.
+
 
 # ---------------------------------------------------------- train, stage 2 ----
 # configs/train/<name>_discrepancy.yaml -- the supervised auxiliary head.
@@ -136,11 +206,24 @@ seed: 0
 device: auto
 out_dir: checkpoints/grace/
 
+log_every: 50
+
 discrepancy:
   hidden: 256
   proj: 64
   use_severity: true        # "is this drift large *for this much corruption*" --
                             # a heavily degraded real image drifts a lot too
+
+wandb:                      # off by default. summary.json next to the checkpoints
+  enabled: false            # stays the record of every run either way -- this only
+  project: grace-adapter    # mirrors it somewhere a sweep can be sorted.
+  entity: null              # null = your default entity
+  group: ""                 # the experiment id (e3_losses, e4_erasure). Set it and
+                            # every arm of a sweep lands in one comparison.
+  tags: []
+  mode: online              # online | offline | disabled. `offline` writes to
+                            # ./wandb/ and syncs later -- for a node with no
+                            # outbound network.
 
 
 # -------------------------------------------------------------- detectors ----

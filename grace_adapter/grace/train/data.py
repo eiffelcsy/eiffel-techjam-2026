@@ -24,6 +24,26 @@ from grace.cache.schedule import EpochSchedule
 from pipeline.data.dataset import load_normalized
 
 
+class _WorkerInit:
+    """Picklable `worker_init_fn`. Deliberately not a lambda or a bound method.
+
+    DataLoader hands this to each worker, and on every platform whose start
+    method is `spawn` -- macOS by default, and Linux from Python 3.14 -- that
+    means *pickling* it. A lambda closing over `cache` is a local object and
+    dies with `Can't get local object 'build_loader.<locals>.<lambda>'` on the
+    first batch, after the model is loaded and the run has started.
+
+    Same reasoning as `pipeline.detectors.hf._ProcessorPreprocess`: anything
+    crossing into a worker is module-level and holds only what it needs.
+    """
+
+    def __init__(self, cache):
+        self.cache = cache
+
+    def __call__(self, worker_id: int) -> None:
+        self.cache.worker_init(worker_id)
+
+
 def _collate(batch):
     """Stack every field; `index` stays an int64 tensor for cache lookups."""
     out = {}
@@ -101,7 +121,10 @@ def build_loader(cfg, cache, manifest, schedule, epoch: int, preprocess=None,
     """Pick the dataset by `cfg.source` and wrap it in a DataLoader.
 
     `cache.worker_init` is passed in both modes: memmaps are opened per worker,
-    never inherited across a fork.
+    never inherited from the parent. Under `spawn` the parent's are not
+    inherited at all -- `FeatureCache.__getstate__` drops them rather than
+    attempting to pickle a memmap -- and `worker_init` is what re-opens them on
+    the other side.
     """
     if cfg.source == "cache":
         dataset = CachedPairDataset(cache, manifest, epoch)
@@ -118,6 +141,6 @@ def build_loader(cfg, cache, manifest, schedule, epoch: int, preprocess=None,
         shuffle=shuffle,
         num_workers=cfg.num_workers,
         collate_fn=_collate,
-        worker_init_fn=lambda w: cache.worker_init(w),
+        worker_init_fn=_WorkerInit(cache),
         drop_last=True,     # the sliced-Wasserstein term is a batch statistic
     )

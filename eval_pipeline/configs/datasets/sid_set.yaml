@@ -2,7 +2,7 @@
 #   0 = real, 1 = full synthetic, 2 = tampered
 
 name: sid_set
-manifest: data/sid_set/manifest.parquet
+manifest: ../data/sid_set/manifest.parquet
 split: validation
 
 source:

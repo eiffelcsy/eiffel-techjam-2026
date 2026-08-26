@@ -25,6 +25,7 @@ from tests.fixtures import SyntheticSource
 GRID_FILE = "configs/degradations.yaml"
 N_PER_CLASS, N_REPLICATES = 8, 2
 ZOO_CONFIGS = sorted(Path("configs/detectors").glob("*.yaml"))
+DATASET_CONFIGS = sorted(Path("configs/datasets").glob("*.yaml"))
 
 
 @pytest.fixture(scope="module")
@@ -193,9 +194,112 @@ def test_detector_configs_load(path):
     assert callable(locate(cfg.target))
 
 
+@pytest.mark.parametrize("path", DATASET_CONFIGS, ids=lambda p: p.stem)
+def test_dataset_configs_load(path):
+    """Every shipped dataset config parses and names an importable source.
+
+    Not that it builds -- that needs the data, which this suite deliberately
+    does not have -- only that the spec is well-formed and the target resolves.
+    A `source:` block is optional: a config that only names a manifest built by
+    another config (sid_poc_eval) is a legitimate spec with nothing to import.
+    """
+    from pipeline.config import load_dataset_config
+    from pipeline.utils.imports import locate
+
+    cfg = load_dataset_config(path)
+    assert cfg.name and cfg.manifest
+    if cfg.source is not None:
+        assert callable(locate(cfg.source["target"]))
+
+
+def test_csv_metadata_source_selects_by_path_and_labels_by_column(tmp_path):
+    """The subsetting a table's own columns cannot express.
+
+    WildFake is the case this exists for: every COCO image carries the same
+    `Architecture` whichever 2017 directory it came from, so only the path
+    separates the val2017 subset -- and the row that must NOT be picked up here
+    is the one that matches on every column and differs only in its directory.
+    """
+    import csv
+
+    from PIL import Image
+    from pipeline.data.sources import CsvMetadataSource
+
+    root = tmp_path / "images"
+    rows = [
+        ("./real/val2017/a.jpg", "0"),      # wanted, real
+        ("./real/val2017/b.jpg", "0"),      # wanted, real
+        ("./real/train2017/c.jpg", "0"),    # same columns, wrong directory
+        ("./gen/Advanced/d.jpg", "1"),      # wanted, fake
+        ("./gen/Typical/e.jpg", "1"),       # older tier of the same generator
+    ]
+    for rel, _ in rows:
+        path = root / rel.removeprefix("./")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (8, 8)).save(path, "JPEG")
+
+    table = tmp_path / "test_metadata.csv"
+    with table.open("w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["Image_path", "IsFake"])
+        w.writerows(rows)
+
+    def source(**kw):
+        return CsvMetadataSource(
+            csv_path=str(table), root=str(root),
+            path_column="Image_path", label_column="IsFake",
+            fake_values=["1"], real_values=["0"],
+            path_prefix=["real/val2017/", "gen/Advanced/"],
+            generator="gen-v3", split="test", **kw,
+        )
+
+    got = list(source().rows(tmp_path / "unused"))
+    assert [Path(r["path"]).name for r in got] == ["a.jpg", "b.jpg", "d.jpg"]
+    assert [r["label"] for r in got] == [0, 0, 1]
+    assert [r["generator"] for r in got] == ["REAL", "REAL", "gen-v3"]
+    assert {r["split"] for r in got} == {"test"}
+
+    # `limit` is per class, as on the Hub source.
+    assert [r["label"] for r in source(limit=1).rows(tmp_path / "unused")] == [0, 1]
+
+    # Referenced in place, never re-encoded: a JPEG benchmark rewritten as PNG
+    # would be measuring the resave, not the generator.
+    assert all(Path(r["path"]).is_file() for r in got)
+    assert not (tmp_path / "unused").exists()
+
+    # A file the table names but disk does not have is loud by default --
+    # a half-unpacked archive is otherwise a silently shrunken benchmark.
+    (root / "real" / "val2017" / "a.jpg").unlink()
+    with pytest.raises(FileNotFoundError, match="not on disk"):
+        list(source().rows(tmp_path / "unused"))
+    kept = list(source(on_missing="skip").rows(tmp_path / "unused"))
+    assert [Path(r["path"]).name for r in kept] == ["b.jpg", "d.jpg"]
+
+    # ...and skipping is still not allowed to hollow out a class: polarity is
+    # checked over what survived, so a subset skipped down to nothing fails.
+    (root / "real" / "val2017" / "b.jpg").unlink()
+    with pytest.raises(ValueError, match="no real images"):
+        list(source(on_missing="skip").rows(tmp_path / "unused"))
+
+
+VENDORED = ("pipeline.detectors.bfree.", "pipeline.detectors.gapl.", "pipeline.detectors.rine.")
+"""Detectors whose weights come from a repo cloned by hand under `third_party/`.
+
+Selected by target rather than by name: `sdxl` and `dinov3-sid` load from the
+Hub and would fail this test with a network or licence error that says nothing
+about a missing clone, and a fourth Hub detector added later should not have to
+remember to opt out."""
+
+
+def _is_vendored(path) -> bool:
+    from pipeline.config import load_detector_config
+
+    return load_detector_config(path).target.startswith(VENDORED)
+
+
 @pytest.mark.skipif(THIRD_PARTY.is_dir(), reason="the zoo is cloned on this machine")
 @pytest.mark.parametrize(
-    "path", [p for p in ZOO_CONFIGS if p.stem != "sdxl"], ids=lambda p: p.stem
+    "path", [p for p in ZOO_CONFIGS if _is_vendored(p)], ids=lambda p: p.stem
 )
 def test_missing_zoo_clone_says_how_to_fix_it(path):
     """A missing clone is the likeliest first-run failure; it must be actionable."""

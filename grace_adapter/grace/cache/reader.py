@@ -119,7 +119,19 @@ class FeatureCache:
         table = self.recipes(epoch)
         return table.loc[self._index, "severity"].to_numpy(dtype=np.float32)
 
+    def __getstate__(self) -> dict:
+        """Never pickle the open memmaps.
+
+        Under `spawn` -- macOS by default, Linux from 3.14 -- a DataLoader
+        pickles the whole Dataset, and this cache travels inside it. Pickling
+        `_shards` would either fail or, worse, succeed by materializing every
+        mapped byte into the message. The worker re-opens its own handles
+        lazily on first access, which is the invariant either way.
+        """
+        return {**self.__dict__, "_shards": {}}
+
     def worker_init(self, worker_id: int) -> None:
-        """DataLoader `worker_init_fn`. Drops inherited handles so this worker
-        opens its own."""
+        """DataLoader `worker_init_fn`. Drops any inherited handles so this
+        worker opens its own -- belt to `__getstate__`'s braces, and the one
+        that matters under `fork`, where nothing is pickled."""
         self._shards = {}

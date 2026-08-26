@@ -1,0 +1,83 @@
+# WildFake, official TEST split, two subsets -- the primary evaluation benchmark.
+#
+#   real  COCO val2017          1000 images   ./Real/coco/coco2017/val2017/
+#   fake  DALL-E 3 "Advanced"   1769 images   ./Diffusion_based/DALLE/Advanced/DALLE3/
+#
+# This is the *test* split, never validation. WildFake ships one split table per
+# split and this config names the test one; nothing in the harness can quietly
+# score a validation row, because no validation row is in the manifest.
+#
+# WildFake (Hong et al., AAAI 2025, arXiv:2402.11843) is hosted on ModelScope
+# rather than the Hub, as ~110 GB of zips plus a metadata table, so
+# `HFImageDatasetSource` does not apply -- see the download recipe below.
+#
+#   modelscope.cn/datasets/hy2628982280/WildFake
+#
+# WHY THESE TWO SUBSETS. WildFake's `IsAdvanced` flag separates each generator
+# family's current models from its older ones, and the DALL-E family's Advanced
+# tier is DALL-E 3 while its Typical tier is DALL-E 2. Scoring the Advanced tier
+# asks the question worth asking -- does the detector hold on a generator better
+# than the ones it was fit on -- where DALL-E 2's visible artifacts would flatter
+# it. COCO val2017 is the matching real half: photographic, multi-object, no face
+# or church monoculture, and small enough (1000 rows in the test split) that a
+# full degradation sweep is affordable. Both subsets are 100% .jpg, so there is
+# no container-format shortcut for a detector to find instead of the signal.
+#
+# CLASS BALANCE is 1000 : 1769, which AUC and the retention curve tolerate. Set
+# `max_images: 1000` in the run config to score it balanced -- that is a scope
+# decision for a run, not a property of the dataset, so it does not live here.
+#
+# ------------------------------------------------------------------ download --
+# The metadata table is small; the images are not. Only two archives are needed,
+# and `on_missing: error` below will name the first path that does not resolve
+# if the layout comes out differently.
+#
+#   pip install modelscope
+#   modelscope download --dataset hy2628982280/WildFake \
+#       split_train_test/csv_file/total_split/test_metadata.csv \
+#       Images/Real/coco.zip \
+#       Images/Diffusion_based/DALLE.zip \
+#       --local_dir ../data/wildfake
+#
+# Unpack both under `../data/wildfake/images/` so that the table's paths hang
+# off it -- the table names `./Real/coco/...` and `./Diffusion_based/DALLE/...`,
+# so those two directories must be immediate children of `root`:
+#
+#   ../data/wildfake/images/Real/coco/coco2017/val2017/*.jpg
+#   ../data/wildfake/images/Diffusion_based/DALLE/Advanced/DALLE3/*/*.jpg
+#
+# DALLE.zip is ~25 GB and holds DALL-E 2 as well; only the Advanced/ half is
+# read. Images are referenced in place, so no second copy is written -- and no
+# re-encode, which on a JPEG benchmark would resample away the very artifacts
+# under test.
+#
+#   python scripts/build_manifest.py --config configs/datasets/wildfake_coco_dalle3.yaml
+#
+# Expect: 2769 rows (1000 real / 1769 generated).
+
+name: wildfake-coco-dalle3
+manifest: ../data/wildfake/manifest.parquet
+split: test
+
+source:
+  target: pipeline.data.sources.CsvMetadataSource
+  args:
+    csv_path: ../data/wildfake/split_train_test/csv_file/total_split/test_metadata.csv
+    root: ../data/wildfake/images
+    path_column: Image_path
+    label_column: IsFake        # WildFake's own polarity: 1 = generated, 0 = real
+    fake_values: ["1"]
+    real_values: ["0"]
+
+    # The subset selector. WildFake's columns cannot express it: every COCO
+    # image carries Architecture=coco whichever 2017 directory it came from,
+    # so only the path separates val2017 from train2017/test2017. The DALL-E
+    # prefix likewise pins the Advanced (v3) tier and excludes Typical (v2).
+    path_prefix:
+      - Real/coco/coco2017/val2017/
+      - Diffusion_based/DALLE/Advanced/DALLE3/
+
+    generator: DALLE3
+    split: test                 # recorded per row; matches the outer `split`
+    limit: null                 # per class; both subsets in full
+    on_missing: error           # a partly-unpacked archive must fail loudly

@@ -18,6 +18,14 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+# Optional tracking. `grace.train.tracker` is a null object when this is absent
+# or when no config enables it, so nothing in the package imports wandb unless
+# asked -- and a run with tracking off writes exactly the same files.
+wandb = ["wandb"]
+# The proof-of-concept detector (README section 8): a DINOv3 ViT-S/16 trunk from
+# the Hub. `transformers` already comes in via the sibling harness; this extra
+# exists to name the requirement rather than to add a package.
+poc = ["transformers>=5.0"]
 
 [build-system]
 requires = ["setuptools>=68"]

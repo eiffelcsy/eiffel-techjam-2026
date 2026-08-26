@@ -129,6 +129,9 @@ reporting convention, not a derived quantity).
 ## Layout
 
 ```
+../data/           MATERIALIZED DATASETS -- at the repo root, shared with
+                   ../grace_adapter, because both packages read them and a
+                   dataset config's `../data/...` resolves the same from either
 configs/
   datasets/        what a dataset IS -- source, manifest path, split
   detectors/       what a detector IS -- import path and args
@@ -203,6 +206,14 @@ Which output index means *generated* is resolved from the model's own
 the fake class at index 0. An unrecognised or ambiguous label map raises rather
 than guessing, because guessing wrong yields a plausible-looking `1 - AUC`.
 
+`pipeline/detectors/dinov3.py` is the one detector here that is not somebody
+else's published checkpoint: a frozen DINOv3 ViT-S/16 trunk plus an MLP probe
+head, fit on clean images by `../grace_adapter/scripts/train_probe.py`. It exists
+so GRACE has a detector whose trunk/head seam is a construction rather than a
+reconstruction of a vendored repo's internals -- see that project's README
+section 8. The backbone is a licence-gated Hub repo; `backbone_id` takes any
+mirror.
+
 For a detector the generic adapter cannot cover, subclass `FrozenDetector` in
 your own module and point `target:` at it. Two contract details matter:
 `forward` returns a `(B,)` fake-minus-real logit (higher = generated), and if
@@ -217,7 +228,7 @@ label column:
 
 ```yaml
 name: some-dataset                # short id, used in result filenames
-manifest: data/some-dataset/manifest.parquet
+manifest: ../data/some-dataset/manifest.parquet
 split: test                       # which split to score; null = every row
 
 source:                           # read only by build_manifest.py
@@ -234,7 +245,15 @@ source:                           # read only by build_manifest.py
 
 `manifest` is where the table goes, and `source` says how to build it -- once
 the manifest exists, evaluation reads `manifest` and `split` and ignores
-`source` entirely. The two `split` keys are not the same knob: the inner one
+`source` entirely.
+
+**`../data/`, not `data/`.** Config paths resolve against the working directory,
+and this harness is not the only thing that reads a dataset config: `run_eval.py`
+runs with the CWD here, while `../grace_adapter`'s training scripts run with the
+CWD there. `data/` therefore sits at the **repo root**, above both, and
+`../data/...` names the same directory from either. A manifest path inside one
+package would resolve for one caller and silently `FileNotFoundError` for the
+other. The two `split` keys are not the same knob: the inner one
 picks which split to *pull* from the Hub, the outer one picks which split to
 *score* out of the built manifest.
 
@@ -259,6 +278,33 @@ streaming is rate-limited and drops connections mid-shard.
 
 `ImageDirSource` is the equivalent for local directories. A new kind of source
 is a new class plus a new `target:` line.
+
+**`CsvMetadataSource` is for the benchmarks that are not on the Hub** -- shipped
+as archives plus a metadata table, which is where the label, the provenance and
+the official split actually live. `configs/datasets/wildfake_coco_dalle3.yaml` is
+the worked example, and the reason the class exists is its `path_prefix` knob:
+WildFake files every COCO image under one `coco` architecture, so no column in
+its table separates val2017 from train2017, and the subset can only be named by
+path. It **references images in place and copies nothing** -- not to save disk,
+but because those files are already the bytes the dataset authors shipped, and
+re-saving a JPEG as PNG resamples away exactly the compression artifacts an AIGC
+detector keys on. `on_missing: error` is the default for the same reason
+`streaming` matters above: an archive unpacked one level deeper than expected
+otherwise yields a benchmark quietly missing most of its images, and the
+polarity check only notices when a whole class disappears.
+
+**`ConcatSource` chains several sources into one manifest**, which is how a
+dataset gets a *train* split. Evaluation never needs one -- the harness scores a
+held-out set and nothing else -- but `../grace_adapter` fits a classification
+head and trains an adapter, and both must be provably disjoint from what is
+scored. `configs/datasets/sid_poc.yaml` is the worked example: SID_Set's train
+and validation splits in one table, keyed by disjoint manifest indices.
+
+Its `prefix: true` default is load-bearing, not tidy. `HFImageDatasetSource`
+names files by position within the split it is iterating, so two splits of the
+same dataset both start at `images/00000000_0.png`; without a per-source
+subdirectory the second silently overwrites the first and the manifest's train
+and validation rows end up pointing at the same pixels.
 
 **A run** -- `configs/runs/<name>.yaml`. Pairs the detectors with the datasets to
 score them on:

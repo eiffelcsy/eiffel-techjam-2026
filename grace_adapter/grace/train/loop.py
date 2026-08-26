@@ -46,6 +46,7 @@ from grace.train import diagnostics as D
 from grace.train.data import build_loader
 from grace.train.ema import EMA
 from grace.train.losses import supervised_bce, total_loss
+from grace.train.tracker import build_tracker, flatten_config
 from grace.train.weighting import head_gradient
 from pipeline.utils.seeding import seed_everything
 
@@ -119,6 +120,17 @@ def train_adapter(cfg, split, manifest, schedule) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     preprocess = split.preprocess_fn() if cfg.source == "live" else None
 
+    # Off unless a config asks for it, and a no-op object rather than a None to
+    # branch on. `arm` is logged as config because target_view IS the E2
+    # ablation and grouping a sweep by it is the first thing anyone does.
+    tracker = build_tracker(
+        cfg.wandb, run_id=cfg.run_id, job_type="stage1",
+        config={**flatten_config(cfg), "detector_name": split.name,
+                "feature_layout": spec.layout, "feature_dim": spec.dim,
+                "adapter_params": sum(p.numel() for p in adapter.parameters()),
+                "arm": "B_clean_teacher" if cfg.target_view == "clean" else "A_self"},
+    )
+
     step, history = 0, []
     for epoch in epochs:
         loader = build_loader(cfg, cache, manifest, schedule, epoch, preprocess)
@@ -159,7 +171,7 @@ def train_adapter(cfg, split, manifest, schedule) -> dict:
             opt.zero_grad(set_to_none=True)
             ema.update(adapter)
 
-            if step % 50 == 0:
+            if step % cfg.log_every == 0:
                 with torch.no_grad():
                     terms["gate"] = float(adapter.gate().mean().detach())
                     if j is not None:
@@ -167,7 +179,13 @@ def train_adapter(cfg, split, manifest, schedule) -> dict:
                             D.decision_alignment(f_adapted[0], f_deg, j).abs().mean()
                         )
                     terms["step"] = step
+                    terms["epoch"] = epoch
+                    terms["lr"] = float(sched.get_last_lr()[0])
                     history.append(dict(terms))
+                    # Same points as the disk history, so a dashboard and a
+                    # summary.json can never disagree about what was measured.
+                    tracker.log({f"train/{k}": v for k, v in terms.items()
+                                 if k != "step"}, step=step)
             step += 1
 
         # Intermediate checkpoints exist for experiment E4: stage 2 is trained
@@ -205,6 +223,12 @@ def train_adapter(cfg, split, manifest, schedule) -> dict:
         "validation": validate(cfg, adapter, split, cache, manifest, severity_head),
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+    # Written to the run summary, not logged as a step: these are held-out
+    # numbers for the finished adapter, and the runs table is where they are
+    # compared across a sweep.
+    tracker.summary({"validation": summary["validation"], "steps": step})
+    tracker.finish()
     return summary
 
 
@@ -269,11 +293,21 @@ def train_discrepancy(cfg, split, manifest) -> dict:
     fused = FusedHead(build_discrepancy_head(spec, cfg.discrepancy)).to(device)
     opt = torch.optim.AdamW(fused.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
+    # `adapter_checkpoint` in the config is what makes an E4 sweep readable: the
+    # runs table then sorts stage-2 runs by which stage-1 checkpoint they were
+    # trained against, which is the x-axis of the erasure figure.
+    tracker = build_tracker(
+        cfg.wandb, run_id=cfg.run_id, job_type="stage2",
+        config={**flatten_config(cfg), "detector_name": split.name,
+                "feature_layout": spec.layout, "feature_dim": spec.dim},
+    )
+
     train_epochs = [e for e in cache.epochs() if e < min(val_epochs(1))][: cfg.epochs]
     held = [e for e in cache.epochs() if e >= min(val_epochs(1))]
 
     loader_cfg = _cache_loader_cfg(cfg)
 
+    step = 0
     for epoch in train_epochs:
         loader = build_loader(loader_cfg, cache, manifest, None, epoch)
         for batch in tqdm(loader, desc=f"disc epoch {epoch}", leave=False):
@@ -288,6 +322,14 @@ def train_discrepancy(cfg, split, manifest) -> dict:
             loss.backward()
             opt.step()
             opt.zero_grad(set_to_none=True)
+            if step % cfg.log_every == 0:
+                tracker.log(
+                    {"train/bce": float(loss.detach()),
+                     "train/beta": float(fused.beta.detach()),
+                     "train/epoch": epoch},
+                    step=step,
+                )
+            step += 1
 
     out_dir = Path(cfg.out_dir) / cfg.run_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -304,11 +346,16 @@ def train_discrepancy(cfg, split, manifest) -> dict:
     summary = {
         "run_id": cfg.run_id,
         "adapter_checkpoint": cfg.adapter_checkpoint,
-        "beta": float(fused.beta),
+        "beta": float(fused.beta.detach()),
         "validation": _score_discrepancy(fused, adapter, split, cache, manifest,
                                          held or train_epochs, cfg, device),
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+    # `auc_aux` is the E4 number: track it across a sweep over stage-1
+    # checkpoints and a falling curve is the erasure result.
+    tracker.summary({"validation": summary["validation"], "beta": summary["beta"]})
+    tracker.finish()
     return summary
 
 

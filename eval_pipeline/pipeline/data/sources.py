@@ -28,6 +28,26 @@ class Source(Protocol):
     def rows(self, out_dir: str | Path) -> Iterator[dict]: ...
 
 
+def _norm(rel: str) -> str:
+    """A table's relative path, without the "./" many of them carry."""
+    return str(rel).strip().removeprefix("./")
+
+
+def _polarity(class_name: str, fake: set[str], real: set[str] | None) -> int | None:
+    """FAKE, REAL, or None for a class this run does not evaluate.
+
+    `real` unset means "everything not fake is real", which is right for a
+    binary dataset and wrong for anything else -- naming both sets drops the
+    classes in neither instead of quietly folding them into real.
+    """
+    key = class_name.lower()
+    if key in fake:
+        return FAKE
+    if real is None:
+        return REAL
+    return REAL if key in real else None
+
+
 def _check_split(n_fake: int, n_real: int, fake_classes) -> None:
     if n_fake == 0:
         raise ValueError(
@@ -96,13 +116,7 @@ class HFImageDatasetSource:
         self.streaming = streaming
 
     def _label_of(self, class_name: str) -> int | None:
-        """FAKE, REAL, or None for a class this run does not evaluate."""
-        key = class_name.lower()
-        if key in self.fake_classes:
-            return FAKE
-        if self.real_classes is None:
-            return REAL
-        return REAL if key in self.real_classes else None
+        return _polarity(class_name, self.fake_classes, self.real_classes)
 
     def rows(self, out_dir: str | Path) -> Iterator[dict]:
         from datasets import load_dataset
@@ -137,6 +151,150 @@ class HFImageDatasetSource:
             }
 
         _check_split(kept[FAKE], kept[REAL], self.fake_classes)
+
+
+class CsvMetadataSource:
+    """A dataset that ships as a metadata CSV plus an unpacked tree of images.
+
+    The shape of most benchmarks distributed as archives rather than through the
+    Hub: label, provenance and official split live in a table, and the images
+    sit wherever the archives were unpacked. WildFake is the worked example --
+    its `test_metadata.csv` *is* the official test split, one row per image, and
+    a subset of it is selected by path prefix.
+
+    Unlike `HFImageDatasetSource` this **references images in place and copies
+    nothing**, so `out_dir` is unused. That is not disk thrift. The Hub source is
+    handed decoded PIL objects and has no choice but to re-encode them; these
+    files are already the bytes the dataset authors shipped, and re-saving a JPEG
+    as PNG would resample away exactly the compression artifacts an AIGC
+    detector keys on -- turning a benchmark into a measurement of PIL.
+
+    Parameters
+    ----------
+    csv_path     : the metadata table
+    root         : directory the table's paths resolve against
+    path_column  : column holding each image's path, relative to `root`
+    label_column : column holding the real/generated label
+    fake_values  : values of `label_column` meaning *generated*, matched
+                   case-insensitively against `str(value)`
+    real_values  : values meaning *authentic*. Omit and everything not fake
+                   counts as real; name them on a table with a richer label and
+                   anything in neither set is dropped rather than folded in.
+    path_prefix  : keep only rows whose path starts with one of these, matched
+                   after a leading "./" is stripped from both sides. This is the
+                   subsetting knob: a dataset's own columns often do not
+                   distinguish the part you want (WildFake files every COCO
+                   image under one `coco` architecture, and only the path says
+                   train2017 from val2017).
+    where        : {column: value | [values]} equality filter, applied first
+    generator    : what produced the fakes, recorded per fake row
+    split        : recorded in the manifest's `split` column
+    limit        : cap on rows kept per class, in table order
+    on_missing   : "error" (default) or "skip" for a row whose file is absent.
+                   Erroring is the default because the failure it catches is
+                   silent otherwise: an archive unpacked one directory deeper
+                   than expected yields a benchmark quietly missing most of its
+                   images, and `_check_split` only notices if a whole class
+                   vanishes. Use "skip" deliberately, when the table describes
+                   more of the dataset than was downloaded.
+
+    Table order is preserved: it becomes the manifest index, which is the image
+    identity seeding every degradation.
+    """
+
+    def __init__(
+        self,
+        csv_path: str,
+        root: str,
+        fake_values: list,
+        real_values: list | None = None,
+        path_column: str = "path",
+        label_column: str = "label",
+        path_prefix: list[str] | str | None = None,
+        where: dict | None = None,
+        generator: str = "UNKNOWN",
+        split: str = "test",
+        limit: int | None = None,
+        on_missing: str = "error",
+    ):
+        if on_missing not in ("error", "skip"):
+            raise ValueError(f"on_missing must be 'error' or 'skip', not {on_missing!r}")
+        self.csv_path = csv_path
+        self.root = root
+        self.fake_values = {str(v).lower() for v in fake_values}
+        self.real_values = {str(v).lower() for v in real_values} if real_values else None
+        self.path_column = path_column
+        self.label_column = label_column
+        prefixes = [path_prefix] if isinstance(path_prefix, str) else path_prefix
+        self.path_prefix = [_norm(p) for p in prefixes] if prefixes else None
+        self.where = {k: {str(x) for x in (v if isinstance(v, list) else [v])}
+                      for k, v in (where or {}).items()}
+        self.generator = generator
+        self.split = split
+        self.limit = limit
+        self.on_missing = on_missing
+
+    def _selects(self, row: dict) -> bool:
+        for column, allowed in self.where.items():
+            if str(row[column]) not in allowed:
+                return False
+        if self.path_prefix is None:
+            return True
+        rel = _norm(row[self.path_column])
+        return any(rel.startswith(p) for p in self.path_prefix)
+
+    def rows(self, out_dir: str | Path) -> Iterator[dict]:
+        import csv
+
+        root = Path(self.root).expanduser()
+        kept = {REAL: 0, FAKE: 0}
+        missing = 0
+
+        with open(self.csv_path, newline="") as f:
+            reader = csv.DictReader(f)
+            for column in (self.path_column, self.label_column, *self.where):
+                if column not in (reader.fieldnames or []):
+                    raise KeyError(
+                        f"{self.csv_path} has no column {column!r} -- "
+                        f"it has {reader.fieldnames}"
+                    )
+
+            for row in reader:
+                if not self._selects(row):
+                    continue
+                label = _polarity(str(row[self.label_column]), self.fake_values, self.real_values)
+                if label is None:
+                    continue
+                if self.limit is not None and kept[label] >= self.limit:
+                    if all(v >= self.limit for v in kept.values()):
+                        break
+                    continue
+
+                path = root / _norm(row[self.path_column])
+                if not path.is_file():
+                    if self.on_missing == "error":
+                        raise FileNotFoundError(
+                            f"{path} is named by {self.csv_path} but is not on disk "
+                            f"({kept[REAL] + kept[FAKE]} rows resolved before it). Check that "
+                            f"root={self.root!r} is the directory the table's paths hang off, "
+                            f"and that the archive holding this subset was unpacked. Set "
+                            f"on_missing: skip only if the table deliberately describes more "
+                            f"of the dataset than you downloaded."
+                        )
+                    missing += 1
+                    continue
+
+                kept[label] += 1
+                yield {
+                    "path": str(path.resolve()),
+                    "label": label,
+                    "generator": self.generator if label == FAKE else "REAL",
+                    "split": self.split,
+                }
+
+        if missing:
+            print(f"{type(self).__name__}: skipped {missing} row(s) with no file on disk")
+        _check_split(kept[FAKE], kept[REAL], self.fake_values)
 
 
 class ImageDirSource:
@@ -175,3 +333,60 @@ class ImageDirSource:
                 }
 
         _check_split(n[FAKE], n[REAL], self.fake_dirs)
+
+
+class ConcatSource:
+    """Several sources into one manifest -- the way a dataset gets a train split.
+
+    Every other source materializes exactly one split, which is all evaluation
+    ever needs: the harness scores a held-out set and nothing else. Training a
+    classifier head against the same dataset (`grace_adapter`'s stage 0) needs
+    two, drawn from the same distribution, disjoint by construction, and
+    described in one place so that "the probe was fit on these rows and selected
+    on those" is a property of the manifest rather than of a shell command.
+
+    Parameters
+    ----------
+    sources : `{target, args}` specs, built in order and chained
+    prefix  : if true (default), each source writes under its own subdirectory
+              of `out_dir`
+
+    `prefix` is not a convenience. `HFImageDatasetSource` names files by their
+    position in the split it is iterating, so two splits of the same dataset both
+    start at `images/00000000_0.png` and the second silently overwrites the
+    first -- producing a manifest whose train and validation rows point at the
+    same pixels. Subdirectories are named from each source's `split` attribute,
+    falling back to its position.
+    """
+
+    def __init__(self, sources: list[dict], prefix: bool = True):
+        from pipeline.utils.imports import instantiate
+
+        if not sources:
+            raise ValueError("ConcatSource needs at least one source")
+        self.sources = [instantiate(s) for s in sources]
+        self.prefix = prefix
+
+    def _dir_for(self, i: int, source) -> str:
+        name = str(getattr(source, "split", "") or f"part{i}")
+        return name.replace("/", "_")
+
+    def rows(self, out_dir: str | Path) -> Iterator[dict]:
+        out_dir = Path(out_dir)
+        # Label polarity is not re-checked here: each child runs `_check_split`
+        # over its own rows at the end of its generator, which is the stricter
+        # test -- an aggregate check would pass a validation split with no fakes
+        # in it as long as the training split had some.
+        seen: set[str] = set()
+        for i, source in enumerate(self.sources):
+            target = out_dir / self._dir_for(i, source) if self.prefix else out_dir
+            for row in source.rows(target):
+                if row["path"] in seen:
+                    raise ValueError(
+                        f"{row['path']} was produced by two sources. Set prefix: true "
+                        f"(the default) so each writes into its own subdirectory -- "
+                        f"otherwise the later source overwrites the earlier one's "
+                        f"images and the manifest points at the wrong pixels."
+                    )
+                seen.add(row["path"])
+                yield row

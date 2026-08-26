@@ -1,0 +1,161 @@
+_wandb:
+    value:
+        cli_version: 0.28.2
+        e:
+            zw1ovae8b0r2cn8kbtl8ysn2ut9z19is:
+                args:
+                    - configs/train/dinov3_clean.yaml
+                codePath: grace_adapter/scripts/train_adapter.py
+                codePathLocal: scripts/train_adapter.py
+                email: eiffelchongsy@gmail.com
+                executable: /Users/chongeiffel/Projects/External/eiffel-techjam-2026/.venv/bin/python
+                git:
+                    commit: a8f4a143c0f8aaa905131c24c860b485f2bedd72
+                    remote: https://github.com/eiffelcsy/eiffel-techjam-2026.git
+                host: Chongs-MacBook-Air.local
+                os: macOS-15.7.4-arm64-arm-64bit-Mach-O
+                program: /Users/chongeiffel/Projects/External/eiffel-techjam-2026/grace_adapter/scripts/train_adapter.py
+                python: CPython 3.13.13
+                root: /Users/chongeiffel/Projects/External/eiffel-techjam-2026/grace_adapter
+                startedAt: "2026-08-26T09:25:34.654485Z"
+                writerId: zw1ovae8b0r2cn8kbtl8ysn2ut9z19is
+        m: []
+        python_version: 3.13.13
+        t:
+            "1":
+                - 1
+                - 5
+                - 11
+                - 41
+                - 49
+                - 53
+            "2":
+                - 1
+                - 5
+                - 11
+                - 41
+                - 49
+                - 53
+            "3":
+                - 13
+                - 15
+                - 16
+            "4": 3.13.13
+            "5": 0.28.2
+            "6": 5.15.1
+            "10":
+                - 20
+            "12": 0.28.2
+            "13": darwin-arm64
+adapter/bottleneck:
+    value: 128
+adapter/dropout:
+    value: 0
+adapter/n_blocks:
+    value: 2
+adapter/noise_dim:
+    value: 0
+adapter/per_channel_gate:
+    value: true
+adapter/severity_film:
+    value: true
+adapter_params:
+    value: 401920
+arm:
+    value: B_clean_teacher
+batch_size:
+    value: 64
+cache_dir:
+    value: cache/dinov3-sid
+checkpoint_every:
+    value: 2
+dataset:
+    value: ../eval_pipeline/configs/datasets/sid_poc.yaml
+detector:
+    value: ../eval_pipeline/configs/detectors/dinov3-sid.yaml
+detector_name:
+    value: dinov3-sid
+device:
+    value: auto
+ema_decay:
+    value: 0.999
+epochs:
+    value: 12
+feature_dim:
+    value: 768
+feature_layout:
+    value: vector
+grad_clip:
+    value: 1
+log_every:
+    value: 50
+loss/eps_iso:
+    value: 0.05
+loss/kl_temperature:
+    value: 2
+loss/lam_id:
+    value: 0.5
+loss/lam_kl:
+    value: 0.1
+loss/lam_sev:
+    value: 0.1
+loss/lam_sw:
+    value: 0.1
+loss/n_proj:
+    value: 64
+loss/w_cos:
+    value: 1
+loss/w_err:
+    value: 1
+loss/weighting:
+    value: jacobian
+lr:
+    value: 0.001
+num_workers:
+    value: 4
+out_dir:
+    value: checkpoints/grace/
+run_id:
+    value: dinov3_clean
+sampling/k_eval:
+    value: 8
+sampling/k_train:
+    value: 2
+schedule/grid_file:
+    value: ../eval_pipeline/configs/degradations.yaml
+schedule/level_weights/0:
+    value: 0.15
+schedule/level_weights/1:
+    value: 0.35
+schedule/level_weights/2:
+    value: 0.3
+schedule/level_weights/3:
+    value: 0.2
+schedule/seed:
+    value: 0
+schedule/transforms:
+    value: null
+seed:
+    value: 0
+source:
+    value: cache
+split:
+    value: grace.splits.dinov3.DINOv3Split
+target_view:
+    value: clean
+wandb/enabled:
+    value: true
+wandb/entity:
+    value: null
+wandb/group:
+    value: ""
+wandb/mode:
+    value: online
+wandb/project:
+    value: grace-adapter
+wandb/tags:
+    value: []
+warmup_steps:
+    value: 50
+weight_decay:
+    value: 0.01

@@ -1,0 +1,39 @@
+# PoC arm A -- the control. Target is the DEGRADED view itself, detached:
+# symmetric self-distillation with no clean teacher anywhere.
+#
+# Expected to do nothing useful. If it matches arm B on retention, the clean
+# teacher was not the mechanism and the headline claim does not hold. Cheap to
+# find out precisely because both arms read the same pre-rendered cache -- this
+# is the run that costs nothing and can invalidate the project.
+#
+# Differs from dinov3_clean.yaml in `target_view` and `run_id` alone. Everything
+# else, including the adapter geometry, is repeated verbatim rather than
+# inherited: an ablation that silently differs in a second key is not an ablation.
+
+run_id: dinov3_degraded
+
+detector: ../eval_pipeline/configs/detectors/dinov3-sid.yaml
+split: grace.splits.dinov3.DINOv3Split
+dataset: ../eval_pipeline/configs/datasets/sid_poc.yaml
+
+cache_dir: cache/dinov3-sid
+epochs: 12
+seed: 0
+target_view: degraded
+source: cache
+
+batch_size: 64
+warmup_steps: 10
+
+adapter:
+  bottleneck: 128
+  n_blocks: 2
+
+loss: {}
+
+# Optional. `--wandb --wandb-group <experiment>` on the command line does the
+# same thing without editing a file, which is what a sweep wants.
+wandb:
+  enabled: true
+  project: grace-adapter
+  group: ""

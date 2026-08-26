@@ -1,0 +1,47 @@
+# Stage 0 -- fit the PoC detector's classification head. PoC only.
+#
+#   python scripts/train_probe.py configs/probe/dinov3_sid.yaml
+#
+# The one script in this project that trains a detector, and it exists because a
+# DINOv3 trunk has no classifier: GRACE cannot adapt a seam whose head does not
+# exist yet. Every other detector arrives with its head already trained by its
+# authors and never touches this directory.
+#
+# Where the head lands is NOT written here. `out` defaults to the
+# `head_checkpoint` the detector config already names, so the path the probe
+# writes and the path the detector loads are one string in one file.
+#
+# Clean images only, no degradation augmentation -- that is the premise. See
+# grace/probe/train.py.
+
+run_id: dinov3_sid
+
+detector: ../eval_pipeline/configs/detectors/dinov3-sid.yaml
+dataset: ../eval_pipeline/configs/datasets/sid_poc.yaml         # split: train
+val_dataset: ../eval_pipeline/configs/datasets/sid_poc_eval.yaml # split: validation
+
+split: grace.splits.dinov3.DINOv3Split
+out: ""             # "" = take it from the detector config's head_checkpoint
+
+# Head geometry. Written here rather than read from the detector config because
+# this is what *decides* it: the checkpoint carries hidden/n_layers/dropout and
+# the detector rebuilds from those, so a mismatch cannot happen.
+hidden: 512
+n_layers: 2
+dropout: 0.0
+
+epochs: 40
+lr: 0.001
+weight_decay: 0.01
+batch_size: 32      # images per trunk forward, during feature extraction
+head_batch_size: 64 # features per optimizer step -- the trunk runs once, ever
+num_workers: 4
+seed: 0
+device: auto
+
+# Optional. `--wandb --wandb-group <experiment>` on the command line does the
+# same thing without editing a file, which is what a sweep wants.
+wandb:
+  enabled: false
+  project: grace-adapter
+  group: ""

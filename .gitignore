@@ -1,0 +1,13 @@
+# Datasets, shared by both packages.
+#
+# `data/` sits at the repo root rather than inside eval_pipeline/ because BOTH
+# packages read it and neither owns it: run_eval.py runs with CWD=eval_pipeline/
+# and the GRACE training scripts run with CWD=grace_adapter/. A path of
+# `../data/...` in a dataset config resolves to the same directory from either,
+# which a path inside one package cannot do.
+#
+# Materialized images and their manifests: reproducible from a dataset config
+# via `build_manifest.py`, and large.
+/data/
+
+.DS_Store

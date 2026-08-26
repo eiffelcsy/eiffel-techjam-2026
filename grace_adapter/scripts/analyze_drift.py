@@ -1,13 +1,20 @@
-"""Test RA-Det's premise on this data, before building anything on it.
+"""Test RA-Det's premise on this data, before anything is TRAINED on it.
 
+    python scripts/build_cache.py configs/cache/rine.yaml        # PREREQUISITE
     python scripts/analyze_drift.py --cache cache/rine --dataset ../eval_pipeline/configs/datasets/sid_set.yaml
 
-Reads the rendered cache and nothing else: no training, no GPU, minutes. Reports,
+**Needs a rendered cache**, including at least one finalized degraded view: the
+whole analysis is a comparison of `clean` against `epoch=NNN`, so there is
+nothing to compute before `build_cache.py` has run. `FeatureCache` is opened in
+the first statement of `main`, so a missing cache fails immediately, and a cache
+with no finalized degraded view exits with `no rendered epochs under <dir>`.
+
+Given that cache it reads nothing else: no training, no GPU, minutes. Reports,
 per level and per transform, how far generated images drift under degradation
 versus real ones, and how much of that drift lies inside the frozen head's
 sensitive subspace.
 
-Both outcomes are useful, which is why this runs first:
+Both outcomes are useful, which is why this runs before stage 1:
 
   * **Asymmetry present** -> drift carries forensic signal, the discrepancy branch
     has something to read, and the label-free objective is knowingly erasing it.
@@ -51,16 +58,37 @@ def parse_args():
     return p.parse_args()
 
 
-def _head_and_gradient(args, cache, f_clean):
-    """The head's input-gradient at the clean features, or None if unavailable."""
+def load_split(args):
+    """The split, built ONCE, or None if the ∥/⊥ decomposition was not requested.
+
+    Hoisted out of the batch loop deliberately. `build_detector` loads weights
+    from disk and runs `verify_split`, so building it per batch reloads the whole
+    trunk for every 512 images -- dozens of times over a multi-epoch cache, for a
+    gradient that depends only on the frozen head.
+    """
     if not (args.detector and args.split):
         return None
     from grace.splits import build_split
-    from grace.train.weighting import head_gradient
     from pipeline.detectors import build_detector
 
-    split = build_split(build_detector(load_detector_config(args.detector)), args.split)
-    return head_gradient(split.head, f_clean)
+    return build_split(build_detector(load_detector_config(args.detector)), args.split)
+
+
+def head_gradient_for(split, f_clean):
+    """∇_f head(f) at the clean features, returned on `f_clean`'s device.
+
+    The cache hands back CPU tensors -- it is memmapped numpy -- while the
+    detector sits whereever its config's `device:` put it, which for `auto` is
+    MPS or CUDA. So the features go to the model and the gradient comes back, and
+    every other quantity in this script stays on the CPU where the cache put it.
+    """
+    if split is None:
+        return None
+    from grace.train.weighting import head_gradient
+
+    param = next(split.parameters(), None)
+    device = param.device if param is not None else f_clean.device
+    return head_gradient(split.head, f_clean.to(device)).to(f_clean.device)
 
 
 def main():
@@ -70,10 +98,15 @@ def main():
     manifest = load_manifest(dataset.manifest, dataset.split)
 
     index = np.asarray(manifest.index, dtype=np.int64)
-    labels = torch.from_numpy(np.asarray(manifest["label"], dtype=np.int64))
+    # `np.array`, not `np.asarray`: a pandas column can hand back a read-only
+    # view, and torch warns about wrapping one on every run.
+    labels = torch.from_numpy(np.array(manifest["label"], dtype=np.int64))
     epochs = args.epochs or list(cache.epochs())
     if not epochs:
         raise SystemExit(f"no rendered epochs under {args.cache}")
+
+    # Once, before the loop -- see load_split.
+    split = load_split(args)
 
     report = {"cache": str(args.cache), "dataset": dataset.name, "epochs": {}}
     for epoch in epochs:
@@ -86,7 +119,7 @@ def main():
             f_deg = cache.degraded(sel, epoch).float()
             y = labels[start : start + args.batch_size]
 
-            j = _head_and_gradient(args, cache, f_clean)
+            j = head_gradient_for(split, f_clean)
             per_batch.append(D.drift_asymmetry(f_deg, f_clean, y, j))
             drift_all.append(D.drift(f_deg, f_clean)["relative"].numpy())
             level_all.append(recipes.loc[sel, "level"].to_numpy())

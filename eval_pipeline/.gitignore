@@ -2,7 +2,8 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
-/data/
+# /data/ moved to the repo root -- see the .gitignore there. Both packages
+# read it, so it lives above both rather than inside one.
 checkpoints/
 third_party/
 results/*

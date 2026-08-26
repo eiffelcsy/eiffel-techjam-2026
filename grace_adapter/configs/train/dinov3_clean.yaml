@@ -1,0 +1,43 @@
+# PoC arm B -- the proposed method. The primary label-free result.
+#
+# Target is the CLEAN view from the cache. Paired with dinov3_degraded.yaml: same
+# seed, same cache, same schedule, same epochs, differing in exactly one key.
+#
+# `checkpoint_every: 2` writes the intermediate adapters experiment E4 needs.
+# On this cache a full stage-1 run is seconds, so there is no reason not to.
+#
+#   python scripts/train_adapter.py configs/train/dinov3_clean.yaml
+
+run_id: dinov3_clean
+
+detector: ../eval_pipeline/configs/detectors/dinov3-sid.yaml
+split: grace.splits.dinov3.DINOv3Split
+dataset: ../eval_pipeline/configs/datasets/sid_poc.yaml
+
+cache_dir: cache/dinov3-sid
+epochs: 12
+seed: 0
+target_view: clean
+source: cache
+checkpoint_every: 2
+
+batch_size: 64      # smaller than the 256 default because the PoC manifest is
+                    # small; the sliced-Wasserstein term is a batch statistic and
+                    # drop_last would otherwise discard most of an epoch
+warmup_steps: 10
+
+adapter:
+  bottleneck: 128   # 768 -> 128 -> 768, twice: ~0.4M parameters against a 21M
+                    # frozen trunk. The parameter budget IS the claim -- if the
+                    # gap only closes with a large adapter, the evidence was not
+                    # merely displaced.
+  n_blocks: 2
+
+loss: {}            # the full objective: Jacobian-weighted error + sliced-Wasserstein
+
+# Optional. `--wandb --wandb-group <experiment>` on the command line does the
+# same thing without editing a file, which is what a sweep wants.
+wandb:
+  enabled: true
+  project: grace-adapter
+  group: ""

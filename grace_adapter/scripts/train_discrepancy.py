@@ -19,6 +19,7 @@ import argparse
 
 from grace.config import load_discrepancy_config
 from grace.splits import build_split
+from grace.train.tracker import add_wandb_args, apply_wandb_args
 from grace.train.loop import train_discrepancy
 from pipeline.config import load_dataset_config, load_detector_config
 from pipeline.data.manifest import load_manifest
@@ -31,6 +32,7 @@ def parse_args():
     p.add_argument("--adapter", help="override adapter_checkpoint (experiment E4)")
     p.add_argument("--run-id")
     p.add_argument("--dataset", help="override the dataset config path")
+    add_wandb_args(p)
     return p.parse_args()
 
 
@@ -41,6 +43,7 @@ def main():
         cfg.adapter_checkpoint = args.adapter
     if args.run_id:
         cfg.run_id = args.run_id
+    apply_wandb_args(cfg, args)
 
     dataset_cfg = load_dataset_config(args.dataset or cfg.dataset)
     manifest = load_manifest(dataset_cfg.manifest, dataset_cfg.split)

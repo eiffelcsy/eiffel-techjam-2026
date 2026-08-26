@@ -1,0 +1,49 @@
+# SID_Set for the GRACE proof-of-concept: TWO splits in one manifest.
+#
+# Every other dataset config here materializes one split, because evaluation
+# needs one held-out set and nothing else. This one also needs a training split:
+# the PoC detector's classification head is fit here (grace_adapter stage 0) and
+# GRACE's adapter is trained on the same rows, so both must be disjoint from what
+# the harness later scores.
+#
+#   split: train         <- this file. Head fitting + feature cache + adapter.
+#   split: validation    <- configs/datasets/sid_poc_eval.yaml, SAME manifest.
+#
+# ConcatSource gives each child its own image subdirectory. That is load-bearing,
+# not tidiness: HFImageDatasetSource names files by position within its split, so
+# both splits start at images/00000000_0.png and without the prefix the second
+# overwrites the first.
+#
+# saberzl/SID_Set -- 3 classes in a plain int64 column (no ClassLabel names):
+#   0 = real, 1 = full synthetic, 2 = tampered
+# Only class 1 is kept as fake. Tampered images are locally edited photographs:
+# a genuine detection target, but a different one, and mixing them in would make
+# the retention curve an average over two failure modes.
+
+name: sid_poc
+manifest: ../data/sid_poc/manifest.parquet
+split: train
+
+source:
+  target: pipeline.data.sources.ConcatSource
+  args:
+    sources:
+      - target: pipeline.data.sources.HFImageDatasetSource
+        args:
+          dataset_id: saberzl/SID_Set
+          split: train                    # 210k rows upstream
+          fake_classes: ["1"]
+          real_classes: ["0"]
+          generator: SID_Set-full-synthetic
+          limit: 25000                      # per class. Raise once a run is proven.
+          streaming: true                 # essential with `limit`: a non-streaming
+                                          # load fetches every shard first
+      - target: pipeline.data.sources.HFImageDatasetSource
+        args:
+          dataset_id: saberzl/SID_Set
+          split: validation               # 30k rows upstream
+          fake_classes: ["1"]
+          real_classes: ["0"]
+          generator: SID_Set-full-synthetic
+          limit: 5000
+          streaming: true

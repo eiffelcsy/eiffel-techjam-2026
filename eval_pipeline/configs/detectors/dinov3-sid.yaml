@@ -1,0 +1,36 @@
+# The proof-of-concept detector: frozen DINOv3 ViT-S/16 + an MLP probe head.
+#
+# Unlike every other detector here, this one is not somebody else's published
+# checkpoint -- the head is fit by grace_adapter/scripts/train_probe.py against
+# configs/datasets/sid_poc.yaml (split: train), on CLEAN images only. That is the
+# premise GRACE is built on, not a shortcut: the whole claim concerns a detector
+# fit on clean data whose accuracy collapses under JPEG, blur and resize.
+#
+# Run stage 0 before anything reads this file with a non-null head:
+#
+#   cd ../grace_adapter && python scripts/train_probe.py configs/probe/dinov3_sid.yaml
+#
+# `head_checkpoint` is the one path both sides use -- train_probe.py reads it
+# out of THIS file to decide where to write. Change it in one place.
+#
+# The backbone is gated on the Hub. Accept the licence at
+# https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m and run
+# `hf auth login` once, or point `backbone_id` at a mirror you already have --
+# nothing in the code assumes the official id.
+#
+# `pool: cls+patchmean` is DINOv3's own linear-probe recipe (768-d). It also
+# matters here specifically: generation traces are a local high-frequency
+# phenomenon, and a detector reading only the CLS token would lean on semantics
+# and lose accuracy for reasons unrelated to the artefacts degradation destroys.
+#
+# Device placement is the pipeline's job -- `device: auto` picks cuda/mps/cpu.
+
+name: dinov3-sid
+target: pipeline.detectors.dinov3.DINOv3MLPDetector
+args:
+  backbone_id: facebook/dinov3-vits16-pretrain-lvd1689m
+  head_checkpoint: ../grace_adapter/checkpoints/probe/dinov3_sid/head.pt
+  pool: cls+patchmean
+  hidden: 512
+  n_layers: 2
+device: auto
