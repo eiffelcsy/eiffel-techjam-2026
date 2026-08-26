@@ -1,0 +1,17 @@
+# GAPL (Qin et al.) -- CLIP ViT-L/14 + LoRA, cross-attending 64 generator-aware
+# prototypes. Needs third_party/GAPL cloned and checkpoint.pt downloaded from
+# the Hub; see the "Detector zoo" section of the README.
+#
+# `clip_id` replaces the absolute /root/.cache snapshot path their models.py
+# hardcodes -- the adapter intercepts that one call rather than editing the
+# clone. Point it at a local directory instead if the box is offline.
+#
+# Note it normalizes with ImageNet statistics, not CLIP's, despite the CLIP
+# backbone. That is what their inference script does; it is not a bug here.
+
+name: gapl
+target: pipeline.detectors.gapl.GAPL
+args:
+  checkpoint: checkpoints/gapl/checkpoint.pt
+  clip_id: openai/clip-vit-large-patch14
+device: auto

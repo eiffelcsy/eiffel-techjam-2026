@@ -25,7 +25,7 @@ RETENTION_FLOOR = 0.5
 The `operating_envelope` in the results schema is the deepest composition level
 still at or above this. 0.5 means "at least half the chance-corrected clean
 skill survives"; it is a reporting convention, not a derived quantity, and
-`eval.yaml: retention_floor` overrides it.
+the run config's `retention_floor` overrides it.
 """
 
 

@@ -3,11 +3,11 @@
     L0  clean          the reference. Sets the threshold and the retention
                        denominator.
     L1  single         one transform at one parameter, the full deterministic
-                       grid (14 conditions). One-factor-at-a-time: every
+                       grid (19 conditions). One-factor-at-a-time: every
                        result is attributable to exactly one cause.
-    L2  pair           two distinct transforms, sampled per image from the six
-                       and their discrete parameter values, applied in random
-                       order.
+    L2  pair           two distinct transforms, sampled per image from the
+                       eleven and their discrete parameter values, applied in
+                       random order.
     L3  multi          three to five distinct transforms, sampled the same way.
 
 L1 is a controlled sweep; L2/L3 are Monte-Carlo samples of the composition
@@ -93,8 +93,20 @@ class Condition:
     seed: int = 0
 
     def sample_recipe(self, index: int) -> Recipe:
-        """Deterministic draw keyed on (index, level, replicate)."""
-        if self.level < 2:
+        """Deterministic draw keyed on (index, level, replicate).
+
+        A condition carrying no `grid` is a *fixed* recipe and returns it: that
+        is every L0 and L1 condition the evaluation sweep builds, where L1 is the
+        19-point one-factor-at-a-time grid and each point is its own condition.
+
+        A condition carrying a grid is a *distribution* and draws from it, at any
+        level -- `LEVELS[level]["n_transforms"]` already says how many transforms
+        each level composes, including (0, 0) for clean and (1, 1) for single. So
+        `Condition(level=1, grid=...)` means "one transform drawn at random",
+        which is what a training schedule wants and what the eval sweep, having
+        no grid, never asks for. See grace_adapter/grace/cache/schedule.py.
+        """
+        if not self.grid:
             return Recipe(self.steps)
 
         lo, hi = LEVELS[self.level]["n_transforms"]

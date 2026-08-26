@@ -1,9 +1,15 @@
 """Detector construction.
 
 Detectors are named in config by dotted import path, so this package holds no
-registry of known models -- only the contract (`FrozenDetector`), one generic
-Hub adapter (`hf.HFImageClassifier`), and the two functions that turn a config
-entry into a loaded model on the right device.
+registry of known models -- only the contract (`FrozenDetector`), the adapters,
+and the two functions that turn a config entry into a loaded model on the right
+device.
+
+`hf.HFImageClassifier` covers any Hub `AutoModelForImageClassification` from
+config alone. `bfree`, `gapl` and `rine` are the zoo: published detectors whose
+repos are not pip-installable, cloned by hand under `third_party/` and imported
+through `_vendor.vendored`. Each defers its upstream imports into `__init__`, so
+this package stays importable with none of them present.
 """
 
 import torch

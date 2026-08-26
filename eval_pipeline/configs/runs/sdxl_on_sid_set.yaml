@@ -8,4 +8,4 @@ detector: configs/detectors/sdxl.yaml
 datasets:
   - configs/datasets/sid_set.yaml
 
-degrade: {}     # the standard sweep: all four levels, all six transforms
+degrade: {}     # the standard sweep: all four levels, all eleven transforms

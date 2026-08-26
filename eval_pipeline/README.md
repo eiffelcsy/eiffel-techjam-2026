@@ -40,10 +40,10 @@ it.** Cui et al. put the limitation plainly: existing robustness protocols
 quality factor or Gaussian blur at a single strength" [2]. Their answer,
 RealDeg-Bench, is a compound-degradation benchmark over seven operators (JPEG,
 Gaussian blur, resize, Gaussian noise, brightness, contrast, saturation) with a
-degradation depth of N ∈ {1..5} sequential operators. That is nearly this
-harness's operator pool -- it bundles brightness/contrast/saturation into one
-`color_jitter` and adds `center_crop` -- and its depth range is exactly this
-harness's L2 (2 transforms) and L3 (3-5). Two independent designs converging on
+degradation depth of N ∈ {1..5} sequential operators. That is this harness's
+operator pool -- brightness, contrast and saturation are separate operators
+here too, swept in both directions, and `center_crop` is the one addition --
+and its depth range is exactly this harness's L2 (2 transforms) and L3 (3-5). Two independent designs converging on
 the same structure is the argument for it. Real propagation stacks operations:
 re-compress, resize, re-upload.
 
@@ -65,17 +65,26 @@ tests it. Do not read it as an established result.
 
 ## The transform grid
 
-Six transforms, each a real-world artefact rather than an adversarial attack,
-each with an explicit parameter list.
+Eleven transforms, each a real-world artefact rather than an adversarial
+attack, each with an explicit parameter list.
 
-| Transform | Parameter | Values | Real-world analog |
-|---|---|---|---|
-| JPEG compression | quality | 90, 70, 50, 30 | Social-media re-encode, messaging |
-| Gaussian blur | sigma | 0.5, 1.0, 2.0 | Out-of-focus |
-| Resize | scale | 0.5x, 0.25x then upscale | Thumbnail generation |
-| Gaussian noise | sigma | 0.02, 0.05, 0.10 | Low-light sensor noise |
-| Color jitter | strength | +/-20% brightness, contrast, saturation | Filter apps, auto-enhance |
-| Center crop | keep | 80% | Profile-picture cropping, framing |
+| Transform | Group | Parameter | Values | Real-world analog |
+|---|---|---|---|---|
+| JPEG compression | compression | quality | 90, 70, 50, 30 | Social-media re-encode, messaging |
+| Gaussian blur | blur | sigma | 0.5, 1.0, 2.0 | Out-of-focus |
+| Resize | resampling | scale | 0.5x, 0.25x then upscale | Thumbnail generation |
+| Gaussian noise | noise | sigma | 0.02, 0.05, 0.10 | Low-light sensor noise |
+| Brightness up / down | photometric | factor | 1.2 / 0.8 | Filter apps, auto-enhance |
+| Contrast up / down | photometric | factor | 1.2 / 0.8 | Filter apps, auto-enhance |
+| Saturation up / down | photometric | factor | 1.2 / 0.8 | Filter apps, auto-enhance |
+| Center crop | framing | keep | 80% | Profile-picture cropping, framing |
+
+The six `photometric` transforms are colour jitter unbundled: +/-20% on each of
+brightness, contrast and saturation, one attribute at a time. They share a
+group, so the report can aggregate them back into a single colour-jitter
+family, but each is its own L1 condition -- a detector that only breaks on a
+brightness lift is visible as such, rather than averaged into one stochastic
+"jitter" number.
 
 Parameters apply identically at every resolution -- no clamping, no minimum-size
 guard. Some are resolution-relative (`scale`, `keep`) and some absolute (`sigma`
@@ -88,7 +97,7 @@ degraded eval set is identical no matter which detector scores it.
 | Level | What | How |
 |---|---|---|
 | L0 | clean | reference: sets the threshold and the retention denominator |
-| L1 | single | the 14 grid conditions, one at a time (exhaustive sweep) |
+| L1 | single | the 19 grid conditions, one at a time (exhaustive sweep) |
 | L2 | pair | 2 distinct transforms, params drawn from the grid, random order |
 | L3 | multi | 3-5 distinct transforms, sampled the same way |
 
@@ -107,30 +116,37 @@ combination space and a tighter CI, without growing the eval set.
 2. **Interaction** -- measured L2/L3 retention against what the L1 marginals
    predict under independence. A large negative gap is the finding: the
    single-transform benchmark overstated that detector's robustness.
-3. **By transform (L1)** -- detectors x the six transforms, plus degradation
+3. **By transform (L1)** -- detectors x the eleven transforms, plus degradation
    curves (AUC vs parameter, one panel per transform).
 4. **Error split** -- FPR and FNR at a threshold fixed on clean data.
 
 Plus a worst-recipe table: which combinations at L2/L3 did the damage.
 
 `summary.operating_envelope` is the deepest level still at or above the
-retention floor (`retention_floor` in `eval.yaml`, default 0.5 -- a reporting
-convention, not a derived quantity).
+retention floor (`retention_floor` in the run config, default 0.5 -- a
+reporting convention, not a derived quantity).
 
 ## Layout
 
 ```
-configs/           eval.yaml (one run) + degradations.yaml (the transform grid)
+configs/
+  datasets/        what a dataset IS -- source, manifest path, split
+  detectors/       what a detector IS -- import path and args
+  runs/            detectors x datasets, plus how the run executes
+  degradations.yaml  the transform grid
+  defaults.yaml    annotated reference: every key with its default
 pipeline/
   config.py        yaml -> dataclasses
   data/            manifest (the one table everything keys off) + sources + datasets
-  degrade/         ops.py (the six transforms) + conditions.py (levels, sampling)
-  detectors/       frozen-detector contract + one generic Hub adapter
+  degrade/         ops.py (the eleven transforms) + conditions.py (levels, sampling)
+  detectors/       frozen-detector contract, one generic Hub adapter, the zoo
   eval/            metrics, runner, report
   inference/       image dir -> P(generated) per image
   utils/           seeding, io, import-path resolution
 scripts/           build_manifest / run_eval / report / predict
 tests/             one end-to-end run on synthetic data
+third_party/       the zoo's upstream repos, cloned by hand (gitignored)
+checkpoints/       the zoo's weights, downloaded by hand (gitignored)
 ```
 
 ## Install
@@ -156,8 +172,19 @@ Set `HF_HOME` (and `HF_DATASETS_CACHE`) if `$HOME` is small or read-only --
 
 ## Pointing it at a model and a dataset
 
-Both are specs of the same shape: a dotted `target` plus its constructor `args`.
-Nothing below requires touching code in `pipeline/`.
+Three kinds of config, one file each, one directory each:
+
+```
+configs/datasets/<name>.yaml    what a dataset IS
+configs/detectors/<name>.yaml   what a detector IS
+configs/runs/<name>.yaml        detectors x datasets
+```
+
+A dataset and a detector each name their component the same way -- a dotted
+`target` plus its constructor `args` -- and a run references the other two by
+path rather than restating them. Nothing below requires touching code in
+`pipeline/`. `configs/defaults.yaml` is the annotated reference: every key of
+every kind with its default, and not a file the harness loads.
 
 **A detector** -- `configs/detectors/<name>.yaml`. Any Hub
 `AutoModelForImageClassification` checkpoint works through the generic adapter:
@@ -185,21 +212,31 @@ into DataLoader workers, so a preprocessing function holding the model pickles
 every parameter -- which fails outright on MPS and CUDA and wastes memory on
 CPU. `pipeline/detectors/hf.py` shows the pattern in about six lines.
 
-**A dataset** -- `configs/data/<name>.yaml`. Any Hub image dataset with a label
-column:
+**A dataset** -- `configs/datasets/<name>.yaml`. Any Hub image dataset with a
+label column:
 
 ```yaml
-target: pipeline.data.sources.HFImageDatasetSource
-args:
-  dataset_id: some-org/some-dataset
-  split: test
-  fake_classes: [FAKE]            # class names meaning *generated*
-  # real_classes: [REAL]          # name these on a multi-class dataset
-  generator: whatever-made-them
-  limit: 2000                     # per class; omit for all
-  streaming: true                 # required for large repos, see below
-out: data/some-dataset/manifest.parquet
+name: some-dataset                # short id, used in result filenames
+manifest: data/some-dataset/manifest.parquet
+split: test                       # which split to score; null = every row
+
+source:                           # read only by build_manifest.py
+  target: pipeline.data.sources.HFImageDatasetSource
+  args:
+    dataset_id: some-org/some-dataset
+    split: test
+    fake_classes: [FAKE]          # class names meaning *generated*
+    # real_classes: [REAL]        # name these on a multi-class dataset
+    generator: whatever-made-them
+    limit: 2000                   # per class; omit for all
+    streaming: true               # required for large repos, see below
 ```
+
+`manifest` is where the table goes, and `source` says how to build it -- once
+the manifest exists, evaluation reads `manifest` and `split` and ignores
+`source` entirely. The two `split` keys are not the same knob: the inner one
+picks which split to *pull* from the Hub, the outer one picks which split to
+*score* out of the built manifest.
 
 Label polarity is declared, never inferred: public AIGC datasets disagree on
 whether `0` means real or generated. When the label column is a plain integer
@@ -223,12 +260,129 @@ streaming is rate-limited and drops connections mid-shard.
 `ImageDirSource` is the equivalent for local directories. A new kind of source
 is a new class plus a new `target:` line.
 
+**A run** -- `configs/runs/<name>.yaml`. Pairs the detectors with the datasets to
+score them on:
+
+```yaml
+run_id: my_run
+detector: configs/detectors/my-detector.yaml   # path, or the mapping inline
+datasets:
+  - configs/datasets/my-dataset.yaml           # paths, or mappings inline
+
+degrade: {}         # `{}` takes every default: all four levels, all eleven
+                    # transforms, n_replicates: 3, seed: 0
+```
+
+That is a complete run config -- everything else takes its default from
+`configs/defaults.yaml`. Loader knobs live here rather than on the dataset:
+`batch_size` and `num_workers` are properties of this machine, and
+`max_images` is a scope decision for this run, so none of them describe what
+the dataset is.
+
+Write `detectors:` with a list instead of `detector:` to score several in one
+command. Each is loaded, run against every dataset, and released before the next
+is built, so a zoo costs one detector's memory however many are named:
+
+```yaml
+detectors:
+  - configs/detectors/gapl.yaml
+  - configs/detectors/rine-ldm.yaml
+```
+
+The loader knobs are shared across that list, so a detector needing its own
+`batch_size` belongs in its own run config. Nothing is lost by splitting it:
+results are keyed by `(detector, dataset)`, not by run, so separate runs writing
+into the same `results/` still compare in one table.
+
+## The detector zoo
+
+Four detectors are configured beyond the generic Hub adapter. All three
+published ones are frozen, fake-positive, and thresholded at logit zero, which
+is exactly what `FrozenDetector.forward` is defined to return -- so no sign
+flips or probability conversions sit between them and the metrics.
+
+| config | model | backbone | input | licence |
+|---|---|---|---|---|
+| `bfree` | B-Free (CVPR 2025) | DINOv2 ViT-B/14 + 4 registers | native res, 5 token-space crops @504 | non-commercial |
+| `gapl` | GAPL | CLIP ViT-L/14 + LoRA, 64 prototypes | 224 centre crop, ImageNet stats | MIT (declared) |
+| `rine-ldm` | RINE (ECCV 2024), diffusion-trained | frozen CLIP ViT-L/14, all 24 blocks | 224 centre crop, CLIP stats | Apache-2.0 |
+| `rine-4class` | RINE, ProGAN-trained | same | same | Apache-2.0 |
+
+None of the three upstream repos is pip-installable, so they are cloned by hand
+under `third_party/` and put on `sys.path` for one import
+(`pipeline/detectors/_vendor.py`). `third_party/` and `checkpoints/` are
+gitignored: a clone of this repo cannot rebuild the zoo on its own, so record
+the upstream SHAs in `_vendor.py`'s `REPOS` once you have cloned, and a drifting
+checkout warns rather than passing silently.
+
+```bash
+pip install -e ".[dev,zoo]"    # timm, peft, and OpenAI CLIP from git
+
+git clone https://github.com/grip-unina/B-Free.git third_party/B-Free
+git clone https://github.com/UltraCapture/GAPL.git third_party/GAPL
+git clone https://github.com/mever-team/rine.git   third_party/rine
+```
+
+Weights:
+
+- **B-Free** -- unzip
+  [`BFREE_dino2reg4.zip`](https://www.grip.unina.it/download/prog/B-Free/weights/BFREE_dino2reg4.zip)
+  (~330 MB, md5 `f3f53fa647848b16cf81c913f148a198`) into `checkpoints/bfree/`,
+  giving `checkpoints/bfree/BFREE_dino2reg4/{config.yaml,model_epoch_best.pth}`.
+  It is served from a single university host with no mirror; keep a private copy
+  of the zip once it downloads.
+- **GAPL** -- `hf download AbyssLumine/GAPL checkpoint.pt --local-dir checkpoints/gapl`
+  (1.22 GB). Take the prototypes from the clone, not the Hub: the Hub's
+  `stage1.pt` is 6 KB and looks truncated next to the repo's 526 KB copy.
+- **RINE** -- already in the clone at `third_party/rine/ckpt/`. Only the frozen
+  CLIP ViT-L/14 downloads, into `~/.cache/clip` on first use.
+
+Then:
+
+```bash
+python scripts/run_eval.py --config configs/runs/zoo_on_sid_set.yaml
+python scripts/run_eval.py --config configs/runs/zoo_bfree_on_sid_set.yaml
+python scripts/report.py --results results/
+```
+
+**B-Free is a separate run because of `batch_size`.** It takes the image at
+native resolution -- the 504x504 cropping happens inside the network, in token
+space -- so the tensors in a batch are not the same size and cannot stack.
+`batch_size: 1` is a correctness requirement for it, not a memory knob.
+
+Two upstream loading habits are worked around in the adapters rather than
+patched into the clones, since an edited clone is lost on the next pull: GAPL
+resolves CLIP from a hardcoded absolute path under `/root/.cache`, and RINE
+assigns weights through a string-manipulating `exec()` that cannot fail loudly.
+Both repos also load with `strict=False`, which leaves an untrained head in
+place and reads as a weak detector rather than an error -- so both adapters
+check the key sets and raise. If a zoo member scores near 0.5 AUC on clean
+images, that check is the first thing to re-read.
+
+**Check parity against upstream before trusting a sweep.** A wrong
+normalization constant or a flipped polarity produces numbers that look
+entirely reasonable, and no amount of downstream aggregation will reveal it.
+`predict.py` is the tool -- it scores a directory with the same adapter the
+harness uses:
+
+```bash
+python scripts/predict.py --image-dir third_party/B-Free/demo_images \
+    --detector configs/detectors/bfree.yaml --batch-size 1 --out bfree_demo.json
+```
+
+B-Free ships expected outputs in `demo_images/results.csv`, so that one is a
+direct comparison: `pred` here is `sigmoid` of the logit in their file. For RINE
+and GAPL, run their own demo script (`demo/demo.py`; `inference_image.py`, *not*
+the `inference.py` their README names) on the same images and compare. In every
+case the fakes must score above the reals -- a detector that has been polarity
+-flipped reports a plausible `1 - AUC` rather than an error.
+
 ## Usage
 
 ```bash
-python scripts/build_manifest.py --config configs/data/<name>.yaml
-python scripts/run_eval.py --config configs/eval.yaml       # -> results/*.json
-python scripts/report.py --results results/                 # -> tables + figures
+python scripts/build_manifest.py --config configs/datasets/<name>.yaml
+python scripts/run_eval.py --config configs/runs/<name>.yaml   # -> results/*.json
+python scripts/report.py --results results/                    # -> tables + figures
 
 python scripts/predict.py --image-dir path/to/images \
     --detector configs/detectors/<name>.yaml --out preds.json
@@ -237,9 +391,15 @@ python scripts/predict.py --image-dir path/to/images \
 `preds.json` is a list of `{"image_path": str, "pred": float}` where `pred` is
 P(AI-generated).
 
-`data.max_images` is the knob that moves wall-clock by an order of magnitude: a
-full run is `1 + 14 + 2 x n_replicates` conditions over the eval subset. Use a
-small value for the first loop.
+`run_eval.py` writes one file per dataset, `results/{run_id}__{detector}__{dataset}.json`.
+
+`max_images` in the run config is the knob that moves wall-clock by an order of
+magnitude: a full run is `1 + 19 + 2 x n_replicates` conditions over the eval
+subset. Use a small value for the first loop. `--levels` and `--transforms`
+override the config for a smoke run without editing it -- `--levels 0 1` scores
+clean plus the single-transform grid and nothing else (L0 is always added back
+if you leave it out, since it sets the threshold and the retention
+denominator).
 
 ## Invariants
 

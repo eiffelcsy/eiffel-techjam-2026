@@ -1,0 +1,22 @@
+# GRACE-D -- the same adapter, plus the supervised discrepancy branch.
+#
+#   logit = head(adapter(trunk(x)))  +  beta * aux(delta, severity)
+#
+# `checkpoint` is byte-identical to rine+grace.yaml's: stage 2 never touches the
+# adapter. The only difference is that delta -- the correction the adapter
+# proposes, i.e. its estimate of the drift -- is read rather than discarded.
+#
+# This is the arm that can exceed retention 1.0, because the magnitude of the
+# damage is information the clean image does not contain. Compare with
+# scripts/compare.py, which normalises by the BASELINE's clean AUC; the harness's
+# own retention divides by this detector's clean AUC and would hide the effect.
+
+name: rine+grace-d
+target: grace.detectors.adapted.AdaptedDetector
+args:
+  base: ../eval_pipeline/configs/detectors/rine-ldm.yaml
+  split: grace.splits.rine.RINESplit
+  checkpoint: checkpoints/grace/rine_clean/ema.pt
+  discrepancy: checkpoints/grace/rine_disc/discrepancy.pt
+  k_eval: 8
+device: auto

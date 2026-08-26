@@ -1,0 +1,26 @@
+# Arm B -- the proposed method, and the primary label-free result.
+#
+# Target is the CLEAN view from the cache. Paired with rine_degraded.yaml: same
+# seed, same cache, same schedule, same epochs, differing in exactly one key.
+# That ablation decides whether the asymmetry (clean image as teacher) is the
+# mechanism, or whether any self-distillation target would have done.
+#
+# `checkpoint_every: 2` is not incidental. It writes the intermediate adapters
+# experiment E4 needs: stage 2 is trained against each of them, and a falling
+# auxiliary AUC as this run improves is direct evidence that restoring features
+# erases the forensic drift signal.
+
+run_id: rine_clean
+
+detector: ../eval_pipeline/configs/detectors/rine-ldm.yaml
+split: grace.splits.rine.RINESplit
+dataset: ../eval_pipeline/configs/datasets/sid_set.yaml
+
+cache_dir: cache/rine
+epochs: 12
+seed: 0
+target_view: clean
+source: cache
+checkpoint_every: 2
+
+loss: {}      # the full v2 objective: Jacobian-weighted error + sliced-Wasserstein

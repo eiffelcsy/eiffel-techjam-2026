@@ -1,0 +1,91 @@
+"""Render a feature cache. The expensive step, run once per detector.
+
+    python scripts/build_cache.py configs/cache/rine.yaml --dry-run
+    python scripts/build_cache.py configs/cache/rine.yaml
+
+`--dry-run` prints the CacheSpec and the on-disk size and exits. Always run it
+first: the difference between a vector layout and RINE's `layers` layout is 24x,
+and finding that out after four hours of GPU time is avoidable.
+
+Resumable at view granularity -- rerun after an interruption and finished views
+are skipped.
+"""
+
+import argparse
+
+from grace.cache.schedule import EpochSchedule, val_epochs
+from grace.cache.spec import CacheSpec, sha_detector, sha_manifest, sha_preprocess
+from grace.cache.writer import build_cache
+from grace.config import load_cache_config
+from grace.splits import build_split
+from pipeline.config import load_dataset_config, load_detector_config
+from pipeline.data.manifest import load_manifest, sample_eval_subset
+from pipeline.degrade.conditions import load_grid
+from pipeline.detectors import build_detector, resolve_device
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("config")
+    p.add_argument("--dry-run", action="store_true", help="print the spec and size, then exit")
+    p.add_argument("--epochs", type=int, help="override n_epochs")
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+    cfg = load_cache_config(args.config)
+    if args.epochs is not None:
+        cfg.n_epochs = args.epochs
+
+    detector_cfg = load_detector_config(cfg.detector)
+    dataset_cfg = load_dataset_config(cfg.dataset)
+    manifest = sample_eval_subset(
+        load_manifest(dataset_cfg.manifest, dataset_cfg.split),
+        cfg.max_images,
+        seed=cfg.schedule.seed,
+    )
+
+    detector = build_detector(detector_cfg)
+    split = build_split(detector, cfg.split)
+    schedule = EpochSchedule(
+        grid=load_grid(cfg.schedule.grid_file, cfg.schedule.transforms),
+        level_weights={int(k): v for k, v in cfg.schedule.level_weights.items()},
+        seed=cfg.schedule.seed,
+    )
+
+    epochs = [*range(cfg.n_epochs), *val_epochs(cfg.n_val_epochs)]
+    spec = CacheSpec(
+        detector=detector_cfg.name,
+        feature=split.feature_spec,
+        n=len(manifest),
+        shard_size=cfg.shard_size,
+        manifest_sha=sha_manifest(manifest),
+        schedule_sha=schedule.fingerprint(),
+        detector_sha=sha_detector(detector_cfg),
+        preprocess_sha=sha_preprocess(split.preprocess_fn()),
+    )
+
+    root = f"{cfg.out_dir.rstrip('/')}/{detector_cfg.name}"
+    gb = spec.nbytes(len(epochs) + 1) / 1e9
+    print(f"detector   {detector_cfg.name}")
+    print(
+        f"features   {spec.feature.layout}{spec.feature.shape} {spec.feature.dtype}"
+        f"  ({spec.feature.bytes_per_image() / 1024:.1f} KB/image/view)"
+    )
+    print(f"images     {spec.n}")
+    print(f"views      {len(epochs) + 1}  (clean + {cfg.n_epochs} train + {cfg.n_val_epochs} val)")
+    print(f"total      {gb:.1f} GB -> {root}")
+    if args.dry_run:
+        return
+
+    build_cache(
+        split, manifest, root, spec, schedule, epochs,
+        batch_size=cfg.batch_size, num_workers=cfg.num_workers,
+        device=resolve_device(cfg.device),
+    )
+    print(f"done: {root}")
+
+
+if __name__ == "__main__":
+    main()

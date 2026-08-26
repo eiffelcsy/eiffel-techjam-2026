@@ -1,0 +1,23 @@
+# GRACE -- RINE with the trained, LABEL-FREE adapter.
+#
+# Score it with the eval harness exactly as any other detector:
+#
+#   cd ../eval_pipeline
+#   python scripts/run_eval.py --config configs/runs/<a run naming this file>.yaml
+#
+# Same conditions, same clean threshold rule, same retention denominator, same
+# result JSON. The baseline and the adapted model differ by this one file, which
+# is the whole plug-and-play claim in concrete form.
+#
+# Ceiling: restoration cannot exceed the clean-feature score, so retention <= 1.0
+# by construction. Beating that is GRACE-D's job.
+
+name: rine+grace
+target: grace.detectors.adapted.AdaptedDetector
+args:
+  base: ../eval_pipeline/configs/detectors/rine-ldm.yaml
+  split: grace.splits.rine.RINESplit
+  checkpoint: checkpoints/grace/rine_clean/ema.pt
+  discrepancy: null
+  k_eval: 8
+device: auto

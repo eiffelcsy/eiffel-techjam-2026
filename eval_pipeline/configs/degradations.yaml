@@ -1,4 +1,7 @@
-# The transform grid. Six transforms, each with an explicit parameter list.
+# The transform grid. Eleven transforms, each with an explicit parameter list.
+# The six photometric entries are colour jitter unbundled -- +/-20% on each of
+# brightness, contrast and saturation -- so each is its own attributable L1
+# condition while sharing the `photometric` group in the report.
 # L1 sweeps this grid exhaustively; L2/L3 sample from it.
 
 grid:
@@ -6,12 +9,17 @@ grid:
   gaussian_blur:   {param: sigma,    values: [0.5, 1.0, 2.0]}       # out-of-focus
   resize:          {param: scale,    values: [0.5, 0.25]}           # thumbnailing
   gaussian_noise:  {param: sigma,    values: [0.02, 0.05, 0.10]}    # low-light sensor
-  color_jitter:    {param: strength, values: [0.2]}                 # filter / auto-enhance
+  brightness_up:   {param: factor,   values: [1.2]}                 # filter / auto-enhance
+  brightness_down: {param: factor,   values: [0.8]}                 # filter / auto-enhance
+  contrast_up:     {param: factor,   values: [1.2]}                 # filter / auto-enhance
+  contrast_down:   {param: factor,   values: [0.8]}                 # filter / auto-enhance
+  saturation_up:   {param: factor,   values: [1.2]}                 # filter / auto-enhance
+  saturation_down: {param: factor,   values: [0.8]}                 # filter / auto-enhance
   center_crop:     {param: keep,     values: [0.8]}                 # profile-pic framing
 
 # Composition levels.
 #   0 clean    reference
-#   1 single   the 14 grid conditions, one at a time
+#   1 single   the 19 grid conditions, one at a time
 #   2 pair     two distinct transforms, random params, random order
 #   3 multi    three to five distinct transforms, same sampling
 levels: [0, 1, 2, 3]

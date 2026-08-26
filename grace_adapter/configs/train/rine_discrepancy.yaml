@@ -1,0 +1,26 @@
+# Stage 2 -- GRACE-D's supervised auxiliary head, against a FROZEN adapter.
+#
+# The only part of GRACE that uses image labels. Because the adapter is frozen,
+# GRACE and GRACE-D ship the same weights bit for bit and the label-free claim
+# survives the supervised variant intact.
+#
+# Seconds per run, which is what makes experiment E4 practical: point --adapter
+# at each intermediate stage-1 checkpoint in turn, then compare `auc_aux` across
+# the summaries. Falling as stage 1 improves means the adapter is destroying the
+# drift signal it was never asked to preserve.
+
+run_id: rine_disc
+cache_dir: cache/rine
+adapter_checkpoint: checkpoints/grace/rine_clean/ema.pt
+
+detector: ../eval_pipeline/configs/detectors/rine-ldm.yaml
+split: grace.splits.rine.RINESplit
+dataset: ../eval_pipeline/configs/datasets/sid_set.yaml
+
+epochs: 4
+seed: 0
+
+discrepancy:
+  hidden: 256
+  proj: 64
+  use_severity: true

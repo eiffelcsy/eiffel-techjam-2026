@@ -1,0 +1,18 @@
+# B-Free. batch_size: 1 is a correctness requirement, not a memory knob -- it
+# takes images at native resolution, so a batch will not stack. See the harness's
+# configs/runs/zoo_bfree_on_sid_set.yaml, which pins it for the same reason.
+#
+# This makes B-Free by far the slowest cache to render, and it is the clearest
+# case for rendering offline: the cost is paid once, in a job that can be
+# interrupted and resumed, instead of once per training run.
+
+detector: ../eval_pipeline/configs/detectors/bfree.yaml
+split: grace.splits.bfree.BFreeSplit
+dataset: ../eval_pipeline/configs/datasets/sid_set.yaml
+
+out_dir: cache/
+n_epochs: 12
+n_val_epochs: 2
+batch_size: 1
+
+schedule: {}

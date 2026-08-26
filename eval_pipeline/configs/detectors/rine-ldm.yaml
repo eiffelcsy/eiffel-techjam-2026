@@ -1,0 +1,21 @@
+# RINE (Koutlis & Papadopoulos, ECCV 2024), latent-diffusion checkpoint.
+#
+# The primary RINE entry: trained on diffusion data, so it is the fair match for
+# a diffusion-era eval set. Compare against rine-4class.yaml, which is the same
+# architecture trained under the ProGAN/ForenSynths protocol.
+#
+# The checkpoint ships inside the clone -- nothing to download but the frozen
+# CLIP ViT-L/14, which clip.load fetches into ~/.cache/clip on first use.
+# `ncls` is not cosmetic: it selects the head geometry, and a mismatch raises.
+#
+# tencrop: true switches to their high-resolution protocol (four corners, the
+# centre, and the flips of each, with the logits averaged). Costs 10x the
+# forward passes; worth it only on genuinely large images.
+
+name: rine-ldm
+target: pipeline.detectors.rine.RINE
+args:
+  checkpoint: third_party/rine/ckpt/model_ldm_trainable.pth
+  ncls: ldm
+  tencrop: false
+device: auto

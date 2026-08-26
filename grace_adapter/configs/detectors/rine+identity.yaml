@@ -1,0 +1,15 @@
+# E1 -- the null adapter: the split, wired up, with no trained weights.
+#
+# It MUST reproduce the Day-1 RINE numbers to the last decimal. Run it before
+# trusting any adapted result: if it does not match, the trunk/head split is
+# wrong and every comparison downstream is against a model that was never
+# benchmarked. `RINESplit.__init__` also runs `verify_split`, so a broken
+# composition fails at construction rather than at report time.
+
+name: rine+identity
+target: grace.detectors.adapted.AdaptedDetector
+args:
+  base: ../eval_pipeline/configs/detectors/rine-ldm.yaml
+  split: grace.splits.rine.RINESplit
+  checkpoint: null
+device: auto

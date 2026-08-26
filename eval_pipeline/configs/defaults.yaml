@@ -5,7 +5,7 @@
 #
 #   configs/datasets/<name>.yaml    what a dataset IS
 #   configs/detectors/<name>.yaml   what a detector IS
-#   configs/runs/<name>.yaml        one detector x a set of datasets
+#   configs/runs/<name>.yaml        detectors x datasets
 #
 # Adding a dataset is one new file under datasets/. Adding a detector is one
 # new file under detectors/. Pairing them is one new file under runs/.
@@ -53,9 +53,9 @@ device: auto                # auto -> cuda | mps | cpu; or "cuda:1"
 
 # -------------------------------------------------------------------- run ----
 # configs/runs/<name>.yaml
-# `run_id`, `detector` and `datasets` are required. Loader knobs live here, not
-# on the dataset: batch_size and num_workers are properties of this machine and
-# max_images is a scope decision for this run.
+# `run_id`, `datasets` and exactly one of `detector` / `detectors` are required.
+# Loader knobs live here, not on the dataset: batch_size and num_workers are
+# properties of this machine and max_images is a scope decision for this run.
 #
 # A minimal run config is four lines:
 #
@@ -66,6 +66,10 @@ device: auto                # auto -> cuda | mps | cpu; or "cuda:1"
 
 run_id: my_run
 detector: configs/detectors/my-detector.yaml   # path, or the mapping inline
+# detectors:                                   # ...or a list, to score a zoo in
+#   - configs/detectors/a.yaml                 # one command. Each is loaded,
+#   - configs/detectors/b.yaml                 # run, and released in turn; the
+#                                              # loader knobs below are shared.
 datasets:                                      # paths, or mappings inline
   - configs/datasets/my-dataset.yaml
 
@@ -80,5 +84,5 @@ degrade: {}                 # `{}` accepts every default below
   # grid_file: configs/degradations.yaml
   # levels: [0, 1, 2, 3]    # 0 clean, 1 single, 2 pair, 3 multi. 0 is mandatory.
   # n_replicates: 3         # independent L2/L3 re-draws over the same images
-  # transforms: null        # null = all six
+  # transforms: null        # null = all eleven
   # seed: 0                 # fixes the eval subset and every degradation draw

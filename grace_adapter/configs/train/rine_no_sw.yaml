@@ -1,0 +1,21 @@
+# Ablation E3b -- no distribution matching.
+#
+# Isolates the sliced-Wasserstein term. Run alongside rine_posterior.yaml: the
+# two are coupled, because without a distributional term the optimal stochastic
+# policy is to ignore the noise input entirely and posterior sampling collapses.
+# Point-wise losses are satisfied by a conditional mean.
+
+run_id: rine_no_sw
+
+detector: ../eval_pipeline/configs/detectors/rine-ldm.yaml
+split: grace.splits.rine.RINESplit
+dataset: ../eval_pipeline/configs/datasets/sid_set.yaml
+
+cache_dir: cache/rine
+epochs: 12
+seed: 0
+target_view: clean
+source: cache
+
+loss:
+  lam_sw: 0.0

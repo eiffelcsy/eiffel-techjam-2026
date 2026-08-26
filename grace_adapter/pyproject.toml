@@ -1,0 +1,27 @@
+[project]
+name = "grace-adapter"
+version = "0.1.0"
+description = "Gated Residual Adapter for Clean-feature Estimation"
+requires-python = ">=3.10"
+# Everything heavy is already a dependency of the sibling harness, which this
+# package imports (`pipeline.*`) rather than vendors. Install that first, from
+# ../eval_pipeline, including its [zoo] extra for the detectors being adapted.
+dependencies = [
+    "torch",
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "pyyaml",
+    "tqdm",
+    "scikit-learn",   # stage 2 reports main / aux / fused AUC in-loop
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["grace*"]

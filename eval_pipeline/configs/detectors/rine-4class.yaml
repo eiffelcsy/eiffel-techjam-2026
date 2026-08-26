@@ -1,0 +1,17 @@
+# RINE trained under the ProGAN/ForenSynths 4-class protocol.
+#
+# The contrast to rine-ldm.yaml: same architecture, same frozen CLIP, trained on
+# GAN data instead of diffusion data. Running both isolates what the training
+# distribution buys, holding the method fixed -- which is the one comparison the
+# other two zoo members cannot offer.
+#
+# The distinct `name` matters: the report pivots on (detector, dataset,
+# condition) and raises on duplicates.
+
+name: rine-4class
+target: pipeline.detectors.rine.RINE
+args:
+  checkpoint: third_party/rine/ckpt/model_4class_trainable.pth
+  ncls: 4
+  tencrop: false
+device: auto

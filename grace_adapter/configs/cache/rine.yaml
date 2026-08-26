@@ -1,0 +1,19 @@
+# RINE, the development detector for GRACE.
+#
+# `layers` layout: 24 CLS tokens x 1024 dims x 2 bytes = 48 KB per image per
+# view. Run `--dry-run` before committing -- at 13 views (clean + 12 epochs)
+# this is ~640 KB per image, which is the largest cache in the project and the
+# one that decides whether the whole pre-render idea fits the disk.
+#
+# If it does not: drop n_epochs to 6, or cache a subset of blocks. RINE's own
+# importance estimator says most blocks carry little weight.
+
+detector: ../eval_pipeline/configs/detectors/rine-ldm.yaml
+split: grace.splits.rine.RINESplit
+dataset: ../eval_pipeline/configs/datasets/sid_set.yaml
+
+out_dir: cache/
+n_epochs: 12
+n_val_epochs: 2
+
+schedule: {}      # the standard training mix: all eleven transforms, default weights

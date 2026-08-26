@@ -7,17 +7,24 @@ plus the two numbers that are analytic rather than empirical (clean AUC and L0
 retention), which is where a polarity flip or a broken pairing would show up.
 """
 
+from pathlib import Path
+
 import pytest
 
-from pipeline.config import DatasetConfig, DegradeConfig, DetectorConfig, RunConfig
+from pipeline.config import (
+    DatasetConfig, DegradeConfig, DetectorConfig, RunConfig, load_run_config,
+)
 from pipeline.data.manifest import build_manifest, load_manifest
 from pipeline.degrade.conditions import build_conditions, load_grid
+from pipeline.detectors import build_detector
+from pipeline.detectors._vendor import THIRD_PARTY
 from pipeline.eval.report import headline_table, load_results
 from pipeline.eval.runner import run_eval
 from tests.fixtures import SyntheticSource
 
 GRID_FILE = "configs/degradations.yaml"
 N_PER_CLASS, N_REPLICATES = 8, 2
+ZOO_CONFIGS = sorted(Path("configs/detectors").glob("*.yaml"))
 
 
 @pytest.fixture(scope="module")
@@ -29,15 +36,17 @@ def result(tmp_path_factory):
 
     cfg = RunConfig(
         run_id="test",
-        detector=DetectorConfig(
+        detectors=[DetectorConfig(
             name="stub", target="tests.fixtures.StubDetector", args={}, device="cpu",
-        ),
+        )],
         datasets=[DatasetConfig(
             name="synthetic", manifest=str(manifest_path), split="val",
         )],
         out_dir=str(root / "results"),
         batch_size=8,
-        num_workers=0,
+        # Workers, not 0: forking them is what a preprocess_fn() holding the
+        # model would fail on, and every zoo adapter has to get that right.
+        num_workers=2,
         degrade=DegradeConfig(
             grid_file=GRID_FILE, levels=[0, 1, 2, 3],
             n_replicates=N_REPLICATES, transforms=None, seed=0,
@@ -64,7 +73,7 @@ def test_condition_lattice_is_complete():
         by_level.setdefault(c.level, []).append(c)
 
     assert len(by_level[0]) == 1
-    assert len(by_level[1]) == sum(len(v) for v in grid.values()) == 14
+    assert len(by_level[1]) == sum(len(v) for v in grid.values()) == 19
     assert len(by_level[2]) == len(by_level[3]) == N_REPLICATES
 
 
@@ -89,6 +98,7 @@ def test_result_matches_the_schema_report_reads(result):
         "test", "stub", "synthetic",
     )
     assert set(payload["levels"]) == {"L0_clean", "L1_single", "L2_pair", "L3_multi"}
+    assert payload["detector_spec"]["target"] == "tests.fixtures.StubDetector"
 
     for name, entry in payload["levels"].items():
         assert {"auc", "retention", "errors"} <= set(entry)
@@ -98,12 +108,12 @@ def test_result_matches_the_schema_report_reads(result):
         if name in ("L2_pair", "L3_multi"):
             assert {"predicted_retention", "interaction_gap"} <= set(entry)
 
-    assert len(payload["conditions"]) == 14
+    assert len(payload["conditions"]) == 19
     for key, entry in payload["conditions"].items():
         assert key == f"{entry['transform']}/{entry['param_name']}={entry['param']}"
         assert {"group", "auc", "retention", "score_shift", "errors"} <= set(entry)
 
-    assert len(payload["by_transform"]) == 6
+    assert len(payload["by_transform"]) == 11
     assert set(payload["recipes"]) == {"L2", "L3"}
     assert {"clean_auc", "retention_by_level", "worst_condition", "worst_recipe",
             "operating_envelope"} <= set(payload["summary"])
@@ -133,3 +143,88 @@ def test_report_renders_from_the_results(result):
     assert (out / "summary.md").read_text().startswith("# Robustness evaluation summary")
     for figure in ("level_curve.png", "degradation_curves.png", "error_split.png"):
         assert (out / figure).stat().st_size > 0
+
+
+def test_a_zoo_of_detectors_lands_in_one_comparable_table(result, tmp_path):
+    """Several detectors in one run: one result file each, one row each.
+
+    The headline table pivots on (detector, dataset, condition), so two zoo
+    members sharing a name would collide rather than compare. This is the
+    cheapest place to catch that.
+    """
+    _, root = result
+    cfg = RunConfig(
+        run_id="zoo",
+        detectors=[
+            DetectorConfig(name="stub-a", target="tests.fixtures.StubDetector",
+                           args={}, device="cpu"),
+            DetectorConfig(name="stub-b", target="tests.fixtures.StubDetector",
+                           args={"scale": 5.0}, device="cpu"),
+        ],
+        datasets=[DatasetConfig(name="synthetic",
+                                manifest=str(root / "data" / "manifest.parquet"),
+                                split="val")],
+        out_dir=str(tmp_path / "results"),
+        batch_size=8,
+        num_workers=0,
+        degrade=DegradeConfig(grid_file=GRID_FILE, levels=[0, 1],
+                              n_replicates=1, transforms=["jpeg"], seed=0),
+    )
+    results = run_eval(cfg)
+    assert [r["detector"] for r in results] == ["stub-a", "stub-b"]
+
+    conditions, _ = load_results(tmp_path / "results")
+    headline = headline_table(conditions)
+    assert list(headline.index) == [("stub-a", "synthetic"), ("stub-b", "synthetic")]
+
+
+@pytest.mark.parametrize("path", ZOO_CONFIGS, ids=lambda p: p.stem)
+def test_detector_configs_load(path):
+    """Every shipped detector config parses and names an importable target.
+
+    Not that it runs -- that needs weights this suite deliberately does not
+    have -- only that the config is well-formed and the module resolves.
+    """
+    from pipeline.config import load_detector_config
+    from pipeline.utils.imports import locate
+
+    cfg = load_detector_config(path)
+    assert cfg.name and cfg.device
+    assert callable(locate(cfg.target))
+
+
+@pytest.mark.skipif(THIRD_PARTY.is_dir(), reason="the zoo is cloned on this machine")
+@pytest.mark.parametrize(
+    "path", [p for p in ZOO_CONFIGS if p.stem != "sdxl"], ids=lambda p: p.stem
+)
+def test_missing_zoo_clone_says_how_to_fix_it(path):
+    """A missing clone is the likeliest first-run failure; it must be actionable."""
+    from pipeline.config import load_detector_config
+
+    with pytest.raises(FileNotFoundError, match="git clone"):
+        build_detector(load_detector_config(path))
+
+
+def test_run_config_takes_one_detector_or_many(tmp_path):
+    """`detector:` and `detectors:` are the same key at different arities."""
+    def write(body: str) -> Path:
+        path = tmp_path / "run.yaml"
+        path.write_text(
+            f"run_id: r\ndatasets: [configs/datasets/sid_set.yaml]\n{body}"
+        )
+        return path
+
+    one = load_run_config(write("detector: configs/detectors/rine-ldm.yaml\n"))
+    assert [d.name for d in one.detectors] == ["rine-ldm"]
+
+    many = load_run_config(write(
+        "detectors:\n"
+        "  - configs/detectors/rine-ldm.yaml\n"
+        "  - configs/detectors/rine-4class.yaml\n"
+    ))
+    assert [d.name for d in many.detectors] == ["rine-ldm", "rine-4class"]
+
+    with pytest.raises(KeyError):
+        load_run_config(write("detector: x\ndetectors: [y]\n"))
+    with pytest.raises(KeyError):
+        load_run_config(write(""))

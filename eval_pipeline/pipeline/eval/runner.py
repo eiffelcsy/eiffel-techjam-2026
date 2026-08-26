@@ -1,7 +1,7 @@
 """The evaluation loop.
 
 For each detector: score the fixed eval subset once per condition -- clean
-first, then the 14 L1 grid conditions, then the L2 and L3 composed conditions
+first, then the 19 L1 grid conditions, then the L2 and L3 composed conditions
 (n_replicates draws each) -- and compute AUC, retention, and the error
 breakdown against the clean threshold.
 
@@ -10,16 +10,17 @@ degraded scores are paired per image. Per-image recipes are logged at L2/L3;
 without them the composed levels are just a number, with them they are an
 analysable sample of the composition space.
 
-A run is one detector against a set of datasets. The detector is loaded once
-and reused, and each dataset is scored independently -- its own clean
-threshold, its own retention denominator -- into
-results/{run_id}__{detector}__{dataset}.json.
+A run is a set of detectors against a set of datasets. Each detector is loaded
+once, scored against every dataset, and released before the next is loaded; each
+(detector, dataset) pair is scored independently -- its own clean threshold, its
+own retention denominator -- into results/{run_id}__{detector}__{dataset}.json.
 
 Result schema -- fix it now, the report reads this and nothing else:
 
 {
   "run_id": str,
   "detector": str,
+  "detector_spec": {"target": str, "args": dict, "device": str},
   "dataset": str,
   "n_images": int, "n_real": int, "n_fake": int,
   "clean_threshold": float,
@@ -27,7 +28,7 @@ Result schema -- fix it now, the report reads this and nothing else:
   "levels": {                              # the headline structure
     "L0_clean":  {"auc": float, "retention": 1.0, "errors": {...}},
     "L1_single": {"auc": float, "retention": float, "errors": {...},
-                  "auc_ci": [lo, hi]},     # pooled over the 14 grid conditions
+                  "auc_ci": [lo, hi]},     # pooled over the 19 grid conditions
     "L2_pair":   {"auc": float, "retention": float, "errors": {...},
                   "auc_ci": [lo, hi],
                   "predicted_retention": float,   # from L1 marginals
@@ -279,41 +280,58 @@ def evaluate_detector(detector, manifest, conditions, device="auto",
 
 
 def run_eval(cfg) -> list[dict]:
-    """Top-level entry: one detector over every dataset in the run.
+    """Top-level entry: every detector in the run over every dataset in it.
 
-    The detector is built once and reused across datasets -- loading weights is
-    the expensive part, and nothing about it is per-dataset. Each dataset gets
-    its own clean threshold and its own retention denominator, so results stay
-    independent and directly comparable.
+    Each detector is built once and reused across datasets -- loading weights is
+    the expensive part, and nothing about it is per-dataset -- then released
+    before the next is built, so a zoo costs one detector's memory at a time.
+    Each (detector, dataset) pair gets its own clean threshold and its own
+    retention denominator, so results stay independent and directly comparable.
+
+    The condition lattice is built once, outside both loops: it is seeded on the
+    image index, so every detector sees byte-identical degraded images and a
+    difference between two detectors is never a difference in the draw.
     """
     grid = load_grid(cfg.degrade.grid_file, cfg.degrade.transforms)
     conditions = build_conditions(
         grid, cfg.degrade.levels, cfg.degrade.n_replicates, seed=cfg.degrade.seed
     )
-    detector = build_detector(cfg.detector)
+    manifests = {
+        dataset_cfg.name: sample_eval_subset(
+            load_manifest(dataset_cfg.manifest, split=dataset_cfg.split),
+            cfg.max_images,
+            seed=cfg.degrade.seed,
+        )
+        for dataset_cfg in cfg.datasets
+    }
 
     results = []
-    try:
-        for dataset_cfg in cfg.datasets:
-            manifest = sample_eval_subset(
-                load_manifest(dataset_cfg.manifest, split=dataset_cfg.split),
-                cfg.max_images,
-                seed=cfg.degrade.seed,
-            )
-            result = evaluate_detector(
-                detector, manifest, conditions, cfg.detector.device,
-                batch_size=cfg.batch_size, num_workers=cfg.num_workers,
-                retention_floor=cfg.retention_floor,
-            )
-            result["run_id"] = cfg.run_id
-            result["dataset"] = dataset_cfg.name
-            write_json(
-                result,
-                Path(cfg.out_dir) / f"{cfg.run_id}__{detector.name}__{dataset_cfg.name}.json",
-            )
-            results.append(result)
-    finally:
-        del detector
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+    for detector_cfg in cfg.detectors:
+        detector = build_detector(detector_cfg)
+        try:
+            for name, manifest in manifests.items():
+                result = evaluate_detector(
+                    detector, manifest, conditions, detector_cfg.device,
+                    batch_size=cfg.batch_size, num_workers=cfg.num_workers,
+                    retention_floor=cfg.retention_floor,
+                )
+                result["run_id"] = cfg.run_id
+                result["dataset"] = name
+                # What was actually loaded, not just what it was called. A zoo
+                # comparison is only reproducible if the weights behind each row
+                # are recoverable from the row.
+                result["detector_spec"] = {
+                    "target": detector_cfg.target,
+                    "args": detector_cfg.args,
+                    "device": detector_cfg.device,
+                }
+                write_json(
+                    result,
+                    Path(cfg.out_dir) / f"{cfg.run_id}__{detector.name}__{name}.json",
+                )
+                results.append(result)
+        finally:
+            del detector
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
     return results

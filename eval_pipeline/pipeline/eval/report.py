@@ -17,7 +17,7 @@ Four views, coarse to fine.
     clip_linear      0.74           0.61      -0.13        0.55           0.29      -0.26
     dinov2           0.90           0.88      -0.02        0.79           0.74      -0.05
 
-3. By transform (L1) -- detectors x the six transforms, cells are AUC at the
+3. By transform (L1) -- detectors x the eleven transforms, cells are AUC at the
    harshest setting. Attribution: which single cause hurts. Degradation curves
    (AUC vs parameter, one panel per transform) are the visual version.
 
@@ -64,7 +64,7 @@ def load_results(results_dir: str | Path) -> tuple[pd.DataFrame, pd.DataFrame]:
       conditions: one row per (detector, dataset, condition) -- level, transform,
                   param, auc, retention, score_shift, flattened error counts.
                   `is_level` marks the four pooled level rows apart from the
-                  14 individual L1 grid points.
+                  19 individual L1 grid points.
       recipes:    one row per (detector, dataset, level, transform set)
     """
     condition_rows, recipe_rows = [], []

@@ -20,7 +20,7 @@ def main():
     p.add_argument("--levels", nargs="+", type=int, default=None,
                    help="subset of [0,1,2,3]; smoke runs usually want 0 1")
     p.add_argument("--transforms", nargs="+", default=None,
-                   help="subset of the six, e.g. --transforms jpeg resize")
+                   help="subset of the eleven, e.g. --transforms jpeg resize")
     args = p.parse_args()
 
     cfg = load_run_config(args.config)

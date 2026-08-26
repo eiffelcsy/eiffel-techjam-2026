@@ -1,0 +1,159 @@
+# Reference: every key of every config kind, shown with its default.
+# Nothing loads this file -- copy the bits you need. Unknown keys raise rather
+# than being ignored, so a typo cannot silently train the default objective.
+#
+# Three kinds of config, one directory each:
+#
+#   configs/cache/<name>.yaml       what to render, for which detector
+#   configs/train/<name>.yaml       one stage-1 or stage-2 run against a cache
+#   configs/detectors/<name>.yaml   the ADAPTED detector, read by the eval harness
+#
+# Detectors and datasets are never redefined -- they are referenced by path into
+# ../eval_pipeline/configs/, so there is one description of each in the project.
+#
+#   python scripts/analyze_drift.py     --cache cache/rine --dataset <path>
+#   python scripts/build_cache.py       configs/cache/<name>.yaml --dry-run
+#   python scripts/train_adapter.py     configs/train/<name>.yaml
+#   python scripts/train_discrepancy.py configs/train/<name>.yaml
+#   cd ../eval_pipeline && python scripts/run_eval.py --config configs/runs/<name>.yaml
+#   python scripts/compare.py --baseline <json> --adapted <json>
+
+
+# ------------------------------------------------------------------ cache ----
+# configs/cache/<name>.yaml
+
+detector: ../eval_pipeline/configs/detectors/rine-ldm.yaml
+split: grace.splits.rine.RINESplit     # dotted path to the SplitDetector
+dataset: ../eval_pipeline/configs/datasets/sid_set.yaml
+
+out_dir: cache/
+n_epochs: 12                # degraded views to render. Each is one full trunk
+                            # pass; each costs n * bytes_per_image
+n_val_epochs: 2             # held-out degradations, numbered from 10000 so their
+                            # `replicate` can never collide with a training epoch
+dtype: float16              # cache dtype; losses always compute in float32
+shard_size: 50000
+batch_size: 32              # 1 for B-Free -- native resolution, cannot stack
+num_workers: 8
+max_images: null            # per class; null = all
+device: auto
+
+schedule:
+  grid_file: ../eval_pipeline/configs/degradations.yaml
+  transforms: null          # null = all eleven; a list holds some out for the
+                            # unseen-transform generalization experiment
+  level_weights:            # composition level mix. L0 is clean: those steps are
+    0: 0.15                 # where the adapter learns to do nothing, and they do
+    1: 0.35                 # more work than the explicit identity term
+    2: 0.30
+    3: 0.20
+  seed: 0                   # part of the cache fingerprint; changing it
+                            # invalidates every degraded view
+
+
+# ---------------------------------------------------------- train, stage 1 ----
+# configs/train/<name>.yaml -- the label-free adapter.
+# `run_id` and `cache_dir` are the only keys without a default.
+
+run_id: rine_clean
+cache_dir: cache/rine
+
+detector: ../eval_pipeline/configs/detectors/rine-ldm.yaml
+split: grace.splits.rine.RINESplit
+dataset: ../eval_pipeline/configs/datasets/sid_set.yaml
+# The detector is loaded even in `source: cache` mode: the frozen head is what
+# head_kl and the Jacobian weighting differentiate through, so the model is
+# needed whether or not the trunk ever runs.
+
+target_view: clean          # clean = arm B (proposed) | degraded = arm A (control)
+source: cache               # cache = read pre-rendered features (no trunk at all)
+                            # live  = degrade + run the trunk in the loop
+epochs: 12
+batch_size: 256             # features, not images -- go large. The
+                            # sliced-Wasserstein term is a batch statistic.
+lr: 0.001
+weight_decay: 0.01
+warmup_steps: 500
+grad_clip: 1.0
+ema_decay: 0.999
+num_workers: 4
+seed: 0
+device: auto
+out_dir: checkpoints/grace/
+checkpoint_every: 0         # >0 writes intermediate checkpoints for experiment
+                            # E4 (the erasure trade-off curve)
+
+adapter:
+  bottleneck: 256
+  n_blocks: 2
+  per_channel_gate: true    # `layers` gets one gate vector per layer -- the
+                            # per-block damage profile, and the figure
+  dropout: 0.0
+  noise_dim: 0              # >0 enables posterior sampling. Only worth turning
+                            # on alongside lam_sw: without a distributional term
+                            # the optimal policy is to ignore the noise
+  severity_film: true       # zero-initialised, so conditioning starts a no-op
+
+sampling:
+  k_train: 2
+  k_eval: 8                 # k adapter passes ~ microseconds vs one trunk pass
+
+loss:
+  weighting: jacobian       # none = plain MSE, i.e. exactly the GRACE v1 objective
+  eps_iso: 0.05             # isotropic floor; 1.0 is exactly F.mse_loss
+  w_cos: 1.0                # cosine on normalized features
+  w_err: 1.0                # decision-weighted squared error on raw features
+  lam_sw: 0.1               # sliced-Wasserstein; the new knob that matters
+  n_proj: 64
+  lam_id: 0.5               # adapter must be identity on clean features
+  lam_kl: 0.1               # demoted from 0.5: subsumed by the Jacobian weighting
+  kl_temperature: 2.0
+  lam_sev: 0.1              # severity regression. Label-free: the target comes
+                            # from the degradation sampler, not from annotation
+
+schedule: {}                # must match the cache's, or its fingerprint rejects it
+
+
+# ---------------------------------------------------------- train, stage 2 ----
+# configs/train/<name>_discrepancy.yaml -- the supervised auxiliary head.
+# The adapter is frozen, so GRACE and GRACE-D ship the same weights bit for bit
+# and "the adapter is trained without labels" stays literally true.
+
+run_id: rine_disc
+cache_dir: cache/rine
+adapter_checkpoint: checkpoints/grace/rine_clean/ema.pt
+
+detector: ../eval_pipeline/configs/detectors/rine-ldm.yaml
+split: grace.splits.rine.RINESplit
+dataset: ../eval_pipeline/configs/datasets/sid_set.yaml
+
+epochs: 4
+batch_size: 256
+lr: 0.001
+weight_decay: 0.01
+num_workers: 4
+seed: 0
+device: auto
+out_dir: checkpoints/grace/
+
+discrepancy:
+  hidden: 256
+  proj: 64
+  use_severity: true        # "is this drift large *for this much corruption*" --
+                            # a heavily degraded real image drifts a lot too
+
+
+# -------------------------------------------------------------- detectors ----
+# configs/detectors/<name>+grace.yaml
+# Written in the HARNESS's DetectorConfig shape, because the harness reads it.
+
+name: rine+grace
+target: grace.detectors.adapted.AdaptedDetector
+args:
+  base: ../eval_pipeline/configs/detectors/rine-ldm.yaml
+  split: grace.splits.rine.RINESplit
+  checkpoint: checkpoints/grace/rine_clean/ema.pt   # null = identity, i.e. the
+                                                    # untouched base detector
+  discrepancy: null         # a stage-2 checkpoint here makes this GRACE-D
+  k_eval: 8
+device: auto

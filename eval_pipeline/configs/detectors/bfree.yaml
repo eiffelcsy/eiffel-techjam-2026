@@ -1,0 +1,16 @@
+# B-Free (Guillaro et al., CVPR 2025) -- DINOv2 ViT-B/14 with four registers.
+#
+# Needs third_party/B-Free cloned and the weights unzipped; see the "Detector
+# zoo" section of the README. `norm_type` and `arch` are read from the
+# config.yaml inside the weight bundle, so they are not restated here.
+#
+# A run of this detector MUST set batch_size: 1 -- it takes the image at native
+# resolution, so the tensors in a batch are not the same size and cannot stack.
+# See configs/runs/zoo_bfree_on_sid_set.yaml.
+
+name: b-free
+target: pipeline.detectors.bfree.BFree
+args:
+  weights_dir: checkpoints/bfree
+  model_name: BFREE_dino2reg4
+device: auto
