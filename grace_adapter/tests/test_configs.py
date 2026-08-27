@@ -158,8 +158,17 @@ def test_referenced_detectors_and_datasets_exist(path):
     """Resolved from grace_adapter/, where build_cache.py and train_*.py run."""
     raw = yaml.safe_load(path.read_text())
     for key in ("detector", "dataset", "val_dataset"):
-        if raw.get(key):
-            assert (HERE / raw[key]).resolve().is_file(), f"{path.name}: {key} -> {raw[key]}"
+        value = raw.get(key)
+        if not value:
+            continue
+        # `val_dataset` takes one path or several -- selection now runs against
+        # ntire_val and ntire_val_hard together.
+        for ref in [value] if isinstance(value, str) else value:
+            assert (HERE / ref).resolve().is_file(), f"{path.name}: {key} -> {ref}"
+    for key in ("val_datasets", "val_cache_dirs"):
+        for ref in raw.get(key) or []:
+            if key == "val_datasets":
+                assert (HERE / ref).resolve().is_file(), f"{path.name}: {key} -> {ref}"
 
 
 @pytest.mark.parametrize("path", _paths("detectors"), ids=lambda p: p.name)

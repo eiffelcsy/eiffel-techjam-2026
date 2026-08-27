@@ -9,5 +9,5 @@
 # Materialized images and their manifests: reproducible from a dataset config
 # via `build_manifest.py`, and large.
 /data/
-
+.venv/
 .DS_Store

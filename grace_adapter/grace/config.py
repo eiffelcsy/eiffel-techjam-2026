@@ -87,7 +87,15 @@ class ProbeConfig:
     run_id: str
     detector: str
     dataset: str
-    val_dataset: str = ""
+    val_dataset: str | list[str] = ""
+    """Held-out images for model selection. One config path, or several.
+
+    Several because selection now runs against the challenge's own val sets
+    (ntire_val + ntire_val_hard) rather than a held-out training shard, and one
+    scalar has to come out of two datasets: the selection score is the unweighted
+    mean of their AUCs, so a head that wins by collapsing on the hard set cannot
+    be selected. Per-dataset AUC and accuracy are reported alongside it.
+    """
     out: str = ""
     hidden: int = 512
     n_layers: int = 2
@@ -104,6 +112,14 @@ class ProbeConfig:
     device: str = "auto"
     split: str = "grace.splits.dinov3.DINOv3Split"
     wandb: WandbConfig = field(default_factory=WandbConfig)
+
+    def val_datasets(self) -> list[str]:
+        """`val_dataset` as a list, however it was written."""
+        if not self.val_dataset:
+            return []
+        if isinstance(self.val_dataset, str):
+            return [self.val_dataset]
+        return list(self.val_dataset)
 
 
 @dataclass
@@ -193,6 +209,24 @@ class TrainConfig:
     through, so the model is loaded whether or not the trunk ever runs."""
     split: str = ""
     dataset: str = ""
+    val_datasets: list[str] = field(default_factory=list)
+    """Held-out IMAGES for stage-1 validation. Parallel to `val_cache_dirs`.
+
+    Distinct from the cache's own validation axis, which holds out
+    *degradations* (`val_epochs`, ids from 10000) over the training images. That
+    axis answers "does this adapter generalize to an unseen corruption"; it
+    cannot answer "does it generalize to an unseen image", because every row it
+    scores was trained on. These datasets answer the second question, and both
+    are reported separately in summary.json under `validation`.
+    """
+    val_cache_dirs: list[str] = field(default_factory=list)
+    """Rendered cache root per entry of `val_datasets`, same order.
+
+    Separate roots because `build_cache.py` derives its root from the DETECTOR
+    name alone, so two datasets rendered for one detector would collide -- and
+    the second render would be rejected on `manifest_sha` rather than silently
+    mixing. One `out_dir` per dataset keeps them apart.
+    """
     log_every: int = 50
     """Diagnostics cadence, in steps: `cos(Δ, j)`, the mean gate and the loss
     terms are computed here and appended to `summary.json`'s history. The W&B
@@ -200,6 +234,12 @@ class TrainConfig:
     disagree about what was measured when."""
 
     def __post_init__(self):
+        if len(self.val_datasets) != len(self.val_cache_dirs):
+            raise ValueError(
+                f"val_datasets has {len(self.val_datasets)} entry(s) but "
+                f"val_cache_dirs has {len(self.val_cache_dirs)}. They are parallel "
+                f"lists -- each dataset needs the cache root it was rendered to."
+            )
         # `step % 0` is a ZeroDivisionError several minutes into a run rather
         # than at second zero, and 0 is the natural typo for "never log".
         if self.log_every < 1:

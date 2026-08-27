@@ -1,22 +1,18 @@
 # NTIRE 2026 Robust AI-Generated Image Detection -- training set.
 # https://huggingface.co/datasets/deepfakesMSU/NTIRE-RobustAIGenDetection-train
 #
-# TWO splits in one manifest, for the same
-# reason: stage 0 fits the detector head on `split: train` and selects on
-# `split: validation`, and `train_probe.py` refuses the two if their manifest
-# indices overlap. That check only works within one manifest -- `load_manifest`
-# keeps the original row number as the index, so two separately-built manifests
-# both start at 0 and would collide spuriously. One file, two splits.
+# ONE split: `train`, all six shards, 277,643 images.
 #
-#   split: train         <- this file. Shards 0-4.
-#   split: validation    <- configs/datasets/ntire_train_eval.yaml, SAME manifest.
-#                           Shard 5, held out.
+# Model selection does NOT happen here. Stage 0 selects on the challenge's own
+# val sets (ntire_val.yaml + ntire_val_hard.yaml) and stage 1 validates on the
+# same two, at image level. That is sound in THIS project because the reported
+# benchmark is WildFake (configs/datasets/wildfake_coco_dalle3.yaml), not NTIRE
+# val -- nothing selected on NTIRE val is ever reported against NTIRE val.
 #
-# The challenge's own validation set (configs/datasets/ntire_val.yaml) is
-# deliberately NOT used for model selection. It is the benchmark; selecting on it
-# would make every number reported against it optimistic. The dataset card states
-# all shards share a distribution and "can be used separately", so a held-out
-# shard is the honest selection set.
+# Shard 5 used to be held out under `split: validation`, read through
+# configs/datasets/ntire_train_eval.yaml. With selection moved off it, holding it
+# back only cost 27,643 training images, so it now carries `split: train` with
+# the rest. ntire_train_eval.yaml is superseded and selects zero rows.
 #
 # Layout on disk -- unpack each shard_*.zip under ../data/ntire_train/:
 #
@@ -82,10 +78,11 @@ source:
           <<: *shard
           csv_path: ../data/ntire_train/shard_4/labels.csv
           root: ../data/ntire_train/shard_4/images
-      # Held out for stage-0 model selection. Same distribution, disjoint rows.
+      # Shard 5 was the stage-0 selection set; it is now training data like the
+      # rest. Model selection moved to the challenge's own val sets -- see the
+      # header. Inherits `split: train` from the anchor.
       - target: pipeline.data.sources.CsvMetadataSource
         args:
           <<: *shard
           csv_path: ../data/ntire_train/shard_5/labels.csv
           root: ../data/ntire_train/shard_5/images
-          split: validation

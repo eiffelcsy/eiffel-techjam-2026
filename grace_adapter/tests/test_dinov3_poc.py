@@ -168,10 +168,10 @@ def probe_workspace(tmp_path, detector_factory):
 
 def test_probe_writes_a_head_the_detector_can_load(probe_workspace, detector_factory, tmp_path):
     cfg, split, manifest, val = probe_workspace
-    summary = train_probe(cfg, split, manifest, val)
+    summary = train_probe(cfg, split, manifest, [("val", val)])
 
-    assert summary["n_train"] == N_IMAGES and summary["n_val"] == 8
-    assert summary["selection"] == "val_auc"
+    assert summary["n_train"] == N_IMAGES and summary["n_val"] == {"val": 8}
+    assert summary["selection"] == "val_auc_mean"
     assert len(summary["history"]) == cfg.epochs
 
     detector = detector_factory(head_checkpoint=cfg.out, pool="cls+patchmean")
@@ -186,7 +186,7 @@ def test_probe_head_is_refused_by_a_different_trunk(probe_workspace, detector_fa
     """Same width, different weights -- the failure that otherwise just scores
     nonsense. The pool mismatch would break on a shape; this one would not."""
     cfg, split, manifest, val = probe_workspace
-    train_probe(cfg, split, manifest, val)
+    train_probe(cfg, split, manifest, [("val", val)])
 
     with pytest.raises(ValueError, match="backbone"):
         detector_factory(head_checkpoint=cfg.out, backbone_id="test/other-dinov3")

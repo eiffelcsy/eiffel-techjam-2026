@@ -17,8 +17,17 @@
 run_id: dinov3_ntire
 
 detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
-dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml         # split: train
-val_dataset: ../eval_pipeline/configs/datasets/ntire_train_eval.yaml # split: validation
+dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml   # all six shards, 277,643
+
+# Selection on the challenge's own val sets rather than a held-out training
+# shard. Sound here because the REPORTED benchmark is WildFake, not NTIRE val --
+# nothing selected on these is ever reported against them. Two datasets, so the
+# selection scalar is the unweighted mean of their AUCs; each is also reported
+# on its own, because a head that wins the mean by collapsing on the hard set is
+# the exact failure this project is about.
+val_dataset:
+  - ../eval_pipeline/configs/datasets/ntire_val.yaml       # split: undistorted, 5000
+  - ../eval_pipeline/configs/datasets/ntire_val_hard.yaml  # split: hard, 2500
 
 split: grace.splits.dinov3.DINOv3Split
 out: ""             # "" = take it from the detector config's head_checkpoint

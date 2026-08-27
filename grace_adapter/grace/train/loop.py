@@ -48,6 +48,8 @@ from grace.train.ema import EMA
 from grace.train.losses import supervised_bce, total_loss
 from grace.train.tracker import build_tracker, flatten_config
 from grace.train.weighting import head_gradient
+from pipeline.config import load_dataset_config
+from pipeline.data.manifest import load_manifest
 from pipeline.utils.seeding import seed_everything
 
 
@@ -100,6 +102,32 @@ def train_adapter(cfg, split, manifest, schedule) -> dict:
     spec = split.feature_spec
 
     cache = FeatureCache(cfg.cache_dir)
+
+    # Held-out IMAGES, each from its own rendered cache root. Loaded up front so
+    # a missing or mis-specified val cache fails now rather than after the full
+    # training run, at the one moment its result is wanted.
+    val_sets = []
+    for ds_path, cache_dir in zip(cfg.val_datasets, cfg.val_cache_dirs):
+        ds_cfg = load_dataset_config(ds_path)
+        val_cache = FeatureCache(cache_dir)
+        val_manifest = load_manifest(ds_cfg.manifest, ds_cfg.split)
+        if len(val_manifest) != val_cache.spec.n:
+            raise RuntimeError(
+                f"{cache_dir} holds {val_cache.spec.n} rows but {ds_path} selects "
+                f"{len(val_manifest)}. The cache was rendered from a different "
+                f"manifest -- re-render it with scripts/build_cache.py."
+            )
+        if (val_cache.spec.feature.layout, val_cache.spec.feature.shape) != (
+            spec.layout, spec.shape
+        ):
+            raise RuntimeError(
+                f"{cache_dir} holds {val_cache.spec.feature.layout}"
+                f"{val_cache.spec.feature.shape} but the detector emits "
+                f"{spec.layout}{spec.shape}. Re-render this val cache against "
+                f"the detector being trained."
+            )
+        val_sets.append((ds_cfg.name, val_cache, val_manifest))
+
     adapter = build_adapter(spec, cfg.adapter).to(device)
     severity_head = (
         build_severity_head(spec).to(device) if cfg.loss.lam_sev > 0 else None
@@ -220,7 +248,9 @@ def train_adapter(cfg, split, manifest, schedule) -> dict:
         "steps": step,
         "epochs": epochs,
         "history": history,
-        "validation": validate(cfg, adapter, split, cache, manifest, severity_head),
+        "validation": validate(
+            cfg, adapter, split, cache, manifest, severity_head, val_sets
+        ),
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
@@ -233,22 +263,15 @@ def train_adapter(cfg, split, manifest, schedule) -> dict:
 
 
 @torch.no_grad()
-def validate(cfg, adapter, split, cache, manifest, severity_head=None) -> dict:
-    """Alignment metrics on held-out *degradations* (see schedule.val_epochs).
-
-    Deliberately not AUC: retention is measured by the eval harness, on the eval
-    split, through `grace.detectors.adapted`. This is the in-loop signal only --
-    cosine to the clean target, mean gate, decision alignment and posterior
-    spread, so a run that helps L1 while wrecking L3 is visible before it ends.
-    """
+def _alignment(cfg, adapter, split, cache, manifest, epochs, severity_head=None) -> dict:
+    """Per-epoch alignment metrics over one cache. The measurement, factored out
+    so held-out degradations and held-out images run identically -- if the two
+    were computed by separate code they could drift and the comparison between
+    them would stop meaning anything."""
     device = next(split.parameters()).device
-    held = [e for e in cache.epochs() if e >= min(val_epochs(1))]
-    if not held:
-        return {"note": "no validation epochs rendered"}
-
     out = {}
     loader_cfg = _cache_loader_cfg(cfg)
-    for epoch in held:
+    for epoch in epochs:
         loader = build_loader(loader_cfg, cache, manifest, None, epoch, shuffle=False)
         cos, spread, gate = [], [], []
         for batch in loader:
@@ -271,6 +294,40 @@ def validate(cfg, adapter, split, cache, manifest, severity_head=None) -> dict:
             "posterior_spread": float(np.mean(spread)),
             "gate": float(np.mean(gate)),
         }
+    return out
+
+
+@torch.no_grad()
+def validate(cfg, adapter, split, cache, manifest, severity_head=None, val_sets=None) -> dict:
+    """Two held-out axes, reported separately because they answer different
+    questions and a single number would hide which one failed.
+
+    `held_out_degradations` -- the original axis (see schedule.val_epochs).
+    Unseen corruptions over the TRAINING images: every row here was trained on,
+    so it cannot speak to generalization across images.
+
+    `held_out_images/<name>` -- whole datasets the adapter never saw, rendered to
+    their own cache roots. All their epochs count as held out, training-numbered
+    or not, because the images themselves are unseen.
+
+    Deliberately not AUC in either case: retention is measured by the eval
+    harness, on the eval split, through `grace.detectors.adapted`. This is the
+    in-loop signal only -- cosine to the clean target, mean gate, decision
+    alignment and posterior spread, so a run that helps L1 while wrecking L3 is
+    visible before it ends.
+    """
+    out = {}
+    held = [e for e in cache.epochs() if e >= min(val_epochs(1))]
+    out["held_out_degradations"] = (
+        _alignment(cfg, adapter, split, cache, manifest, held, severity_head)
+        if held
+        else {"note": "no validation epochs rendered"}
+    )
+    for name, val_cache, val_manifest in list(val_sets or []):
+        out[f"held_out_images/{name}"] = _alignment(
+            cfg, adapter, split, val_cache, val_manifest,
+            list(val_cache.epochs()), severity_head,
+        )
     return out
 
 

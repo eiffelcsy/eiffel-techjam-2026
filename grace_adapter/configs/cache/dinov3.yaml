@@ -1,16 +1,20 @@
 # The PoC cache: DINOv3 ViT-S/16, pooled to one 768-d vector per image.
 #
 # `vector` layout, 768 dims x 2 bytes = 1.5 KB per image per view -- against
-# RINE's 48 KB. At 15 views (clean + 12 train + 2 val) that is 22 KB per image,
-# so a 1200-image PoC manifest renders to ~27 MB and the whole thing fits in page
-# cache. This is why the PoC is the arm you can iterate on: stage 1 reads it at
-# memory bandwidth and a full run is seconds.
+# RINE's 48 KB. At 16 views (clean + 12 train + 2 val, plus the clean target)
+# that is ~24 KB per image, so the full 277,643-image train manifest renders to
+# ~6.7 GB. Stage 1 then reads it at memory bandwidth: the trunk never runs again.
 #
 #   python scripts/build_cache.py configs/cache/dinov3.yaml --dry-run
 #   python scripts/build_cache.py configs/cache/dinov3.yaml
 #
-# Cached on the TRAIN split (ntire_train.yaml). The harness scores ntire_val.yaml,
-# whose rows are disjoint -- both by manifest index and by source split.
+# Cached on the TRAIN split (ntire_train.yaml) -- now all six shards, 277,643
+# images, since shard 5 was folded back in when stage-0 selection moved to the
+# challenge's own val sets.
+#
+# Stage-1 image-level validation is rendered separately by configs/cache/
+# dinov3_val.yaml and dinov3_val_hard.yaml, each to its own out_dir. Their rows
+# are disjoint from this cache's by construction: different datasets entirely.
 #
 # Stage 0 must have run first: build_cache loads the detector, and the detector
 # loads a head checkpoint that does not exist until then. (The features
@@ -26,5 +30,6 @@ out_dir: cache/
 n_epochs: 12
 n_val_epochs: 2
 batch_size: 32
+num_workers: 8
 
 schedule: {}      # the standard training mix: all eleven transforms, default weights

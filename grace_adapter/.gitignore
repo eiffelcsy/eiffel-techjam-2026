@@ -12,7 +12,8 @@ __pycache__/
 #
 # Rendered feature caches are hundreds of GB and reproducible from a config plus
 # a manifest sha; that is the point of the fingerprints in grace/cache/spec.py.
-/cache/
+/cache*/
 /checkpoints/
 /results/
 /wandb/
+/logs/

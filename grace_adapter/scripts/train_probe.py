@@ -64,19 +64,31 @@ def main():
 
     dataset_cfg = load_dataset_config(cfg.dataset)
     manifest = load_manifest(dataset_cfg.manifest, dataset_cfg.split)
-    val_manifest = None
-    if cfg.val_dataset:
-        val_cfg = load_dataset_config(cfg.val_dataset)
-        val_manifest = load_manifest(val_cfg.manifest, val_cfg.split)
-        if set(manifest.index) & set(val_manifest.index):
-            raise SystemExit(
-                f"{cfg.dataset} and {cfg.val_dataset} share manifest rows. The probe "
-                f"would be selected on images it was fit on, and every downstream "
-                f"retention number would inherit that."
-            )
 
-    summary = train_probe(cfg, split, manifest, val_manifest)
-    print(f"{cfg.run_id}: {summary['n_train']} train / {summary['n_val']} val images")
+    # Overlap is checked on `path`, not on the manifest index. The index is the
+    # row number within ONE manifest file, so two separately-built manifests both
+    # start at 0 and an index test reports a collision between datasets that
+    # share no image at all -- which is exactly the case now that selection runs
+    # against ntire_val rather than a second split of the training manifest.
+    # `path` is the image identity and is comparable across manifests.
+    train_paths = set(manifest["path"])
+    val_sets = []
+    for path in cfg.val_datasets():
+        val_cfg = load_dataset_config(path)
+        val_manifest = load_manifest(val_cfg.manifest, val_cfg.split)
+        shared = train_paths & set(val_manifest["path"])
+        if shared:
+            raise SystemExit(
+                f"{cfg.dataset} and {path} share {len(shared)} image(s), e.g. "
+                f"{sorted(shared)[0]}. The probe would be selected on images it "
+                f"was fit on, and every downstream retention number would "
+                f"inherit that."
+            )
+        val_sets.append((val_cfg.name, val_manifest))
+
+    summary = train_probe(cfg, split, manifest, val_sets)
+    counts = " / ".join(f"{n} {name}" for name, n in summary["n_val"].items())
+    print(f"{cfg.run_id}: {summary['n_train']} train images | val: {counts or 'none'}")
     print(f"  selection   {summary['selection']} @ epoch {summary['selected_epoch']}")
     print(f"  {json.dumps(summary['history'][-1])}")
     print(f"  wrote       {summary['checkpoint']}")

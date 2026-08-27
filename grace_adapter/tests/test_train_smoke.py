@@ -75,7 +75,9 @@ def test_stage_one_runs_and_checkpoints(workspace):
     assert (out / "last.pt").exists() and (out / "ema.pt").exists()
     assert json.loads((out / "summary.json").read_text())["target_view"] == "clean"
     # validation ran on the held-out degradation epoch, not a training one
-    assert f"epoch_{min(val_epochs(1))}" in summary["validation"]
+    assert (
+        f"epoch_{min(val_epochs(1))}" in summary["validation"]["held_out_degradations"]
+    )
 
 
 def test_stage_one_actually_moves_the_adapter(workspace):
@@ -127,7 +129,7 @@ def test_stochastic_adapter_trains_and_reports_spread(workspace):
     root, manifest, split, schedule, cache_dir = workspace
     cfg = _train_cfg(root, cache_dir, run_id="noisy", adapter={"noise_dim": 4})
     summary = train_adapter(cfg, split, manifest, schedule)
-    held = summary["validation"][f"epoch_{min(val_epochs(1))}"]
+    held = summary["validation"]["held_out_degradations"][f"epoch_{min(val_epochs(1))}"]
     assert "posterior_spread" in held
 
 

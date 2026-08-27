@@ -18,7 +18,8 @@ number downstream would be measuring the augmentation instead of the adapter. If
 you want that arm, it is a separate detector config and a separate baseline, not
 a flag here.
 
-Model selection is on held-out **images**, by AUC. With a PoC-sized manifest a
+Model selection is on held-out **images**, by AUC, meaned across the validation
+datasets given (see `ProbeConfig.val_dataset`). With a PoC-sized manifest a
 768-in / 512-hidden head reaches training AUC 1.0 within a few epochs, and the
 last epoch is not the one to ship: an overfit head has a near-arbitrary Jacobian,
 and `grace.train.weighting` differentiates through it to decide where the adapter
@@ -74,7 +75,7 @@ def _auc(logits: torch.Tensor, y: torch.Tensor) -> float:
     return float(roc_auc_score(y, logits.numpy()))
 
 
-def train_probe(cfg, split, manifest, val_manifest=None) -> dict:
+def train_probe(cfg, split, manifest, val_sets=None) -> dict:
     """Fit and save the head. Returns the summary written next to it.
 
     The head trained here is a fresh `ProbeHead`, not `split.detector.head_module`:
@@ -89,11 +90,16 @@ def train_probe(cfg, split, manifest, val_manifest=None) -> dict:
     f_train, y_train = extract_features(
         split, manifest, cfg.batch_size, cfg.num_workers, device
     )
-    f_val, y_val = (
-        extract_features(split, val_manifest, cfg.batch_size, cfg.num_workers, device)
-        if val_manifest is not None
-        else (None, None)
-    )
+    # One trunk pass per validation set, held in memory alongside the training
+    # features. Selection runs against several datasets now, so each keeps its
+    # own features and reports its own AUC -- a mean over datasets is the
+    # selection scalar, but a mean is not what you debug with.
+    val_feats = []
+    for name, val_manifest in ([] if val_sets is None else list(val_sets)):
+        f_v, y_v = extract_features(
+            split, val_manifest, cfg.batch_size, cfg.num_workers, device
+        )
+        val_feats.append((name, f_v, y_v))
 
     head = ProbeHead(spec.dim, cfg.hidden, cfg.n_layers, cfg.dropout).to(device)
     opt = torch.optim.AdamW(head.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
@@ -119,7 +125,7 @@ def train_probe(cfg, split, manifest, val_manifest=None) -> dict:
                 "pool": split.detector.pool, "feature_dim": spec.dim,
                 "input_mode": getattr(split.detector, "input_mode", "resize"),
                 "n_train": int(len(y_train)),
-                "n_val": int(len(y_val)) if f_val is not None else 0,
+                "n_val": sum(int(len(y_v)) for _, _, y_v in val_feats),
                 "head_params": sum(p.numel() for p in head.parameters())},
     )
 
@@ -138,17 +144,27 @@ def train_probe(cfg, split, manifest, val_manifest=None) -> dict:
         head.eval()
         with torch.no_grad():
             row = {"epoch": epoch, "loss": float(loss), "auc_train": _auc(head(f_train.to(device)).cpu(), y_train)}
-            if f_val is not None:
-                logits = head(f_val.to(device)).cpu()
-                row["auc_val"] = _auc(logits, y_val)
-                row["acc_val"] = float(((logits > 0).float() == y_val).float().mean())
+            aucs = []
+            for name, f_v, y_v in val_feats:
+                logits = head(f_v.to(device)).cpu()
+                auc = _auc(logits, y_v)
+                row[f"auc_val/{name}"] = auc
+                row[f"acc_val/{name}"] = float(((logits > 0).float() == y_v).float().mean())
+                aucs.append(auc)
+            if val_feats:
+                # Unweighted across datasets, not across images: ntire_val is 4x
+                # ntire_val_hard, and pooling rows would let the easy set decide
+                # selection on its own. NaN sets (single-class) drop out rather
+                # than poisoning the mean.
+                finite = [a for a in aucs if a == a]
+                row["auc_val_mean"] = float(np.mean(finite)) if finite else float("nan")
         history.append(row)
         tracker.log({f"probe/{k}": v for k, v in row.items() if k != "epoch"}, step=epoch)
 
         # No validation manifest -> select on the last epoch and say so in the
         # summary, rather than silently selecting on training AUC.
-        score = row.get("auc_val", float("-inf"))
-        if f_val is None or (score == score and score >= best["auc"]):
+        score = row.get("auc_val_mean", float("-inf"))
+        if not val_feats or (score == score and score >= best["auc"]):
             best = {
                 "auc": score,
                 "state": {k: v.detach().cpu().clone() for k, v in head.state_dict().items()},
@@ -179,10 +195,10 @@ def train_probe(cfg, split, manifest, val_manifest=None) -> dict:
         "run_id": cfg.run_id,
         "checkpoint": str(out),
         "n_train": int(len(y_train)),
-        "n_val": int(len(y_val)) if f_val is not None else 0,
-        "selection": "val_auc" if f_val is not None else "last_epoch",
+        "n_val": {name: int(len(y_v)) for name, _, y_v in val_feats},
+        "selection": "val_auc_mean" if val_feats else "last_epoch",
         "selected_epoch": best["epoch"],
-        "best_auc_val": best["auc"] if f_val is not None else None,
+        "best_auc_val": best["auc"] if val_feats else None,
         "history": history,
     }
     import json
@@ -193,7 +209,7 @@ def train_probe(cfg, split, manifest, val_manifest=None) -> dict:
     # the selected one, and the runs table should say what it scored.
     tracker.summary({
         "selected_epoch": best["epoch"],
-        "best_auc_val": best["auc"] if f_val is not None else None,
+        "best_auc_val": best["auc"] if val_feats else None,
         **{k: v for k, v in history[best["epoch"]].items() if k != "epoch"},
     })
     tracker.finish()

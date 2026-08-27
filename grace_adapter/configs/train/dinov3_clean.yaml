@@ -14,6 +14,18 @@ detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
 split: grace.splits.dinov3.DINOv3Split
 dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
 
+# Held-out IMAGES, alongside the cache's held-out degradations. The two answer
+# different questions and summary.json reports them separately: the degradation
+# axis scores unseen corruptions over images that WERE trained on, and cannot
+# speak to generalization across images; these datasets can.
+val_datasets:
+  - ../eval_pipeline/configs/datasets/ntire_val.yaml
+  - ../eval_pipeline/configs/datasets/ntire_val_hard.yaml
+val_cache_dirs:
+  - cache_val/dinov3-ntire
+  - cache_val_hard/dinov3-ntire
+
+
 cache_dir: cache/dinov3-ntire
 epochs: 12
 seed: 0
