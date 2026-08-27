@@ -4,7 +4,9 @@
 #
 # Identical to dinov3_ntire.yaml except for `detector` and `run_id`: the point of
 # the arm is that preprocessing is the only variable. Same manifest, same
-# splits, same head geometry, same optimizer, same seed.
+# selection sets, same head geometry, same optimizer, same seed -- INCLUDING the
+# val sets, because selecting the two heads on different data would confound the
+# one variable the arm exists to isolate.
 #
 # Clean images only, still -- see train_probe.py. The crop is not augmentation,
 # it is a change to what resolution the trunk reads the image at, and it applies
@@ -13,8 +15,10 @@
 run_id: dinov3_ntire_crop
 
 detector: ../eval_pipeline/configs/detectors/dinov3-ntire-crop.yaml
-dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml         # split: train
-val_dataset: ../eval_pipeline/configs/datasets/ntire_train_eval.yaml # split: validation
+dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml   # all six shards, 277,643
+val_dataset:
+  - ../eval_pipeline/configs/datasets/ntire_val.yaml       # split: undistorted, 5000
+  - ../eval_pipeline/configs/datasets/ntire_val_hard.yaml  # split: hard, 2500
 
 split: grace.splits.dinov3.DINOv3Split
 out: ""             # "" = take it from the detector config's head_checkpoint

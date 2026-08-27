@@ -30,7 +30,7 @@ equals the input and the correct behaviour is to do nothing. That implicit
 identity constraint does more work than the explicit `identity_loss` term.
 
 Requires the one-line generalisation of `Condition.sample_recipe`'s guard from
-`if self.level < 2` to `if not self.grid` -- see README section 9. Without it,
+`if self.level < 2` to `if not self.grid` -- see README section 11. Without it,
 training levels 0 and 1 silently produce no degradation at all.
 """
 

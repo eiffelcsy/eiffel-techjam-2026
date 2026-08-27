@@ -1,0 +1,50 @@
+# E3, arm 2 of 3 -- the loss ablation: sliced-Wasserstein OFF.
+#
+# Point-wise alignment alone is satisfied by a conditional mean, which is
+# systematically under-dispersed: the corrected batch forms a tighter cloud than
+# real clean features do, and the frozen head's operating point was calibrated on
+# the wider one. lam_sw: 0.0 removes the only term that penalises that.
+#
+# Run as a PAIR with dinov3_posterior.yaml. Those two configs test one claim
+# between them (README section 3): noise earns its keep only because the SW
+# term rewards matching a spread the conditional mean under-disperses, so
+# `noise_dim > 0` with `lam_sw: 0` buys parameters that do nothing. This arm is
+# the "no SW" half; that one is the "noise, with SW" half.
+#
+#   python scripts/train_adapter.py configs/train/dinov3_no_sw.yaml
+#
+# Identical to dinov3_clean.yaml except `loss.lam_sw`.
+
+run_id: dinov3_no_sw
+
+detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
+split: grace.splits.dinov3.DINOv3Split
+dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
+
+val_datasets:
+  - ../eval_pipeline/configs/datasets/ntire_val.yaml
+  - ../eval_pipeline/configs/datasets/ntire_val_hard.yaml
+val_cache_dirs:
+  - cache_val/dinov3-ntire
+  - cache_val_hard/dinov3-ntire
+
+cache_dir: cache/dinov3-ntire
+epochs: 12
+seed: 0
+target_view: clean
+source: cache
+
+batch_size: 64
+warmup_steps: 10
+
+adapter:
+  bottleneck: 128
+  n_blocks: 2
+
+loss:
+  lam_sw: 0.0
+
+wandb:
+  enabled: true
+  project: grace-adapter
+  group: e3_losses

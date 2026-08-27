@@ -54,7 +54,7 @@ class WandbConfig:
     run whose network died mid-way and a run whose dashboard was deleted are all
     equally reportable. See `grace.train.tracker`.
 
-    `group` is what makes the sweeps in README section 7 legible: set it to the
+    `group` is what makes the sweeps in README section 6 legible: set it to the
     experiment id (`e3_losses`, `e4_erasure`) and every arm lands in one
     comparison rather than in a flat list of forty runs.
 

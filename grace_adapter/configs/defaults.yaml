@@ -41,7 +41,12 @@
 run_id: dinov3_ntire
 detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
 dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml        # split: train
-val_dataset: ../eval_pipeline/configs/datasets/ntire_train_eval.yaml
+val_dataset:                # one path, or several. Selection is the unweighted
+  - ../eval_pipeline/configs/datasets/ntire_val.yaml       # mean of their AUCs,
+  - ../eval_pipeline/configs/datasets/ntire_val_hard.yaml  # so a head that wins
+                            # by collapsing on the hard set cannot be selected.
+                            # NOT ntire_train_eval.yaml -- that split is empty
+                            # now that all six shards are `split: train`.
 split: grace.splits.dinov3.DINOv3Split
 
 out: ""                     # "" = the head_checkpoint the DETECTOR config names,
@@ -119,6 +124,27 @@ dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
 # The detector is loaded even in `source: cache` mode: the frozen head is what
 # head_kl and the Jacobian weighting differentiate through, so the model is
 # needed whether or not the trunk ever runs.
+
+val_datasets: []            # held-out IMAGES for stage-1 validation, reported in
+val_cache_dirs: []          # summary.json under `validation`. PARALLEL lists --
+                            # each dataset needs the cache root it was rendered
+                            # to, and __post_init__ rejects a length mismatch.
+                            #
+                            # Separate roots because build_cache.py derives its
+                            # root from the DETECTOR name alone, so two datasets
+                            # rendered for one detector would collide.
+                            #
+                            # Distinct from the cache's own validation axis,
+                            # which holds out DEGRADATIONS (val epochs, numbered
+                            # from 10000) over the training images. That axis
+                            # answers "does this adapter generalize to an unseen
+                            # corruption"; it cannot answer "to an unseen image",
+                            # because every row it scores was trained on. Both
+                            # are reported, separately.
+                            #
+                            # Loaded up front, so a missing or mis-specified val
+                            # cache fails at second zero rather than after the
+                            # full run, at the one moment its result is wanted.
 
 target_view: clean          # clean = arm B (proposed) | degraded = arm A (control)
 source: cache               # cache = read pre-rendered features (no trunk at all)

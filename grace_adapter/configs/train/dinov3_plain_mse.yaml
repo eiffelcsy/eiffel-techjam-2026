@@ -1,0 +1,52 @@
+# E3, arm 1 of 3 -- the loss ablation: Jacobian weighting OFF.
+#
+# `weighting: none` makes L_err exactly `F.mse_loss` (README section 3: the
+# error term is written as a blend so eps_iso: 1.0 and weighting: none are the
+# same objective), and lam_kl goes back to v1's 0.5 because head_kl was the only
+# decision-aware term GRACE v1 had. So this is provably the v1 objective, not an
+# approximation of it -- tests/test_losses.py pins the equivalence.
+#
+# Read `cos_decision` in summary.json's history against dinov3_clean's. If this
+# run sits near 0 while the weighted one climbs, the adapter here is spending its
+# capacity on feature directions the frozen head cannot see, which is the
+# empirical motivation for the whole weighting term.
+#
+#   python scripts/train_adapter.py configs/train/dinov3_plain_mse.yaml
+#
+# Identical to dinov3_clean.yaml except `loss`. Any other difference makes this
+# not an ablation.
+
+run_id: dinov3_plain_mse
+
+detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
+split: grace.splits.dinov3.DINOv3Split
+dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
+
+val_datasets:
+  - ../eval_pipeline/configs/datasets/ntire_val.yaml
+  - ../eval_pipeline/configs/datasets/ntire_val_hard.yaml
+val_cache_dirs:
+  - cache_val/dinov3-ntire
+  - cache_val_hard/dinov3-ntire
+
+cache_dir: cache/dinov3-ntire
+epochs: 12
+seed: 0
+target_view: clean
+source: cache
+
+batch_size: 64
+warmup_steps: 10
+
+adapter:
+  bottleneck: 128
+  n_blocks: 2
+
+loss:
+  weighting: none   # L_err becomes plain F.mse_loss
+  lam_kl: 0.5       # v1's weight -- head_kl was the only decision-aware term then
+
+wandb:
+  enabled: true
+  project: grace-adapter
+  group: e3_losses

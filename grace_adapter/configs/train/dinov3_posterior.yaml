@@ -1,0 +1,57 @@
+# E3, arm 3 of 3 -- the loss ablation: posterior sampling ON.
+#
+# `noise_dim: 16` gives the adapter a noise input, k_train draws are taken per
+# step, and at eval k_eval corrections are averaged as LOGITS rather than as
+# features -- E[h(f)] != h(E[f]) for any nonlinear head, so this is cheap
+# Monte-Carlo posterior averaging: k adapter passes (microseconds) against one
+# trunk pass.
+#
+# `posterior_spread` in summary.json's `validation` block is the tripwire. If it
+# reads ~0 the adapter has learned to ignore z -- posterior collapse -- and that
+# is a reportable negative result about the objective rather than a bug. Read it
+# next to dinov3_no_sw.yaml: the pair is the test of whether the SW term is what
+# keeps the noise alive.
+#
+#   python scripts/train_adapter.py configs/train/dinov3_posterior.yaml
+#
+# Identical to dinov3_clean.yaml except `adapter.noise_dim` and `sampling`.
+#
+# NOTE: scoring this checkpoint through the harness needs a detector config with
+# a matching `k_eval`; configs/detectors/dinov3+grace.yaml pins k_eval: 1, which
+# is correct for the deterministic arms and wrong for this one.
+
+run_id: dinov3_posterior
+
+detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
+split: grace.splits.dinov3.DINOv3Split
+dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
+
+val_datasets:
+  - ../eval_pipeline/configs/datasets/ntire_val.yaml
+  - ../eval_pipeline/configs/datasets/ntire_val_hard.yaml
+val_cache_dirs:
+  - cache_val/dinov3-ntire
+  - cache_val_hard/dinov3-ntire
+
+cache_dir: cache/dinov3-ntire
+epochs: 12
+seed: 0
+target_view: clean
+source: cache
+
+batch_size: 64
+warmup_steps: 10
+
+adapter:
+  bottleneck: 128
+  n_blocks: 2
+  noise_dim: 16
+
+sampling:
+  k_train: 2
+  k_eval: 8
+
+wandb:
+  enabled: true
+  project: grace-adapter
+  group: e3_losses
