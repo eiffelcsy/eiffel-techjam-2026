@@ -138,7 +138,7 @@ nothing else calls.
 
 The first three reconstruct a seam inside a repo cloned by hand under
 `third_party/`; `dinov3.py` does not, which is the entire reason it exists. See
-`grace_adapter/README.md` §8.
+`grace_adapter/README.md` §7.
 
 ### Stage 0 — `grace/probe/`
 
@@ -206,17 +206,24 @@ untracked rather than raising into the training loop.
 
 ## 4. Execution order
 
-The PoC path (`grace_adapter/README.md` §8) is the one that runs end to end today
+The PoC path (`grace_adapter/README.md` §7) is the one that runs end to end today
 — the zoo splits still wait on their clones:
 
 ```bash
-# 0. Dataset — NTIRE shards 0-4 (train) + shard 5 (selection) into ONE manifest.
-cd ../eval_pipeline && python scripts/build_manifest.py --config configs/datasets/ntire_train.yaml
+# 0. Datasets — four manifests. ntire_train (all six shards) is the fit set;
+#    ntire_val + ntire_val_hard are stage-0 selection and stage-1 held-out
+#    images; wildfake is the eval set, held out from all of them.
+cd ../eval_pipeline
+for d in ntire_train ntire_val ntire_val_hard wildfake_coco_dalle3; do
+  python scripts/build_manifest.py --config configs/datasets/$d.yaml
+done
 
-# 1. Stage 0 — fit the detector's own head on CLEAN features. Seconds.
+# 1. Stage 0 — fit the detector's own head on CLEAN features.
 cd ../grace_adapter && python scripts/train_probe.py configs/probe/dinov3_ntire.yaml
 
-# 2-6. As below, with `dinov3` in place of `rine`. Or all of it at once:
+# 2-6. As below, with `dinov3` in place of `rine` — plus the two validation
+#      caches (configs/cache/dinov3_val{,_hard}.yaml), which the stage-1 configs
+#      name in `val_cache_dirs` and are not optional. Or all of it at once:
 bash scripts/poc.sh
 ```
 
@@ -2553,25 +2560,49 @@ The run summary — including history and validation — is written next to them
 ### 9.7 `loop.py` — `validate`
 
 Deliberately **not** AUC. Retention is measured by the eval harness, on the eval
-split, through `AdaptedDetector`. This is the in-loop signal only, on held-out
-*degradations*:
+split, through `AdaptedDetector`. This is the in-loop signal only — and it runs
+over **two held-out axes, reported separately**, because a single number would
+hide which one failed:
 
 ```python
 @torch.no_grad()
-def validate(cfg, adapter, split, cache, manifest, severity_head=None) -> dict:
-    """Alignment metrics on held-out *degradations* (see schedule.val_epochs).
-
-    This is the in-loop signal only -- cosine to the clean target, mean gate,
-    decision alignment and posterior spread, so a run that helps L1 while
-    wrecking L3 is visible before it ends."""
-    device = next(split.parameters()).device
+def validate(cfg, adapter, split, cache, manifest, severity_head=None, val_sets=None) -> dict:
+    out = {}
     held = [e for e in cache.epochs() if e >= min(val_epochs(1))]
-    if not held:
-        return {"note": "no validation epochs rendered"}
+    out["held_out_degradations"] = (
+        _alignment(cfg, adapter, split, cache, manifest, held, severity_head)
+        if held
+        else {"note": "no validation epochs rendered"}
+    )
+    for name, val_cache, val_manifest in list(val_sets or []):
+        out[f"held_out_images/{name}"] = _alignment(
+            cfg, adapter, split, val_cache, val_manifest,
+            list(val_cache.epochs()), severity_head,
+        )
+    return out
+```
 
+* `held_out_degradations` — the original axis (`schedule.val_epochs`, numbered
+  from 10000). Unseen corruptions over the **training** images: every row here
+  was trained on, so it cannot speak to generalization across images.
+* `held_out_images/<name>` — whole datasets the adapter never saw, named by the
+  parallel `val_datasets` / `val_cache_dirs` lists on `TrainConfig` and rendered
+  to their own cache roots (`build_cache.py` derives its root from the detector
+  name alone, so two datasets under one `out_dir` would collide). *All* their
+  epochs count as held out, training-numbered or not, because the images
+  themselves are unseen. The caches are opened up front, so a missing or
+  mis-specified one fails at second zero rather than after the run.
+
+Both go through one `_alignment` helper — factored out precisely so the two axes
+cannot drift apart and stop being comparable:
+
+```python
+@torch.no_grad()
+def _alignment(cfg, adapter, split, cache, manifest, epochs, severity_head=None) -> dict:
+    device = next(split.parameters()).device
     out = {}
     loader_cfg = _cache_loader_cfg(cfg)
-    for epoch in held:
+    for epoch in epochs:
         loader = build_loader(loader_cfg, cache, manifest, None, epoch, shuffle=False)
         cos, spread, gate = [], [], []
         for batch in loader:
@@ -3248,7 +3279,7 @@ touches the adapter".
 
 ## 13. `tests/` — what is pinned
 
-203 tests, including a real end-to-end render, a two-stage training smoke run,
+224 tests, including a real end-to-end render, a two-stage training smoke run,
 and the full PoC path — stage 0 → cache → stage 1 → stage 2 → identity check —
 run against a 2-layer DINOv3 built from a local config, so it needs neither the
 network nor the backbone's licence.
@@ -3328,14 +3359,28 @@ guard described in §7.1, covered by
 ## Appendix C. Known gaps
 
 **Verified and tested:** the adapter, weighting, losses, diagnostics, discrepancy
-branch, schedule, cache (writer/reader/spec), both training stages, the configs,
-`AdaptedDetector`, the DINOv3 proof-of-concept path, and W&B tracking.
+branch, schedule, cache (writer/reader/spec), EMA, both training stages, the
+two-axis validation, the configs, `AdaptedDetector`, the DINOv3 proof-of-concept
+path, and W&B tracking.
 
 **Runnable end to end today:** the PoC path only (`bash scripts/poc.sh`). It needs
 the DINOv3 ViT-S/16 backbone, a licence-gated Hub repo — accept it on the model
 page and `hf auth login`, or point `backbone_id` at a mirror. Nothing else in the
 project can be run against a real detector yet, which is the gap the PoC exists
 to close for the experiments that do not need a *particular* detector (E2, E3).
+
+**Run so far:** stage 0 only. The head is fit on the full 277,643-image NTIRE
+train split, selected at epoch 36 on 0.9596 / 0.8467 AUC (`ntire_val` /
+`ntire_val_hard`, mean 0.9032); both validation caches are rendered and the train
+cache is still rendering. No adapter has been trained and no harness results
+exist yet.
+
+**One eval set, enforced.** `compare.py` refuses two result files from different
+datasets, because retention is only comparable on one — so
+`dinov3_poc_baseline.yaml` and `dinov3_poc_grace.yaml` both name WildFake and
+nothing else. NTIRE val is a *selection* set here (stage 0 picks the head's epoch
+on it, stage 1 validates on it at image level), so a retention curve measured
+there would flatter both the baseline and the adapter.
 
 **Not verified — needs the clones under `third_party/`:**
 
