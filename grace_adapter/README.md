@@ -260,12 +260,39 @@ head.
 - `held_out_images/<name>` — whole datasets the adapter never saw, named by the
   parallel `val_datasets` / `val_cache_dirs` lists. Each needs its own rendered
   cache root, because `build_cache.py` derives its root from the detector name
-  alone and two datasets under one `out_dir` would collide.
+  alone and two datasets under one `out_dir` would collide. The *images* are
+  what is held out here, so the degradation draw need not also be: a
+  training-numbered epoch is the right corruption to score, applied to rows the
+  adapter never saw.
 
-Neither is AUC: retention is measured by the eval harness, through
-`grace.detectors.adapted`. These are the in-loop signals — cosine to the clean
-target, mean gate, decision alignment, posterior spread — so a run that helps L1
-while wrecking L3 is visible before it ends.
+Both run once at the end of a run. Set `val_every: N` to also run them every N
+epochs, appended to `summary.json` as `val_history` -- a list of
+`{epoch, step, ...the same two axes}` rows -- and logged to W&B under `val/` at
+the step they were measured. `validation` still holds the finished adapter
+either way, so nothing downstream has to ask what schedule a run used. Matching
+`val_every` to `checkpoint_every` pairs every E4 checkpoint with the held-out
+numbers it scored when it was written. Validation forks the RNG, so turning it
+on does not perturb a single training draw.
+
+**A mid-run pass scores one epoch per image cache** -- the draw training just
+finished -- while the end-of-run pass sweeps them all. The degradation axis is
+always both val epochs. That asymmetry is a cost decision: on the PoC caches a
+full sweep is 14 passes per val set, and the epochs of an image cache are
+fourteen reads of one axis rather than fourteen different questions.
+
+**Each row carries alignment *and* detection metrics.** Alignment:
+`cosine_to_clean`, `gate`, `posterior_spread`. Detection, through the frozen
+head, for three views — `degraded` (the input, what the detector scores without
+GRACE), `adapted` (the adapter's output) and `clean` (the ceiling): `auc_*`,
+`acc_*`, `f1_*`, plus `retention` = `(auc_adapted - 0.5) / (auc_clean - 0.5)`.
+`threshold` is picked on the clean view and applied unchanged to the other two,
+which is `pipeline.eval.metrics`' rule and is what exposes calibration drift
+that AUC hides.
+
+Those detection numbers are computed by importing the harness's own metric
+functions, not by reimplementing them — but they are still the *in-loop* signal,
+measured on cached features. Reported retention is the harness's, on the eval
+split, through `grace.detectors.adapted`.
 
 ---
 
@@ -276,7 +303,7 @@ while wrecking L3 is visible before it ends.
 > — is **`../docs/EXPERIMENTS.md`**. What follows is the map.
 
 ```bash
-# 1. render, once per detector and per dataset -- resumable at view granularity
+# 1. render, once per detector and per dataset -- resumable at shard granularity
 python scripts/build_cache.py configs/cache/<name>.yaml --dry-run
 python scripts/build_cache.py configs/cache/<name>.yaml
 

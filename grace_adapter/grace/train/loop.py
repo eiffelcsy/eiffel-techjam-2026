@@ -46,10 +46,13 @@ from grace.train import diagnostics as D
 from grace.train.data import build_loader
 from grace.train.ema import EMA
 from grace.train.losses import supervised_bce, total_loss
-from grace.train.tracker import build_tracker, flatten_config
+from grace.train.tracker import build_tracker, flatten, flatten_config
 from grace.train.weighting import head_gradient
 from pipeline.config import load_dataset_config
 from pipeline.data.manifest import load_manifest
+from pipeline.eval.metrics import (
+    error_breakdown, retention, roc_auc, threshold_from_clean,
+)
 from pipeline.utils.seeding import seed_everything
 
 
@@ -79,7 +82,7 @@ def _cache_loader_cfg(cfg):
     return type("_LoaderCfg", (), {
         "source": "cache",
         "batch_size": cfg.batch_size,
-        "num_workers": cfg.num_workers,
+        "num_workers": 0,
     })()
 
 
@@ -159,7 +162,7 @@ def train_adapter(cfg, split, manifest, schedule) -> dict:
                 "arm": "B_clean_teacher" if cfg.target_view == "clean" else "A_self"},
     )
 
-    step, history = 0, []
+    step, history, val_history = 0, [], []
     for epoch in epochs:
         loader = build_loader(cfg, cache, manifest, schedule, epoch, preprocess)
         for batch in tqdm(loader, desc=f"epoch {epoch}", leave=False):
@@ -229,6 +232,34 @@ def train_adapter(cfg, split, manifest, schedule) -> dict:
                 },
             )
 
+        # Held-out numbers *during* the run, when a config asks for them. Same
+        # `validate` call as the final one -- one measurement, so a mid-run row
+        # and the summary's `validation` block are directly comparable -- and
+        # the same epoch convention as `checkpoint_every` above, so a matching
+        # cadence pairs each checkpoint with the numbers it scored.
+        #
+        # `epoch=epoch` scores the held-out IMAGES on the draw training just
+        # finished, one pass per val cache rather than a sweep over all of them.
+        # The held-out DEGRADATION axis is unaffected -- it is the val-numbered
+        # epochs of the training cache and is always scored in full.
+        if cfg.val_every and epoch % cfg.val_every == 0:
+            # Forked RNG. A stochastic adapter's `sample` draws from the global
+            # generator, so validating in-line would shift every subsequent
+            # training draw and two runs differing only in `val_every` would
+            # stop being seed-for-seed comparable -- which is the one property
+            # the whole arm A / arm B design rests on.
+            with torch.random.fork_rng(
+                devices=[device] if device.type == "cuda" else []
+            ):
+                scores = validate(
+                    cfg, adapter, split, cache, manifest, severity_head, val_sets,
+                    epoch=epoch,
+                )
+            val_history.append({"epoch": epoch, "step": step, **scores})
+            tracker.log(
+                {f"val/{k}": v for k, v in flatten(scores).items()}, step=step
+            )
+
     # The severity head travels with the adapter: at inference severity is
     # predicted, so a FiLM-conditioned adapter shipped without it would silently
     # fall back to the unconditioned gate.
@@ -248,9 +279,13 @@ def train_adapter(cfg, split, manifest, schedule) -> dict:
         "steps": step,
         "epochs": epochs,
         "history": history,
+        # Always present and always the finished adapter, whatever `val_every`
+        # was: nothing downstream has to ask which schedule a run used to find
+        # the number it wants. `val_history` is the extra, not the substitute.
         "validation": validate(
             cfg, adapter, split, cache, manifest, severity_head, val_sets
         ),
+        "val_history": val_history,
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
@@ -264,16 +299,26 @@ def train_adapter(cfg, split, manifest, schedule) -> dict:
 
 @torch.no_grad()
 def _alignment(cfg, adapter, split, cache, manifest, epochs, severity_head=None) -> dict:
-    """Per-epoch alignment metrics over one cache. The measurement, factored out
-    so held-out degradations and held-out images run identically -- if the two
-    were computed by separate code they could drift and the comparison between
-    them would stop meaning anything."""
+    """Per-epoch alignment and detection metrics over one cache. The
+    measurement, factored out so held-out degradations and held-out images run
+    identically -- if the two were computed by separate code they could drift
+    and the comparison between them would stop meaning anything.
+
+    Reports three logits per row, all through the SAME frozen head: `degraded`
+    (the input, what the detector scores without GRACE), `adapted` (the adapter's
+    output) and `clean` (the cached clean view). One number is uninterpretable
+    on its own -- `auc_adapted` alone cannot say whether the adapter helped, and
+    `clean` is the ceiling it is being pulled toward, so all three travel
+    together.
+    """
     device = next(split.parameters()).device
     out = {}
     loader_cfg = _cache_loader_cfg(cfg)
     for epoch in epochs:
         loader = build_loader(loader_cfg, cache, manifest, None, epoch, shuffle=False)
         cos, spread, gate = [], [], []
+        logits = {"degraded": [], "adapted": [], "clean": []}
+        labels = []
         for batch in loader:
             f_deg = _to_float(batch["f_deg"], device)
             f_clean = _to_float(batch["f_clean"], device)
@@ -287,34 +332,91 @@ def _alignment(cfg, adapter, split, cache, manifest, epochs, severity_head=None)
                     draws.mean(0).flatten(1), f_clean.flatten(1), dim=1
                 ).mean().item()
             )
-            spread.append(D.posterior_spread(torch.stack([split.head(d) for d in draws])))
+            # One stack of per-draw logits, used twice: the spread across draws
+            # is the posterior tripwire, the mean across them is the posterior
+            # predictive score a deployed detector would threshold.
+            drawn = torch.stack([split.head(d) for d in draws])
+            spread.append(D.posterior_spread(drawn))
             gate.append(float(adapter.gate().mean().detach()))
-        out[f"epoch_{epoch}"] = {
+            logits["adapted"].append(drawn.mean(0).cpu().numpy())
+            logits["degraded"].append(split.head(f_deg).cpu().numpy())
+            logits["clean"].append(split.head(f_clean).cpu().numpy())
+            labels.append(batch["label"].numpy())
+        row = {
             "cosine_to_clean": float(np.mean(cos)),
             "posterior_spread": float(np.mean(spread)),
             "gate": float(np.mean(gate)),
         }
+        row.update(_detection(np.concatenate(labels),
+                              {k: np.concatenate(v) for k, v in logits.items()}))
+        out[f"epoch_{epoch}"] = row
+    return out
+
+
+def _detection(y: np.ndarray, logits: dict) -> dict:
+    """AUC, accuracy, F1 and retention per view -- through the eval harness's own
+    metric functions, not a second implementation of them.
+
+    `pipeline.eval.metrics` is imported rather than reproduced so an in-loop
+    number and a reported one cannot drift apart. That includes its threshold
+    rule: the operating point is picked on the CLEAN view (max F1) and applied
+    unchanged to the degraded and adapted views. A fixed threshold is what
+    exposes calibration drift, which AUC hides -- a detector can hold its
+    ranking while every degraded row slides to one side of the boundary. It is
+    also stable along a training curve here, because the clean view is the same
+    rows through the same frozen head at every checkpoint.
+
+    `retention` is `(auc_adapted - 0.5) / (auc_clean - 0.5)`: the fraction of
+    chance-corrected clean skill the adapter recovers, so 1.0 is the ceiling and
+    0.0 is chance. It is the in-loop echo of the harness's headline number, NOT
+    a substitute -- the harness scores the eval split through
+    `grace.detectors.adapted`, and that is what gets reported.
+    """
+    if len(np.unique(y)) < 2:
+        return {"note": "one class only; AUC undefined on this cache"}
+    thr = threshold_from_clean(logits["clean"], y)
+    out = {"threshold": float(thr)}
+    for view, score in logits.items():
+        errors = error_breakdown(score, y, thr)
+        out[f"auc_{view}"] = roc_auc(score, y)
+        out[f"acc_{view}"] = errors.accuracy
+        out[f"f1_{view}"] = errors.f1
+    out["retention"] = retention(out["auc_adapted"], out["auc_clean"])
     return out
 
 
 @torch.no_grad()
-def validate(cfg, adapter, split, cache, manifest, severity_head=None, val_sets=None) -> dict:
+def validate(cfg, adapter, split, cache, manifest, severity_head=None, val_sets=None,
+             epoch=None) -> dict:
     """Two held-out axes, reported separately because they answer different
     questions and a single number would hide which one failed.
 
-    `held_out_degradations` -- the original axis (see schedule.val_epochs).
-    Unseen corruptions over the TRAINING images: every row here was trained on,
-    so it cannot speak to generalization across images.
+    `held_out_degradations` -- the original axis (see schedule.val_epochs). The
+    val-NUMBERED epochs (from 10000) of the TRAINING cache: unseen corruptions
+    over images that were trained on, so it cannot speak to generalization
+    across images. Always both val epochs, mid-run and at the end.
 
     `held_out_images/<name>` -- whole datasets the adapter never saw, rendered to
-    their own cache roots. All their epochs count as held out, training-numbered
-    or not, because the images themselves are unseen.
+    their own cache roots. The images are what is held out here, so the
+    degradation draw does not also have to be: a training-numbered epoch is the
+    right corruption to score, it is simply applied to rows the adapter never
+    saw.
 
-    Deliberately not AUC in either case: retention is measured by the eval
-    harness, on the eval split, through `grace.detectors.adapted`. This is the
-    in-loop signal only -- cosine to the clean target, mean gate, decision
-    alignment and posterior spread, so a run that helps L1 while wrecking L3 is
-    visible before it ends.
+    Which of those epochs get scored is what `epoch` selects:
+
+        epoch=e     -- score epoch e alone, the draw training just finished.
+                      One pass per val cache instead of fourteen, and every
+                      mid-run point is a like-for-like read of the same axis.
+        epoch=None  -- score every rendered epoch. The end-of-run pass, where
+                      the full sweep is paid once and `validation` stays
+                      comparable to every summary.json written before this.
+
+    Each row carries the alignment metrics (cosine to clean, gate, posterior
+    spread) and the detection metrics (`auc_*`, `acc_*` for the degraded,
+    adapted and clean views, plus `retention`). The detection numbers are the
+    in-loop echo of the eval harness, not a replacement for it: the harness
+    scores the eval split through `grace.detectors.adapted`, and that is the
+    number that gets reported.
     """
     out = {}
     held = [e for e in cache.epochs() if e >= min(val_epochs(1))]
@@ -324,9 +426,12 @@ def validate(cfg, adapter, split, cache, manifest, severity_head=None, val_sets=
         else {"note": "no validation epochs rendered"}
     )
     for name, val_cache, val_manifest in list(val_sets or []):
-        out[f"held_out_images/{name}"] = _alignment(
-            cfg, adapter, split, val_cache, val_manifest,
-            list(val_cache.epochs()), severity_head,
+        rendered = tuple(val_cache.epochs())
+        chosen = list(rendered) if epoch is None else [e for e in (epoch,) if e in rendered]
+        out[f"held_out_images/{name}"] = (
+            _alignment(cfg, adapter, split, val_cache, val_manifest, chosen, severity_head)
+            if chosen
+            else {"note": f"epoch {epoch} is not rendered under this val cache"}
         )
     return out
 

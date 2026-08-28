@@ -6,6 +6,9 @@ toy split and a handful of generated images, so the plumbing is exercised withou
 needing any vendored detector weights.
 """
 
+import json
+import shutil
+
 import numpy as np
 import pytest
 import torch
@@ -13,7 +16,14 @@ from PIL import Image
 
 from grace.cache.reader import FeatureCache
 from grace.cache.schedule import EpochSchedule, val_epochs
-from grace.cache.spec import CacheSpec, sha_manifest, sha_preprocess
+from grace.cache.spec import (
+    CLEAN_VIEW,
+    DONE_FILE,
+    CacheSpec,
+    sha_manifest,
+    sha_preprocess,
+    view_name,
+)
 from grace.cache.writer import build_cache
 from pipeline.degrade.conditions import load_grid
 from tests.fixtures import SPECS, ToySplit, write_images
@@ -151,3 +161,120 @@ def test_stochastic_preprocess_is_rejected():
 
     with pytest.raises(ValueError, match="not deterministic"):
         sha_preprocess(_Random())
+
+
+# --- resuming an interrupted multi-view render --------------------------------
+# Views are rendered together now, so `.done` markers only appear at the very
+# end and cannot say how far an interrupted render got. `.progress` is what
+# replaces them, and a checkpoint that is wrong by one shard produces a cache
+# with a hole in it that nothing downstream would notice.
+
+def test_shard_writer_refuses_a_mid_shard_resume():
+    from grace.cache.writer import ShardWriter
+
+    spec = CacheSpec(detector="toy", feature=SPECS["vector"], n=20, shard_size=10)
+    with pytest.raises(ValueError, match="not a multiple of shard_size"):
+        ShardWriter("unused", spec, start_row=15)
+
+
+def test_progress_checkpoints_when_batches_straddle_a_shard(rendered, tmp_path):
+    """`batch_size` need not divide `shard_size`.
+
+    Testing `rows % shard_size == 0` looks equivalent and is not: with a batch
+    that steps over the boundary rather than onto it, the condition is never
+    true and the render checkpoints exactly never. Mid-shard checkpoints in turn
+    are what make `ShardWriter.flush` keeping its memmap open load-bearing --
+    dropping it re-creates the shard with `mode="w+"` and zeroes the rows
+    already in it.
+    """
+    from grace.cache.writer import PROGRESS_FILE, build_cache
+
+    out, manifest, split, schedule, spec = rendered
+    epochs = [0, 1, *val_epochs(1)]
+    root = tmp_path / "straddle"
+    # 24 rows, shards of 10, batches of 7: boundaries fall at 10 and 20, batch
+    # ends at 7, 14, 21, 24. Nothing lands on a boundary.
+    build_cache(split, manifest, root, spec, schedule, epochs,
+                batch_size=7, trunk_batch_size=16, num_workers=0)
+    assert not (root / PROGRESS_FILE).exists()      # cleared on success
+    reference = FeatureCache(out)
+    assert torch.equal(FeatureCache(root).clean(manifest.index),
+                       reference.clean(manifest.index))
+
+
+def test_progress_ignores_a_checkpoint_from_a_different_view_set(tmp_path):
+    """Resuming into a different set of views would interleave two passes."""
+    from grace.cache.writer import _Progress
+
+    _Progress(tmp_path, ["clean", "epoch=000"], 10).record(30)
+    assert _Progress(tmp_path, ["clean", "epoch=000"], 10).resume_row() == 30
+    assert _Progress(tmp_path, ["clean", "epoch=001"], 10).resume_row() == 0
+    assert _Progress(tmp_path, ["clean", "epoch=000"], 20).resume_row() == 0
+
+
+def test_an_interrupted_render_resumes_to_the_same_features(rendered, tmp_path):
+    """Truncate a finished cache back to a checkpoint, re-render, compare.
+
+    Stands in for a crash: the shards past the checkpoint are gone, no view
+    carries `.done`, and `.progress` says how far the pass got. What comes out
+    has to be indistinguishable from the uninterrupted render.
+    """
+    from grace.cache.writer import PROGRESS_FILE, build_cache
+
+    out, manifest, split, schedule, spec = rendered
+    reference = FeatureCache(out)
+    epochs = [0, 1, *val_epochs(1)]
+
+    partial = tmp_path / "partial"
+    shutil.copytree(out, partial)
+    kept_shards = 1                       # of N_IMAGES/shard_size = 24/10 -> 3
+    for view in [CLEAN_VIEW, *(view_name(e) for e in epochs)]:
+        (partial / view / DONE_FILE).unlink()
+        for shard in sorted((partial / view).glob("feats_*.npy"))[kept_shards:]:
+            shard.unlink()
+    (partial / PROGRESS_FILE).write_text(
+        json.dumps({
+            "views": [CLEAN_VIEW, *(view_name(e) for e in epochs)],
+            "shard_size": spec.shard_size,
+            "shards_done": kept_shards,
+        }),
+        encoding="utf-8",
+    )
+
+    build_cache(split, manifest, partial, spec, schedule, epochs,
+                batch_size=4, num_workers=0)
+
+    resumed = FeatureCache(partial)
+    assert not (partial / PROGRESS_FILE).exists()
+    for view, getter in [
+        ("clean", lambda c: c.clean(manifest.index)),
+        ("epoch 0", lambda c: c.degraded(manifest.index, 0)),
+        ("epoch 1", lambda c: c.degraded(manifest.index, 1)),
+    ]:
+        got, want = getter(resumed), getter(reference)
+        if not torch.equal(got, want):
+            # Name the rows: a bad checkpoint leaves a contiguous band wrong,
+            # which says immediately whether the resume offset or the render is
+            # at fault. A bare `assert` on two 24x4x16 tensors says neither.
+            differing = (got.view(torch.int16) != want.view(torch.int16))
+            rows = differing.flatten(1).any(1).nonzero().flatten().tolist()
+            raise AssertionError(
+                f"{view}: rows {rows} differ after resuming at row "
+                f"{kept_shards * spec.shard_size}"
+            )
+
+
+def test_a_finished_view_is_not_re_rendered(rendered, tmp_path):
+    """Adding an epoch to a finished cache must not redo the ones it has."""
+    from grace.cache.writer import build_cache
+
+    out, manifest, split, schedule, spec = rendered
+    grown = tmp_path / "grown"
+    shutil.copytree(out, grown)
+    before = (grown / CLEAN_VIEW / "feats_00000.npy").stat().st_mtime_ns
+
+    build_cache(split, manifest, grown, spec, schedule, [0, 1, 2, *val_epochs(1)],
+                batch_size=4, num_workers=0)
+
+    assert (grown / CLEAN_VIEW / "feats_00000.npy").stat().st_mtime_ns == before
+    assert set(FeatureCache(grown).epochs()) == {0, 1, 2, min(val_epochs(1))}

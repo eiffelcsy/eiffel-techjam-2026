@@ -29,7 +29,8 @@ dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
 out_dir: cache/
 n_epochs: 12
 n_val_epochs: 2
-batch_size: 32
+batch_size: 8          # IMAGES per batch; each carries all 15 views
+trunk_batch_size: 128
 num_workers: 8
 
 schedule: {}      # the standard training mix: all eleven transforms, default weights

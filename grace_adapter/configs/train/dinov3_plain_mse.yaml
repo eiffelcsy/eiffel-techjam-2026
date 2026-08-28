@@ -35,12 +35,12 @@ seed: 0
 target_view: clean
 source: cache
 
-batch_size: 64
+batch_size: 256
 warmup_steps: 10
 
 adapter:
   bottleneck: 128
-  n_blocks: 2
+  n_blocks: 3
 
 loss:
   weighting: none   # L_err becomes plain F.mse_loss

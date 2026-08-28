@@ -1,6 +1,13 @@
-# B-Free. batch_size: 1 is a correctness requirement, not a memory knob -- it
+# B-Free. batch_size: 1
+trunk_batch_size: 1 is a correctness requirement, not a memory knob -- it
 # takes images at native resolution, so a batch will not stack. See the harness's
 # configs/runs/zoo_bfree_on_ntire.yaml, which pins it for the same reason.
+#
+# trunk_batch_size: 1
+trunk_batch_size: 1 for the same reason one step further in. An item is now
+# every view of one image, and those DO stack -- they are the same size -- but a
+# trunk forward over fifteen native-resolution images is not something B-Free
+# fits in memory. One at a time.
 #
 # This makes B-Free by far the slowest cache to render, and it is the clearest
 # case for rendering offline: the cost is paid once, in a job that can be
@@ -14,5 +21,6 @@ out_dir: cache/
 n_epochs: 12
 n_val_epochs: 2
 batch_size: 1
+trunk_batch_size: 1
 
 schedule: {}

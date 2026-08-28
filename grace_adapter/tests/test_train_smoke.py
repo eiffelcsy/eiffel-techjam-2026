@@ -20,8 +20,9 @@ from grace.config import (
     AdapterConfig, DiscrepancyConfig, DiscrepancyTrainConfig, LossConfig,
     SamplingConfig, TrainConfig,
 )
-from grace.models.factory import load_adapter
-from grace.train.loop import train_adapter, train_discrepancy
+from grace.cache.reader import FeatureCache
+from grace.models.factory import build_adapter, load_adapter
+from grace.train.loop import train_adapter, train_discrepancy, validate
 from pipeline.degrade.conditions import load_grid
 from tests.fixtures import SPECS, MLPHead, ToySplit, write_images
 
@@ -131,6 +132,122 @@ def test_stochastic_adapter_trains_and_reports_spread(workspace):
     summary = train_adapter(cfg, split, manifest, schedule)
     held = summary["validation"]["held_out_degradations"][f"epoch_{min(val_epochs(1))}"]
     assert "posterior_spread" in held
+
+
+def test_val_every_records_a_row_per_validated_epoch(workspace):
+    """The mid-run curve. `val_history` is additive: `validation` still holds
+    the finished adapter's numbers, so nothing downstream has to ask which
+    schedule a run used to find the number it wants."""
+    root, manifest, split, schedule, cache_dir = workspace
+    cfg = _train_cfg(root, cache_dir, run_id="valevery", val_every=1)
+    summary = train_adapter(cfg, split, manifest, schedule)
+
+    rows = summary["val_history"]
+    assert [r["epoch"] for r in rows] == summary["epochs"]
+    assert all(r["step"] > 0 for r in rows)
+    for row in rows:
+        assert (
+            f"epoch_{min(val_epochs(1))}" in row["held_out_degradations"]
+        )
+    assert "held_out_degradations" in summary["validation"]
+
+
+def test_val_every_off_by_default(workspace):
+    root, manifest, split, schedule, cache_dir = workspace
+    cfg = _train_cfg(root, cache_dir, run_id="noval")
+    assert train_adapter(cfg, split, manifest, schedule)["val_history"] == []
+
+
+def test_val_every_does_not_perturb_training(workspace):
+    """A stochastic adapter draws from the global generator, so an unforked
+    mid-run validation would shift every subsequent training draw. Two runs at
+    the same seed differing only in `val_every` must end bit-identical."""
+    root, manifest, split, schedule, cache_dir = workspace
+    for run_id, every in (("rng_off", 0), ("rng_on", 1)):
+        cfg = _train_cfg(root, cache_dir, run_id=run_id,
+                         adapter={"noise_dim": 4}, val_every=every)
+        train_adapter(cfg, split, manifest, schedule)
+
+    spec = split.feature_spec
+    off = load_adapter(root / "ckpt" / "rng_off" / "last.pt", spec).state_dict()
+    on = load_adapter(root / "ckpt" / "rng_on" / "last.pt", spec).state_dict()
+    for key in off:
+        assert torch.equal(off[key], on[key]), key
+
+
+def test_image_axis_scores_only_the_current_epoch(workspace):
+    """The held-out IMAGE caches carry every rendered epoch, but a mid-run pass
+    wants one draw, not a sweep over all of them -- on the real PoC caches that
+    is 14 passes per val set per validation. The held-out DEGRADATION axis is a
+    different question and is always scored in full."""
+    root, manifest, split, schedule, cache_dir = workspace
+    cfg = _train_cfg(root, cache_dir, run_id="axes")
+    cache = FeatureCache(cache_dir)
+    adapter = build_adapter(split.feature_spec, cfg.adapter)
+    val_sets = [("toy", cache, manifest)]
+    held = {f"epoch_{e}" for e in val_epochs(1)}
+
+    mid = validate(cfg, adapter, split, cache, manifest, None, val_sets, epoch=1)
+    assert list(mid["held_out_images/toy"]) == ["epoch_1"]
+    assert set(mid["held_out_degradations"]) == held
+
+    # epoch=None is the end-of-run pass: the full sweep, paid once, so the
+    # `validation` block stays comparable to every summary written before this.
+    final = validate(cfg, adapter, split, cache, manifest, None, val_sets)
+    assert set(final["held_out_images/toy"]) == {"epoch_0", "epoch_1", *held}
+    assert set(final["held_out_degradations"]) == held
+
+
+def test_unrendered_epoch_notes_rather_than_crashes(workspace):
+    root, manifest, split, schedule, cache_dir = workspace
+    cfg = _train_cfg(root, cache_dir, run_id="missing")
+    cache = FeatureCache(cache_dir)
+    adapter = build_adapter(split.feature_spec, cfg.adapter)
+    out = validate(cfg, adapter, split, cache, manifest, None,
+                   [("toy", cache, manifest)], epoch=99)
+    assert "note" in out["held_out_images/toy"]
+
+
+def test_validation_reports_detection_metrics(workspace):
+    """AUC/accuracy through the frozen head, for all three views. The adapted
+    number is meaningless without the degraded one it must beat and the clean
+    one it is bounded by, so all three are asserted together."""
+    root, manifest, split, schedule, cache_dir = workspace
+    cfg = _train_cfg(root, cache_dir, run_id="detect")
+    summary = train_adapter(cfg, split, manifest, schedule)
+    row = summary["validation"]["held_out_degradations"][f"epoch_{min(val_epochs(1))}"]
+
+    for view in ("degraded", "adapted", "clean"):
+        assert 0.0 <= row[f"auc_{view}"] <= 1.0, view
+        assert 0.0 <= row[f"acc_{view}"] <= 1.0, view
+        assert 0.0 <= row[f"f1_{view}"] <= 1.0, view
+    assert "retention" in row and "threshold" in row
+    # The alignment metrics did not get displaced by the detection ones.
+    assert "cosine_to_clean" in row and "gate" in row
+
+
+def test_accuracy_uses_one_threshold_across_views(workspace):
+    """The harness rule: pick the operating point on clean, apply it unchanged.
+    A per-view threshold would hide exactly the calibration drift these numbers
+    exist to expose."""
+    root, manifest, split, schedule, cache_dir = workspace
+    cfg = _train_cfg(root, cache_dir, run_id="thr")
+    cache = FeatureCache(cache_dir)
+    adapter = build_adapter(split.feature_spec, cfg.adapter)
+    out = validate(cfg, adapter, split, cache, manifest)
+    row = out["held_out_degradations"][f"epoch_{min(val_epochs(1))}"]
+
+    from pipeline.eval.metrics import threshold_from_clean
+    from grace.train.data import build_loader
+
+    scores, labels = [], []
+    for batch in build_loader(cfg, cache, manifest, None, min(val_epochs(1)),
+                              shuffle=False):
+        scores.append(split.head(batch["f_clean"].float()).detach().numpy())
+        labels.append(batch["label"].numpy())
+    import numpy as np
+    expected = threshold_from_clean(np.concatenate(scores), np.concatenate(labels))
+    assert row["threshold"] == pytest.approx(expected)
 
 
 def test_stage_two_trains_against_a_frozen_adapter(workspace):

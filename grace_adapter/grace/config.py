@@ -134,8 +134,21 @@ class CacheConfig:
     n_val_epochs: int = 2
     dtype: str = "float16"
     shard_size: int = 50_000
-    batch_size: int = 32
+    batch_size: int = 8
+    """IMAGES per batch, and one image is now every view of it.
+
+    A worker decodes once and returns `1 + n_epochs + n_val_epochs` preprocessed
+    views, so in-flight memory is `batch_size x n_views x input`, not
+    `batch_size x input`. Small on purpose: 8 images at 15 views of 3x224x224 is
+    72 MB a batch before prefetching. `trunk_batch_size`, not this, is what
+    keeps the GPU efficient."""
+    trunk_batch_size: int = 128
+    """Samples per trunk forward. The views of a batch are flattened and fed in
+    chunks of this, so a small `batch_size` does not starve the GPU: DINOv3
+    ViT-S/16 measures 715 img/s at 32 and 1006 at 128."""
     num_workers: int = 8
+    """Decode, degrade and preprocess all happen here. This is the knob that
+    sets render throughput -- see `grace.cache.writer`."""
     max_images: int | None = None
     device: str = "auto"
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
@@ -203,6 +216,20 @@ class TrainConfig:
     """>0 writes intermediate stage-1 checkpoints. Experiment E4 trains the
     discrepancy head against each of them to see whether the adapter erases
     forensic evidence as it improves."""
+    val_every: int = 0
+    """>0 runs the held-out validation block every N epochs during training,
+    rather than only once at the end.
+
+    Same `epoch % N == 0` convention as `checkpoint_every`, over the same cache
+    epoch ids, so setting both to the same value pairs every intermediate
+    checkpoint with the numbers it scored -- which is what an E4 curve wants.
+    The final validation is unconditional either way, so `val_every: 0` (the
+    default) is exactly the old behaviour.
+
+    Not free: each pass scores every held-out degradation epoch and every row of
+    every `val_datasets` cache at `sampling.k_eval` draws. Seconds on the PoC
+    cache; worth timing against the epoch before setting it to 1 on a large one.
+    """
     detector: str = ""
     """The harness detector config. Needed even in `source: cache` mode: the
     frozen head is what `head_kl` and the Jacobian weighting differentiate
@@ -239,6 +266,13 @@ class TrainConfig:
                 f"val_datasets has {len(self.val_datasets)} entry(s) but "
                 f"val_cache_dirs has {len(self.val_cache_dirs)}. They are parallel "
                 f"lists -- each dataset needs the cache root it was rendered to."
+            )
+        # Negative would silently never fire -- `% 0` itself is guarded by the
+        # `and` at the call site, which is what makes 0 the "end only" value.
+        if self.val_every < 0:
+            raise ValueError(
+                f"val_every must be >= 0, got {self.val_every}. 0 means "
+                f"'validate once, at the end of the run'."
             )
         # `step % 0` is a ZeroDivisionError several minutes into a run rather
         # than at second zero, and 0 is the natural typo for "never log".

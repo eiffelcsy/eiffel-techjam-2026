@@ -39,6 +39,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from tqdm import tqdm
 
 from grace.cache.reader import FeatureCache
 from grace.train import diagnostics as D
@@ -109,11 +110,17 @@ def main():
     split = load_split(args)
 
     report = {"cache": str(args.cache), "dataset": dataset.name, "epochs": {}}
-    for epoch in epochs:
+    for n, epoch in enumerate(epochs, start=1):
         recipes = cache.recipes(epoch)
         per_batch, drift_all, level_all, transform_all = [], [], [], []
 
-        for start in range(0, len(index), args.batch_size):
+        # The bar counts the epoch as well as the batch. Nothing is printed and
+        # nothing is written until every epoch is done, and `--epochs` defaults
+        # to *all* of them -- so on a full cache this loop runs for a long time
+        # with no other sign of life, and "how many epochs left" is the question
+        # you actually have while watching it.
+        batches = range(0, len(index), args.batch_size)
+        for start in tqdm(batches, desc=f"epoch {epoch} ({n}/{len(epochs)})", leave=False):
             sel = index[start : start + args.batch_size]
             f_clean = cache.clean(sel).float()
             f_deg = cache.degraded(sel, epoch).float()

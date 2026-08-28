@@ -196,6 +196,15 @@ def test_log_every_zero_is_rejected_at_load(tmp_path, loader, body):
         loader(path)
 
 
+def test_negative_val_every_is_rejected_at_load(tmp_path):
+    """0 is the documented "validate once, at the end". A negative would just
+    never fire, silently producing a run with no mid-training curve at all."""
+    path = tmp_path / "bad.yaml"
+    path.write_text("run_id: x\ncache_dir: y\nval_every: -1\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="val_every"):
+        load_train_config(path)
+
+
 DATASET_CONFIGS = sorted((HARNESS / "configs" / "datasets").glob("*.yaml"))
 
 

@@ -7,8 +7,15 @@
 first: the difference between a vector layout and RINE's `layers` layout is 24x,
 and finding that out after four hours of GPU time is avoidable.
 
-Resumable at view granularity -- rerun after an interruption and finished views
-are skipped.
+Resumable at shard granularity -- rerun after an interruption and it picks up at
+the last checkpoint. Views already carrying `.done` from a completed earlier
+render are skipped entirely, so adding epochs to a finished cache renders only
+the new ones.
+
+Every view of an image is rendered from one decode, and the degradations run on
+the GPU. Before running this against a full manifest for the first time on new
+hardware, run `scripts/validate_cuda_degrade.py` on the same config: it checks
+that the GPU degradations put the trunk in the same place the PIL ones did.
 """
 
 import argparse
@@ -81,8 +88,8 @@ def main():
 
     build_cache(
         split, manifest, root, spec, schedule, epochs,
-        batch_size=cfg.batch_size, num_workers=cfg.num_workers,
-        device=resolve_device(cfg.device),
+        batch_size=cfg.batch_size, trunk_batch_size=cfg.trunk_batch_size,
+        num_workers=cfg.num_workers, device=resolve_device(cfg.device),
     )
     print(f"done: {root}")
 

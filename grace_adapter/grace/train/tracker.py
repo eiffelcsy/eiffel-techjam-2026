@@ -114,7 +114,7 @@ class WandbTracker(NullTracker):
         unsortable blob.
         """
         def _set():
-            for key, value in _flatten(metrics).items():
+            for key, value in flatten(metrics).items():
                 self._run.summary[key] = value
 
         self._guard(_set)
@@ -162,15 +162,21 @@ def flatten_config(config) -> dict:
     """
     if is_dataclass(config) and not isinstance(config, type):
         config = asdict(config)
-    return _flatten(config)
+    return flatten(config)
 
 
-def _flatten(d, prefix: str = "") -> dict:
+def flatten(d, prefix: str = "") -> dict:
+    """Nested dict -> flat `a/b: value` pairs.
+
+    Public because stage 1 logs the same nested validation block *as steps*
+    when `val_every` is set and *as summary* at the end, and both have to key it
+    identically or the curve and the runs-table column would not agree.
+    """
     out = {}
     for key, value in (d or {}).items():
         name = f"{prefix}{key}"
         if isinstance(value, dict):
-            out.update(_flatten(value, f"{name}/"))
+            out.update(flatten(value, f"{name}/"))
         else:
             out[name] = value
     return out

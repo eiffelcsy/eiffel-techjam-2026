@@ -39,13 +39,21 @@ seed: 0
 target_view: clean
 source: cache
 
-batch_size: 64
+batch_size: 256
 warmup_steps: 10
 
 adapter:
   bottleneck: 128
-  n_blocks: 2
+  n_blocks: 3
   noise_dim: 16
+
+loss:
+  w_err: 2.0
+  w_cos: 0.5
+  eps_iso: 0.01
+  lam_sw: 0.05      # dinov3_clean's value -- noise_dim earns its keep only with SW on
+  n_proj: 384
+  lam_id: 0.1
 
 sampling:
   k_train: 2

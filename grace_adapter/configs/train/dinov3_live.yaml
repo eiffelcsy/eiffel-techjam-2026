@@ -18,7 +18,7 @@
 # minutes, and cap it with `--epochs` if that is too much for a control.
 #
 # `batch_size` counts IMAGES here, not cached features, which is why it drops
-# from 64 to 32: the trunk is back in the loop and the memory profile is the
+# from 256 to 32: the trunk is back in the loop and the memory profile is the
 # detector's, not the adapter's. The `val_cache_dirs` are still caches -- stage-1
 # validation reads pre-rendered features whatever the training source is.
 #
@@ -49,9 +49,15 @@ warmup_steps: 10
 
 adapter:
   bottleneck: 128
-  n_blocks: 2
+  n_blocks: 3
 
-loss: {}
+loss:
+  w_err: 2.0
+  w_cos: 0.5
+  eps_iso: 0.01
+  lam_sw: 0.05
+  n_proj: 384
+  lam_id: 0.1
 
 wandb:
   enabled: true

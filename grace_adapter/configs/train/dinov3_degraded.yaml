@@ -33,15 +33,27 @@ epochs: 12
 seed: 0
 target_view: degraded
 source: cache
+checkpoint_every: 2
 
-batch_size: 64
+# Matches arm B's cadence so the two held-out curves are sampled at the same
+# epochs and can be plotted against each other. Validation forks the RNG, so
+# setting it does not perturb a single training draw.
+val_every: 4
+
+batch_size: 256
 warmup_steps: 10
 
 adapter:
   bottleneck: 128
-  n_blocks: 2
+  n_blocks: 3
 
-loss: {}
+loss:
+  w_err: 2.0
+  w_cos: 0.5
+  eps_iso: 0.01
+  lam_sw: 0.05
+  n_proj: 384
+  lam_id: 0.1
 
 # Optional. `--wandb --wandb-group <experiment>` on the command line does the
 # same thing without editing a file, which is what a sweep wants.

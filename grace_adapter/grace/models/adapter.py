@@ -27,9 +27,6 @@ Four requirements, in priority order:
    how much to apply. Ungated, it over-corrects clean inputs -- the failure mode
    that trades away the number people actually quote.
 3. **Layout-agnostic**, as above.
-4. **Tiny.** A few M parameters against a frozen 300M-1B trunk. The claim is that
-   the evidence is still present in the degraded features and needs only to be
-   re-pointed; if a large adapter is needed, that claim is false.
 
 Two optional inputs, both no-ops when absent and both identity-preserving at
 init:
