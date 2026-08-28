@@ -54,7 +54,7 @@ def main():
     )
 
     detector = build_detector(detector_cfg)
-    split = build_split(detector, cfg.split)
+    split = build_split(detector, cfg.split, **cfg.split_args)
     schedule = EpochSchedule(
         grid=load_grid(cfg.schedule.grid_file, cfg.schedule.transforms),
         level_weights={int(k): v for k, v in cfg.schedule.level_weights.items()},
@@ -71,6 +71,10 @@ def main():
         schedule_sha=schedule.fingerprint(),
         detector_sha=sha_detector(detector_cfg),
         preprocess_sha=sha_preprocess(split.preprocess_fn()),
+        # Empty unless `split_args.tap_blocks` was set, so a cache config that
+        # says nothing about taps renders exactly what it always did.
+        taps=split.taps(),
+        tap_feature=split.tap_spec(),
     )
 
     root = f"{cfg.out_dir.rstrip('/')}/{detector_cfg.name}"
@@ -80,6 +84,13 @@ def main():
         f"features   {spec.feature.layout}{spec.feature.shape} {spec.feature.dtype}"
         f"  ({spec.feature.bytes_per_image() / 1024:.1f} KB/image/view)"
     )
+    if spec.taps:
+        print(
+            f"taps       {list(spec.taps)} {spec.tap_feature.shape} "
+            f"({spec.tap_feature.bytes_per_image() / 1024:.1f} KB/image/view, "
+            f"{spec.tap_feature.bytes_per_image() / spec.feature.bytes_per_image():.1f}x "
+            f"the features)"
+        )
     print(f"images     {spec.n}")
     print(f"views      {len(epochs) + 1}  (clean + {cfg.n_epochs} train + {cfg.n_val_epochs} val)")
     print(f"total      {gb:.1f} GB -> {root}")

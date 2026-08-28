@@ -2,19 +2,28 @@
 #
 # `weighting: none` makes L_err exactly `F.mse_loss` (README section 3: the
 # error term is written as a blend so eps_iso: 1.0 and weighting: none are the
-# same objective), and lam_kl goes back to v1's 0.5 because head_kl was the only
-# decision-aware term GRACE v1 had. So this is provably the v1 objective, not an
-# approximation of it -- tests/test_losses.py pins the equivalence.
+# same objective) -- tests/test_losses.py pins the equivalence.
+#
+# This arm isolates the WEIGHTING and nothing else, so every other loss key is
+# dinov3_clean.yaml's. It is deliberately not "the GRACE v1 objective": v1 also
+# carried lam_kl: 0.5 and the LossConfig defaults, and changing those here would
+# confound the one key this experiment is about. A v1-objective baseline is a
+# separate arm and should be added as one if it is wanted.
 #
 # Read `cos_decision` in summary.json's history against dinov3_clean's. If this
 # run sits near 0 while the weighted one climbs, the adapter here is spending its
 # capacity on feature directions the frozen head cannot see, which is the
 # empirical motivation for the whole weighting term.
 #
+# That readout only exists because loop.py builds a diagnostic Jacobian on
+# logging steps when the loss did not need one. `weighting: none` switches off
+# the loss's `j`, and the metric would otherwise be absent from exactly the arm
+# the figure is about.
+#
 #   python scripts/train_adapter.py configs/train/dinov3_plain_mse.yaml
 #
-# Identical to dinov3_clean.yaml except `loss`. Any other difference makes this
-# not an ablation.
+# Identical to dinov3_clean.yaml except `loss.weighting`. Any other difference
+# makes this not an ablation.
 
 run_id: dinov3_plain_mse
 
@@ -35,6 +44,11 @@ seed: 0
 target_view: clean
 source: cache
 
+# Matches the baseline's cadence so the two held-out curves are sampled at the
+# same epochs and can be plotted against each other.
+checkpoint_every: 2
+val_every: 4
+
 batch_size: 256
 warmup_steps: 10
 
@@ -43,8 +57,14 @@ adapter:
   n_blocks: 3
 
 loss:
-  weighting: none   # L_err becomes plain F.mse_loss
-  lam_kl: 0.5       # v1's weight -- head_kl was the only decision-aware term then
+  weighting: none   # THE ablated key. L_err becomes plain F.mse_loss.
+  w_err: 2.0        # every other value below is dinov3_clean.yaml's, repeated
+  w_cos: 0.5        # verbatim rather than inherited: left to the LossConfig
+  eps_iso: 0.01     # defaults these would silently differ from the baseline in
+  lam_sw: 0.05      # six keys and the comparison would mean nothing.
+  n_proj: 384       # (eps_iso is inert under `weighting: none` -- the plain-MSE
+  lam_id: 0.1       # branch returns before reading it -- but it is set anyway so
+                    # a diff against the baseline shows exactly one changed key.)
 
 wandb:
   enabled: true

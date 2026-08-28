@@ -290,8 +290,11 @@ def test_stage_one_then_stage_two(poc_run):
     )
     s2 = train_discrepancy(disc, split, manifest)
     assert (root / "ckpt" / "s2" / "discrepancy.pt").exists()
-    for row in s2["validation"].values():
-        assert set(row) == {"auc_main", "auc_aux", "auc_fused"}
+    # Axis first, then epoch -- see train_discrepancy's `validation`.
+    assert "held_out_degradations" in s2["validation"]
+    for axis in s2["validation"].values():
+        for row in axis.values():
+            assert set(row) == {"auc_main", "auc_aux", "auc_fused"}
 
 
 def test_adapter_parameter_budget_is_small(poc_run):

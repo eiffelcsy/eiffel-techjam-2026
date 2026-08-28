@@ -1,0 +1,79 @@
+# E3d sweep, rung 3 of 3 -- lam_id at a weight where the term actually exists.
+#
+# At dinov3_clean's `lam_id: 0.1` the identity term is 0.051% of the objective
+# (measured: identity ~= 1.19e-4 against a 0.0232 total). Unlike lam_sw, that
+# number has NOT been confirmed by an ablation -- dinov3_no_id.yaml is the run
+# that decides whether this ladder is worth the compute, and it should be run
+# FIRST. Share of loss is not the same as influence on the solution: a small
+# term can still steer a direction nothing else constrains.
+#
+#   lam_id     predicted share of the objective
+#   0.0        --      <- dinov3_no_id.yaml, the ablation
+#   0.1        0.05%   <- dinov3_clean.yaml, the baseline
+#   2          1.01%
+#   8          3.93%
+#   32        14.07%   <- this file
+#
+# Shares are first-order: they hold `identity` at its v1.2 convergence value.
+# This term is the shakier of the two to predict, because its raw value GROWS
+# 3.7x over training (3.2e-5 at epoch 0 to 1.19e-4 at epoch 11) as the adapter
+# drifts from identity -- so a larger weight will suppress it early and move the
+# equilibrium further than the table suggests. Read the realised share out of
+# each run's own history.
+#
+# What this term trades: L_identity penalises deviation from doing nothing, so
+# it directly opposes the correction. Expect hard-split gap recovery to FALL as
+# lam_id rises, toward 0% at the top of the ladder. That collapse is the signal
+# the sweep is looking for, not a failure -- the question is whether there is a
+# rung where retention improves before the correction dies.
+#
+# Read on diagnostics, not AUC: `identity`, `cosine_to_clean`, `cos_decision`,
+# and the realised share are measured over 260 logged steps, while hard-split
+# AUC has a 0.0081 standard error and cannot resolve differences at the 0.001
+# level. Use AUC and retention only as a guardrail.
+#
+#   python scripts/train_adapter.py configs/train/dinov3_sweep_id_32.yaml
+#
+# Identical to dinov3_clean.yaml except `loss.lam_id`.
+
+run_id: dinov3_sweep_id_32
+
+detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
+split: grace.splits.dinov3.DINOv3Split
+dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
+
+val_datasets:
+  - ../eval_pipeline/configs/datasets/ntire_val.yaml
+  - ../eval_pipeline/configs/datasets/ntire_val_hard.yaml
+val_cache_dirs:
+  - cache_val/dinov3-ntire
+  - cache_val_hard/dinov3-ntire
+
+cache_dir: cache/dinov3-ntire
+epochs: 12
+seed: 0
+target_view: clean
+source: cache
+
+checkpoint_every: 2
+val_every: 4
+
+batch_size: 256
+warmup_steps: 10
+
+adapter:
+  bottleneck: 128
+  n_blocks: 3
+
+loss:
+  w_err: 2.0
+  w_cos: 0.5
+  eps_iso: 0.01
+  lam_sw: 0.05
+  n_proj: 384
+  lam_id: 32.0      # THE swept key
+
+wandb:
+  enabled: true
+  project: grace-adapter
+  group: e3d_id_sweep

@@ -156,7 +156,7 @@ degradation would have partly solved the problem GRACE exists to solve.
 |---|---|
 | `schedule.py` | `EpochSchedule`: `(index, epoch) → Condition/Recipe/severity`, pure. `VAL_EPOCH_OFFSET = 10_000`. |
 | `spec.py` | `CacheSpec` + four fingerprints (`manifest`, `schedule`, `detector`, `preprocess`). |
-| `writer.py` | `ShardWriter`, `build_view`, `build_cache` — offline render, resumable per view. |
+| `writer.py` | `ShardWriter`, `MultiViewDataset`, `build_cache` — offline render, one decode per image, every view of it built in the worker; resumable per shard. |
 | `reader.py` | `FeatureCache` — memmap random access by *manifest index*, opened per worker. |
 
 ### The models — `grace/models/`
@@ -167,7 +167,7 @@ degradation would have partly solved the problem GRACE exists to solve.
 | `severity.py` | `SeverityHead` — degraded features → severity ∈ [0,1]. Target comes from the sampler. |
 | `discrepancy.py` | `DiscrepancyHead` (reads Δ) and `FusedHead` (`logit + β·aux`, β=0 at init). |
 | `factory.py` | The **only** layout branch (`gate_shape_for`), plus `save_adapter` / `load_adapter`. |
-| `ladder.py` | FUTURE — multi-seam adapter. Blueprint, raises `NotImplementedError`. |
+| `ladder.py` | `LadderAdapter` — the seam correction, informed by intermediate taps. |
 | `prompts.py` | FUTURE — degradation prompts. Blueprint, raises `NotImplementedError`. |
 
 ### Training — `grace/train/`
@@ -230,7 +230,7 @@ bash scripts/poc.sh
 The general path, for a detector that arrives with its head already trained:
 
 ```bash
-# 1. Render, once per detector. Resumable at view granularity.
+# 1. Render, once per detector. Resumable at shard granularity.
 python scripts/build_cache.py configs/cache/rine.yaml --dry-run
 python scripts/build_cache.py configs/cache/rine.yaml
 
@@ -613,17 +613,35 @@ The freeze check runs **every step**, not once at startup:
             )
 ```
 
-And the forward-compatibility hook for the future ladder adapter, empty today:
+And the tap hooks the ladder adapter reads. All three default to "no taps", so a
+split that ignores them behaves exactly as it did before taps existed:
 
 ```python
     def taps(self) -> tuple[str, ...]:
-        """Names of intermediate activations this split can expose.
-
-        Empty for every split today. FUTURE: the ladder adapter consumes these,
-        and `CacheSpec.taps` already carries the field so enabling them adds
-        cache views rather than invalidating the on-disk format."""
+        """Names of the intermediate activations this split exposes, in order:
+        `("block00", "block02", ...)`. Named by what was read, since these go
+        into `CacheSpec.taps` and are what a stale cache is diagnosed against."""
         return ()
+
+    def tap_spec(self) -> FeatureSpec | None:
+        """`(len(taps()), tap_dim)`, layout `layers`. One tensor rather than a
+        dict, so the cache writer and reader need no second code path."""
+        return None
+
+    def trunk_with_taps(self, x) -> tuple[Tensor, Tensor | None]:
+        """Seam features AND taps, in ONE forward pass -- the taps are
+        activations the trunk already computed and threw away.
+
+        `f` must be bit-identical to `trunk(x)`. `verify_taps` asserts it, and
+        that assertion is what makes a ladder arm comparable with the plain
+        adapter's numbers at all."""
+        return self.trunk(x), None
 ```
+
+`DINOv3Split(detector, tap_blocks=[0, 2, 4, 6, 9])` implements them. Every tap is
+pushed through `backbone.norm`: that is what makes a tap at the last block equal
+the seam exactly, and what keeps the taps on a comparable scale — raw activations
+span ~5.8 to ~1691 max-abs across depth on ViT-S/16.
 
 ### 6.3 `verify.py` — the contract, checked rather than trusted
 
@@ -1052,9 +1070,9 @@ class CacheSpec:
     detector_sha: str = ""
     preprocess_sha: str = ""
     taps: tuple[str, ...] = field(default_factory=tuple)
-    """FUTURE (`grace.models.ladder`). Present from the first render so that
-    enabling intermediate taps later *adds views* to an existing cache rather
-    than changing its on-disk format."""
+    """Names of the taps rendered alongside the features, from
+    `SplitDetector.taps()`. Empty for a cache with no tap views, which is every
+    cache rendered before the ladder existed."""
 ```
 
 What each fingerprint covers:
@@ -1282,32 +1300,80 @@ class _EpochCondition:
         return self.schedule.apply(img, index, self.epoch)
 ```
 
-`build_cache` is the resumable driver:
+**Images are the outer loop, views the inner.** A DataLoader worker decodes an
+image once and returns every view of it, degraded and preprocessed:
 
 ```python
-def build_cache(split, manifest, root, spec, schedule, epochs,
-                batch_size=32, num_workers=8, device=None) -> CacheSpec:
-    """Render the clean view plus every requested epoch, resumably.
-
-    Resumable at view granularity: a view whose `.done` marker exists is skipped.
-    Rendering a dozen epochs of a large split is hours, and it will be
-    interrupted."""
-    root = Path(root)
-    root.mkdir(parents=True, exist_ok=True)
-    np.save(root / INDEX_FILE, np.asarray(manifest.index, dtype=np.int64))
-
-    views = [None, *epochs]
-    for epoch in views:
-        view_dir = root / view_name(epoch)
-        if is_complete(view_dir):
-            continue
-        build_view(split, manifest, view_dir, spec, schedule=schedule, epoch=epoch,
-                   batch_size=batch_size, num_workers=num_workers, device=device)
-
-    spec = replace(spec, views=tuple(view_name(e) for e in views))
-    spec.save(root)
-    return spec
+class MultiViewDataset(Dataset):
+    def __getitem__(self, i):
+        index = int(self.index[i])
+        image = load_normalized(self.paths[i])          # ONE decode
+        views = []
+        for epoch in self.epochs:                       # None = the clean view
+            if epoch is None:
+                views.append(self.preprocess(image))
+            else:
+                degraded, _ = self.schedule.apply(image, index, epoch)
+                views.append(self.preprocess(degraded))
+        return torch.stack(views), index                # (V, *input_shape)
 ```
+
+The arrangement this replaced ran a full pass per view, decoding the dataset
+once per view — 15 decodes of each of 277,643 images for the DINOv3 cache.
+Decoding is 7.4 ms an image and was 13.5 ms of every 66.9 ms image-view, thrown
+away fourteen times in fifteen.
+
+Measured end to end, 500 NTIRE images (1.82 MP mean) × 15 views on an RTX
+3060 Ti:
+
+| render loop | wall | per image-view |
+|---|---|---|
+| per-view decode, PIL in 8 workers | 533 s | 71.1 ms |
+| one decode, PIL in 8 workers (this) | 203 s | 27.1 ms |
+| one decode, degradation on CUDA | 128 s | 17.1 ms |
+
+The degradation staying in the workers is therefore a **deliberate trade, not
+the fastest option**. A CUDA implementation of the eleven transforms is faster
+again, and it costs a second implementation of each to keep in step; making one
+bit-identical to Pillow means porting Pillow's own arithmetic — the three-pass
+extended box blur with its float32 radius, `precompute_coeffs` in 22-bit fixed
+point, the integer degenerate images. It was built and validated (≥ 0.99998
+feature cosine on ten of eleven transforms, the eleventh stochastic and
+indistinguishable from a re-draw) and then dropped as not worth carrying.
+
+Do not expect a GPU render to scale past that 128 s: three concurrent CUDA
+processes measured 11 ms → 350 ms each (context thrash, no MPS on consumer
+Windows), and same-shape batching buys 1.0–1.1× because the ops are
+bandwidth-bound rather than launch-bound.
+
+Note what the workers do *not* give you either: eight of them scale this
+workload about **2.4×, not 8×** — PIL degradation on 2 MP images is
+memory-bound and the machine has six physical cores. Any estimate that divides
+single-threaded cost by `num_workers` is wrong by roughly 3×.
+
+`batch_size` therefore counts **images**, and one image is `V` preprocessed
+views, so it is small (8) and in-flight memory is `batch_size × V × input`.
+`trunk_batch_size` is what keeps the GPU fed: the batch's views are flattened
+and pushed through the trunk in chunks of 128, since DINOv3 ViT-S/16 measures
+715 img/s at 32 and 1006 at 128.
+
+```python
+    flat = views.flatten(0, 1).to(device, non_blocking=True)
+    features = torch.cat([
+        split.trunk(flat[lo : lo + trunk_batch_size])
+        for lo in range(0, len(flat), trunk_batch_size)
+    ]).view(images, n_views, *spec.feature.shape)
+
+    for view, writer in enumerate(writers):
+        writer.write(features[:, view].to(spec.feature.torch_dtype).cpu().numpy())
+```
+
+What the inversion costs is resume granularity: a view is no longer finished
+before the next starts, so "skip the views with a `.done`" cannot recover an
+interrupted render. `.progress` at the cache root replaces it, recording the
+number of complete shards — the point at which every open view has been flushed
+— together with the exact set of views the pass was rendering. Resuming into a
+different view set restarts from row 0 rather than interleaving two passes.
 
 ### 7.4 `reader.py` — `FeatureCache`
 
@@ -1806,39 +1872,64 @@ def load_adapter(checkpoint: str, spec: FeatureSpec | None = None) -> GatedResid
 The `extra` dict is how the severity head travels with the adapter (§9.5) and how
 E4's `step` marker is recorded.
 
-### 8.5 `ladder.py` and `prompts.py` — FUTURE, blueprint only
+### 8.5 `ladder.py` — the correction, informed by intermediate taps
 
-Both raise `NotImplementedError`. They are in the tree because their docstrings
-are the design, and because one of them motivated a forward-compatibility
-decision that was cheap now and expensive to retrofit.
-
-**`ladder.py`** — hook 4–6 intermediate blocks, project, fuse into the correction
-at the seam (side-tuning / LST):
+`LadderAdapter` subclasses `GatedResidualAdapter` and adds one thing: a read of
+the trunk's intermediate activations, which the forward pass already computed.
 
 ```python
-class LadderAdapter(nn.Module):
-    """FUTURE. Correction at the seam, informed by intermediate taps.
-
-    Sketch of the intended shape:
-
-        corr = base_block(f_deg)
-        for name, tap in taps.items():
-            corr = corr + gate[name] * proj[name](pool(tap))
-        return f_deg + g * corr
-
-    Each `proj` is a LayerNorm + Linear from the tap's width to `dim`; each tap
-    gets its own gate, zero-initialized so the ladder starts as the plain
-    adapter and the identity guarantee is unaffected."""
-
-    def __init__(self, spec: FeatureSpec, taps: tuple[str, ...], **cfg):
-        raise NotImplementedError("FUTURE -- see module docstring")
+corr_i = fc2_i( act( fc1_i(LN(f)) + rung_i(summary(taps)) ) )
+y      = f + g * sum_i corr_i
 ```
 
-Its prerequisites, in order: (1) `SplitDetector.taps()` returns tap names —
-the hook exists today and returns `()`; (2) taps must be cached like features
-are, or the ladder forfeits the no-trunk-in-the-loop property — `CacheSpec.taps`
-already carries the field, so taps become *additional views* rather than a format
-change; (3) storage, since k taps multiply the degraded cache by roughly k.
+**Why it earns its storage.** Degradation does not corrupt the trunk uniformly,
+so a correction computed only from the final features has to *infer* which stage
+the damage entered at. Measured on the PoC — identify which of nine L1 transforms
+hit an image, chance 0.111:
+
+| what the adapter can read | shape only | with magnitude |
+|---|---|---|
+| seam only (the plain adapter) | 0.137 | **0.376** |
+| CLS, all 13 hidden states | 0.748 | 0.874 |
+| patchmean, all 13 hidden states | 0.748 | 0.861 |
+| cls+patchmean, blocks (0, 2, 4, 6, 9) | 0.822 | **0.896** |
+
+Two things that table settles against the obvious guess: **five taps beat all
+thirteen**, because the profiles separate in the first third and run near-parallel
+after block 6; and **CLS alone is not enough**, because the traces are local, so
+the taps are pooled exactly as the seam is (`detector.pool_tokens`). See
+`DEFAULT_TAP_BLOCKS` in `grace/splits/dinov3.py`.
+
+**Where the taps enter.** Not added to the correction, as the original blueprint
+sketched, but to the **bottleneck** — the same place `z` enters. A term added to
+`corr` is a bias, constant in `f`, and can only translate the correction; the
+ladder's job is to say what *kind* of correction the damage calls for, which
+means modulating a function of `f`.
+
+**Identity at init is unaffected**, and not by luck: `fc2` is zero-init, so the
+correction is identically zero however the bottleneck is perturbed. `tap_gate`
+starts at `GATE_INIT` rather than at zero — a hard zero would put a second
+multiplicative zero in front of `tap_proj` and leave it gradient-starved.
+
+**The parameter budget is the claim**, so the ladder shares one `tap_proj` across
+taps and gives each only a gate: ~0.22M on top of the base adapter at K=5,
+`tap_dim=64`, `bottleneck=256`, `n_blocks=2`.
+
+`tap_gate()` is the interpretability output, logged every step as `tap_gate/*`:
+mean it over `tap_dim` and you have "how much does the correction lean on block
+k", per degradation. It is the per-layer gate the RINE `layers` split promised,
+on a detector that needs no `layers` head to produce it.
+
+**Storage is the binding constraint.** Taps are cached as additional views under
+`taps/`, one per feature view — clean included, because `identity_loss` runs the
+adapter on clean features. Five 768-wide taps are 7.5 KB per image per view
+against the seam's 1.5 KB, so the PoC tap cache is 38.4 GB against 6.4 GB. Run
+`build_cache.py --dry-run` first; it now prints a tap line.
+
+### 8.6 `prompts.py` — FUTURE, blueprint only
+
+Raises `NotImplementedError`. It is in the tree because its docstring is the
+design.
 
 **`prompts.py`** — replaces the scalar-severity FiLM, which is thin: one number
 cannot distinguish "JPEG at quality 30" from "blur at sigma 2.0", yet those need
@@ -3320,11 +3411,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "eval_pipeline"))
 | Invariant | Enforced by | When |
 |---|---|---|
 | `head(trunk(x)) == detector(x)` | `verify_split` | every split's `__init__` |
-| Trunk and head stay frozen | `SplitDetector.assert_frozen` | **every training step**, both stages, and `build_view` |
+| Trunk and head stay frozen | `SplitDetector.assert_frozen` | **every training step**, both stages, and `build_cache` |
 | Preprocessing is deterministic | `sha_preprocess` | cache build, at startup |
 | Cache matches the manifest / schedule / detector / preprocess it was built from | `CacheSpec.assert_compatible` | `FeatureCache.__init__` |
-| Row `r` is the same image in every view | one shared `index.npy`; `shuffle=False` in `build_view` | render time; checked by `test_cache_alignment.py` |
+| Row `r` is the same image in every view | one shared `index.npy`; `shuffle=False` in `_render`, and every view of an image built from one decode | render time; checked by `test_cache_alignment.py` |
 | A view is complete or absent, never partial | `.done` marker written last | `ShardWriter.finalize` |
+| An interrupted multi-view render resumes without a hole | `.progress`, recorded only at flushed shard boundaries | `_render`, per shard |
 | Cached fp16 is cast to fp32 before any loss | `_to_float` | every step of both loops |
 | Adapter is exactly the identity at init | zero-init on every block's `fc2` | construction |
 | GRACE-D is exactly GRACE at init | `FusedHead.beta = zeros(1)` | construction |
@@ -3343,7 +3435,7 @@ GRACE imports `pipeline.*` rather than vendoring it. What it uses:
 | `pipeline.detectors.build_detector`, `resolve_device` | `adapted.py`, scripts | the only way a detector is constructed |
 | `pipeline.config.load_detector_config`, `load_dataset_config` | scripts, `adapted.py` | detectors and datasets are referenced, never redefined |
 | `pipeline.data.manifest.load_manifest`, `sample_eval_subset` | scripts | the manifest whose row order *is* the cache index |
-| `pipeline.data.dataset.AIGCDataset`, `collate`, `load_normalized` | `cache/writer.py`, `train/data.py` | image loading and degradation application |
+| `pipeline.data.dataset.AIGCDataset`, `collate`, `load_normalized` | `probe/train.py`, `train/data.py`, `cache/writer.py` | image loading; the writer uses `load_normalized` only, since `MultiViewDataset` emits every view of one decode rather than one view per item |
 | `pipeline.degrade.conditions.LEVELS`, `Condition`, `Recipe`, `load_grid` | `cache/schedule.py`, scripts | the degradation grid and the deterministic draw |
 | `pipeline.degrade.ops.TRANSFORMS` | `cache/schedule.py` | validating grid names; the mild→severe ordering severity depends on |
 | `pipeline.utils.seeding.stable_seed`, `seed_everything` | `cache/schedule.py`, `train/loop.py` | the blake2b keying that makes recipes pure |
@@ -3395,11 +3487,12 @@ there would flatter both the baseline and the adapter.
 * `splits/gapl.py` — same, plus `feature_spec` also raises; the seam is the pooled
   backbone embedding before the prototype/linear head.
 
-**Blueprints, deliberately unimplemented:** `models/ladder.py` and
-`models/prompts.py`. Both raise `NotImplementedError` with the design in the
-docstring. The one forward-compatibility decision already made for them is
-`CacheSpec.taps` + `SplitDetector.taps()`, both empty, so a ladder later *adds
-views* to an existing cache rather than invalidating its on-disk format.
+**Blueprint, deliberately unimplemented:** `models/prompts.py`, which raises
+`NotImplementedError` with the design in its docstring. `models/ladder.py` was
+the other one and is now built (§8.5). The forward-compatibility decision made
+for it — `CacheSpec.taps` + `SplitDetector.taps()`, reserved empty from the first
+render — paid off as intended: enabling taps *added views* to the directory
+layout rather than changing the on-disk format of what was already there.
 
 **Operational gotchas** worth re-reading before a long render:
 

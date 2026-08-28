@@ -37,11 +37,13 @@ from torch.optim.lr_scheduler import LambdaLR
 from tqdm import tqdm
 
 from grace.cache.reader import FeatureCache
+from grace.cache.spec import CacheSpec
 from grace.cache.schedule import val_epochs
 from grace.models.discrepancy import FusedHead
 from grace.models.factory import (
     build_adapter, build_discrepancy_head, build_severity_head, load_adapter, save_adapter,
 )
+from grace.models.ladder import tap_spec_for
 from grace.train import diagnostics as D
 from grace.train.data import build_loader
 from grace.train.ema import EMA
@@ -86,6 +88,67 @@ def _cache_loader_cfg(cfg):
     })()
 
 
+def _expect_spec(split, tap_spec) -> CacheSpec:
+    """What this run needs a cache to be, for `CacheSpec.assert_compatible`.
+
+    `tap_spec` is passed in rather than derived: stage 1 gets it from its
+    adapter config, stage 2 from the checkpoint it is about to score, and those
+    are genuinely different questions about the same cache.
+
+    Only the parts that vary per run go in: the feature layout, and the taps.
+    The four fingerprints are left blank because the *cache* is the authority on
+    those -- a run does not know the manifest hash it wants, it knows the split
+    it is training against. Naming the taps here is what turns "ladder trained
+    on a cache rendered for other blocks" from a silent shape coincidence into a
+    refusal at startup.
+    """
+    return CacheSpec(
+        detector=split.name,
+        feature=split.feature_spec,
+        n=0,
+        taps=split.taps() if tap_spec is not None else (),
+        tap_feature=tap_spec,
+    )
+
+
+def _load_val_sets(cfg, spec, expect: CacheSpec | None = None) -> list:
+    """Held-out IMAGES, each from its own rendered cache root.
+
+    Loaded up front so a missing or mis-specified val cache fails now rather
+    than after the full training run, at the one moment its result is wanted.
+
+    Shared by both stages: stage 2 scores the same held-out images as stage 1,
+    against the same integrity checks, so an E4 sweep and the stage-1 retention
+    curve are read off the same axis rather than two that merely look alike.
+    """
+    val_sets = []
+    for ds_path, cache_dir in zip(
+        getattr(cfg, "val_datasets", []) or [], getattr(cfg, "val_cache_dirs", []) or []
+    ):
+        ds_cfg = load_dataset_config(ds_path)
+        # Same tap check as the training cache: a val cache rendered without
+        # taps would fail per-batch inside `_alignment`, after training.
+        val_cache = FeatureCache(cache_dir, expect=expect)
+        val_manifest = load_manifest(ds_cfg.manifest, ds_cfg.split)
+        if len(val_manifest) != val_cache.spec.n:
+            raise RuntimeError(
+                f"{cache_dir} holds {val_cache.spec.n} rows but {ds_path} selects "
+                f"{len(val_manifest)}. The cache was rendered from a different "
+                f"manifest -- re-render it with scripts/build_cache.py."
+            )
+        if (val_cache.spec.feature.layout, val_cache.spec.feature.shape) != (
+            spec.layout, spec.shape
+        ):
+            raise RuntimeError(
+                f"{cache_dir} holds {val_cache.spec.feature.layout}"
+                f"{val_cache.spec.feature.shape} but the detector emits "
+                f"{spec.layout}{spec.shape}. Re-render this val cache against "
+                f"the detector being trained."
+            )
+        val_sets.append((ds_cfg.name, val_cache, val_manifest))
+    return val_sets
+
+
 def train_adapter(cfg, split, manifest, schedule) -> dict:
     """Stage 1. Returns the summary written next to the checkpoints.
 
@@ -104,34 +167,16 @@ def train_adapter(cfg, split, manifest, schedule) -> dict:
     device = next(split.parameters()).device
     spec = split.feature_spec
 
-    cache = FeatureCache(cfg.cache_dir)
+    # The split decides the tap shape; `cfg.adapter.taps` only says whether to
+    # read them. Resolved before the cache is opened so a ladder run against a
+    # tapless cache is refused at startup, not several thousand steps in.
+    tap_spec = tap_spec_for(split, cfg.adapter)
+    expect = _expect_spec(split, tap_spec)
+    cache = FeatureCache(cfg.cache_dir, expect=expect)
 
-    # Held-out IMAGES, each from its own rendered cache root. Loaded up front so
-    # a missing or mis-specified val cache fails now rather than after the full
-    # training run, at the one moment its result is wanted.
-    val_sets = []
-    for ds_path, cache_dir in zip(cfg.val_datasets, cfg.val_cache_dirs):
-        ds_cfg = load_dataset_config(ds_path)
-        val_cache = FeatureCache(cache_dir)
-        val_manifest = load_manifest(ds_cfg.manifest, ds_cfg.split)
-        if len(val_manifest) != val_cache.spec.n:
-            raise RuntimeError(
-                f"{cache_dir} holds {val_cache.spec.n} rows but {ds_path} selects "
-                f"{len(val_manifest)}. The cache was rendered from a different "
-                f"manifest -- re-render it with scripts/build_cache.py."
-            )
-        if (val_cache.spec.feature.layout, val_cache.spec.feature.shape) != (
-            spec.layout, spec.shape
-        ):
-            raise RuntimeError(
-                f"{cache_dir} holds {val_cache.spec.feature.layout}"
-                f"{val_cache.spec.feature.shape} but the detector emits "
-                f"{spec.layout}{spec.shape}. Re-render this val cache against "
-                f"the detector being trained."
-            )
-        val_sets.append((ds_cfg.name, val_cache, val_manifest))
+    val_sets = _load_val_sets(cfg, spec, expect)
 
-    adapter = build_adapter(spec, cfg.adapter).to(device)
+    adapter = build_adapter(spec, cfg.adapter, tap_spec, split.taps()).to(device)
     severity_head = (
         build_severity_head(spec).to(device) if cfg.loss.lam_sev > 0 else None
     )
@@ -164,17 +209,33 @@ def train_adapter(cfg, split, manifest, schedule) -> dict:
 
     step, history, val_history = 0, [], []
     for epoch in epochs:
-        loader = build_loader(cfg, cache, manifest, schedule, epoch, preprocess)
+        loader = build_loader(
+            cfg, cache, manifest, schedule, epoch, preprocess,
+            with_taps=tap_spec is not None,
+        )
         for batch in tqdm(loader, desc=f"epoch {epoch}", leave=False):
             split.assert_frozen()
 
             f_clean = _to_float(batch["f_clean"], device)
+            taps_deg = taps_clean = None
+            if tap_spec is not None:
+                taps_clean = _to_float(batch["taps_clean"], device)
             if cfg.source == "live":
                 with torch.no_grad():
-                    f_deg = split.trunk(batch["image"].to(device)).float()
+                    # One forward for both, whether or not taps are wanted --
+                    # `trunk_with_taps` returns (f, None) for a tapless split.
+                    f_deg, taps_deg = split.trunk_with_taps(batch["image"].to(device))
+                    f_deg = f_deg.float()
+                    taps_deg = taps_deg.float() if taps_deg is not None else None
             else:
                 f_deg = _to_float(batch["f_deg"], device)
+                if tap_spec is not None:
+                    taps_deg = _to_float(batch["taps_deg"], device)
             target = f_clean if cfg.target_view == "clean" else f_deg.detach()
+            # The identity term runs the adapter on `target`, so its taps must be
+            # the taps of that same view -- clean taps for arm B, the degraded
+            # image's own for the arm A control.
+            taps_target = taps_clean if cfg.target_view == "clean" else taps_deg
 
             sev_target = batch["severity"].to(device).float()
             sev_pred = severity_head(f_deg) if severity_head else None
@@ -187,13 +248,14 @@ def train_adapter(cfg, split, manifest, schedule) -> dict:
 
             j = head_gradient(split.head, target) if cfg.loss.weighting == "jacobian" else None
             k = cfg.sampling.k_train if adapter.stochastic else 1
-            f_adapted = adapter.sample(f_deg, k, severity=sev_in)
+            f_adapted = adapter.sample(f_deg, k, severity=sev_in, taps=taps_deg)
 
+            logging_step = step % cfg.log_every == 0
             loss, terms = total_loss(
                 adapter=adapter, head=split.head,
                 f_adapted=f_adapted, f_clean=target, j=j,
                 severity_pred=sev_pred, severity_target=sev_target,
-                cfg=cfg.loss,
+                cfg=cfg.loss, diagnostics=logging_step, taps=taps_target,
             )
             loss.backward()
             torch.nn.utils.clip_grad_norm_(params, cfg.grad_clip)
@@ -202,13 +264,28 @@ def train_adapter(cfg, split, manifest, schedule) -> dict:
             opt.zero_grad(set_to_none=True)
             ema.update(adapter)
 
-            if step % cfg.log_every == 0:
+            if logging_step:
                 with torch.no_grad():
                     terms["gate"] = float(adapter.gate().mean().detach())
-                    if j is not None:
-                        terms["cos_decision"] = float(
-                            D.decision_alignment(f_adapted[0], f_deg, j).abs().mean()
+                    if adapter.reads_taps:
+                        # "How much does the correction lean on block k", per
+                        # step. This is the figure the RINE per-layer gate
+                        # promised, on a detector that does not need a `layers`
+                        # head to produce it.
+                        terms.update(
+                            {f"tap_gate/{n}": v
+                             for n, v in adapter.tap_weights().items()}
                         )
+                    # cos_decision is E3's readout, so it has to exist in the
+                    # unweighted arm too -- that arm is the one the figure is
+                    # about. Build a Jacobian here when the loss did not need
+                    # one; head_gradient runs on its own graph and detaches, so
+                    # this stays out of the adapter's and costs one head
+                    # backward per logging step rather than per step.
+                    j_diag = j if j is not None else head_gradient(split.head, target)
+                    terms["cos_decision"] = float(
+                        D.decision_alignment(f_adapted[0], f_deg, j_diag).abs().mean()
+                    )
                     terms["step"] = step
                     terms["epoch"] = epoch
                     terms["lr"] = float(sched.get_last_lr()[0])
@@ -268,7 +345,7 @@ def train_adapter(cfg, split, manifest, schedule) -> dict:
         extra["severity_state_dict"] = severity_head.state_dict()
 
     save_adapter(out_dir / "last.pt", adapter, spec, cfg.adapter, extra=extra)
-    ema_adapter = build_adapter(spec, cfg.adapter)
+    ema_adapter = build_adapter(spec, cfg.adapter, tap_spec, split.taps())
     ema.copy_to(ema_adapter)
     save_adapter(out_dir / "ema.pt", ema_adapter, spec, cfg.adapter, extra=extra)
 
@@ -315,7 +392,10 @@ def _alignment(cfg, adapter, split, cache, manifest, epochs, severity_head=None)
     out = {}
     loader_cfg = _cache_loader_cfg(cfg)
     for epoch in epochs:
-        loader = build_loader(loader_cfg, cache, manifest, None, epoch, shuffle=False)
+        loader = build_loader(
+            loader_cfg, cache, manifest, None, epoch, shuffle=False,
+            with_taps=adapter.reads_taps,
+        )
         cos, spread, gate = [], [], []
         logits = {"degraded": [], "adapted": [], "clean": []}
         labels = []
@@ -326,7 +406,8 @@ def _alignment(cfg, adapter, split, cache, manifest, epochs, severity_head=None)
             if severity_head is not None:
                 sev = severity_head(f_deg)
             k = cfg.sampling.k_eval if adapter.stochastic else 1
-            draws = adapter.sample(f_deg, k, severity=sev)
+            taps = _to_float(batch["taps_deg"], device) if adapter.reads_taps else None
+            draws = adapter.sample(f_deg, k, severity=sev, taps=taps)
             cos.append(
                 torch.nn.functional.cosine_similarity(
                     draws.mean(0).flatten(1), f_clean.flatten(1), dim=1
@@ -448,9 +529,17 @@ def train_discrepancy(cfg, split, manifest) -> dict:
     device = next(split.parameters()).device
     spec = split.feature_spec
 
-    cache = FeatureCache(cfg.cache_dir)
-    adapter = load_adapter(cfg.adapter_checkpoint, spec).to(device).eval()
+    # The checkpoint decides whether this is a ladder, not the stage-2 config:
+    # stage 2 never rebuilds the adapter, it scores the one stage 1 shipped.
+    # `load_adapter` refuses a plain checkpoint against a tapping split and vice
+    # versa, so the cache check below can trust `reads_taps`.
+    tap_spec = split.tap_spec()
+    adapter = load_adapter(cfg.adapter_checkpoint, spec, tap_spec).to(device).eval()
     adapter.requires_grad_(False)
+
+    expect = _expect_spec(split, tap_spec if adapter.reads_taps else None)
+    cache = FeatureCache(cfg.cache_dir, expect=expect)
+    val_sets = _load_val_sets(cfg, spec, expect)
 
     fused = FusedHead(build_discrepancy_head(spec, cfg.discrepancy)).to(device)
     opt = torch.optim.AdamW(fused.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
@@ -471,22 +560,39 @@ def train_discrepancy(cfg, split, manifest) -> dict:
 
     step = 0
     for epoch in train_epochs:
-        loader = build_loader(loader_cfg, cache, manifest, None, epoch)
+        loader = build_loader(
+            loader_cfg, cache, manifest, None, epoch, with_taps=adapter.reads_taps
+        )
         for batch in tqdm(loader, desc=f"disc epoch {epoch}", leave=False):
             split.assert_frozen()
             f_deg = _to_float(batch["f_deg"], device)
             sev = batch["severity"].to(device).float()
+            taps = _to_float(batch["taps_deg"], device) if adapter.reads_taps else None
             with torch.no_grad():
-                f_adapted = adapter(f_deg, severity=sev)
+                f_adapted = adapter(f_deg, severity=sev, taps=taps)
                 delta = f_adapted - f_deg
                 logit_main = split.head(f_adapted)
-            loss = supervised_bce(fused(logit_main, delta, sev), batch["label"].to(device))
+            labels = batch["label"].to(device)
+            aux_logit = fused.aux(delta, sev)
+            bce_fused = supervised_bce(logit_main + fused.beta * aux_logit, labels)
+            # The aux head's own objective. See DiscrepancyConfig.lam_aux: with
+            # beta starting at 0 the fused term hands it exactly zero gradient,
+            # so without this the branch bootstraps off its own random init and
+            # the learned sign is arbitrary.
+            bce_aux = (
+                supervised_bce(aux_logit, labels)
+                if cfg.discrepancy.lam_aux > 0
+                else torch.zeros((), device=device)
+            )
+            loss = bce_fused + cfg.discrepancy.lam_aux * bce_aux
             loss.backward()
             opt.step()
             opt.zero_grad(set_to_none=True)
             if step % cfg.log_every == 0:
                 tracker.log(
-                    {"train/bce": float(loss.detach()),
+                    {"train/bce": float(bce_fused.detach()),
+                     "train/bce_aux": float(bce_aux.detach()),
+                     "train/loss": float(loss.detach()),
                      "train/beta": float(fused.beta.detach()),
                      "train/epoch": epoch},
                     step=step,
@@ -505,12 +611,28 @@ def train_discrepancy(cfg, split, manifest) -> dict:
         out_dir / "discrepancy.pt",
     )
 
+    # Both axes, named as stage 1 names them. `held_out_degradations` alone is
+    # not enough for E4: the base head sits at ~0.9999 AUC there, so `fused`
+    # cannot exceed `main` by more than rounding and the branch looks inert
+    # whatever it learned. The held-out IMAGE sets are where the main head has
+    # room (~0.85 on the hard split), and therefore the only place a
+    # discrepancy signal could show up as a gain.
+    validation = {
+        "held_out_degradations": _score_discrepancy(
+            fused, adapter, split, cache, manifest, held or train_epochs, cfg, device
+        )
+    }
+    for name, val_cache, val_manifest in val_sets:
+        validation[f"held_out_images/{name}"] = _score_discrepancy(
+            fused, adapter, split, val_cache, val_manifest,
+            list(val_cache.epochs()), cfg, device,
+        )
+
     summary = {
         "run_id": cfg.run_id,
         "adapter_checkpoint": cfg.adapter_checkpoint,
         "beta": float(fused.beta.detach()),
-        "validation": _score_discrepancy(fused, adapter, split, cache, manifest,
-                                         held or train_epochs, cfg, device),
+        "validation": validation,
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
@@ -533,10 +655,14 @@ def _score_discrepancy(fused, adapter, split, cache, manifest, epochs, cfg, devi
     out = {}
     for epoch in epochs:
         main, aux, fuse, labels = [], [], [], []
-        for batch in build_loader(loader_cfg, cache, manifest, None, epoch, shuffle=False):
+        for batch in build_loader(
+            loader_cfg, cache, manifest, None, epoch, shuffle=False,
+            with_taps=adapter.reads_taps,
+        ):
             f_deg = _to_float(batch["f_deg"], device)
             sev = batch["severity"].to(device).float()
-            delta = adapter(f_deg, severity=sev) - f_deg
+            taps = _to_float(batch["taps_deg"], device) if adapter.reads_taps else None
+            delta = adapter(f_deg, severity=sev, taps=taps) - f_deg
             m = split.head(f_deg + delta)
             a = fused.aux(delta, sev)
             main.append(m.cpu().numpy())

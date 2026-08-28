@@ -266,7 +266,11 @@ def test_stage_two_trains_against_a_frozen_adapter(workspace):
     summary = train_discrepancy(cfg, split, manifest)
 
     assert (root / "ckpt" / "disc" / "discrepancy.pt").exists()
-    row = next(iter(summary["validation"].values()))
+    # `validation` is keyed by AXIS first (`held_out_degradations`, and one
+    # `held_out_images/<name>` per val set), then by epoch -- the same shape
+    # stage 1 writes, so an E4 sweep and the retention curve share an axis.
+    assert "held_out_degradations" in summary["validation"]
+    row = next(iter(summary["validation"]["held_out_degradations"].values()))
     assert {"auc_main", "auc_aux", "auc_fused"} <= set(row)
 
     # The claim that makes GRACE and GRACE-D comparable: stage 2 leaves the

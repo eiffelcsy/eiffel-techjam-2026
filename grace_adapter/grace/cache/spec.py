@@ -34,9 +34,31 @@ SPEC_FILE = "spec.json"
 INDEX_FILE = "index.npy"
 DONE_FILE = ".done"
 
+TAP_DIR = "taps"
+"""Tap views live in a subdirectory rather than beside the feature views.
+
+A sibling naming like `epoch=000.taps` would be caught by
+`FeatureCache.epochs()`'s `epoch=*` glob and parsed as an epoch number, which
+fails on the `int()` -- and a scheme whose correctness depends on every future
+glob remembering to exclude it is the wrong scheme. Nesting keeps the existing
+directory layout untouched: a cache without taps is byte-identical to one
+rendered before taps existed.
+"""
+
 
 def view_name(epoch: int | None) -> str:
     return CLEAN_VIEW if epoch is None else f"epoch={epoch:03d}"
+
+
+def tap_view_name(epoch: int | None) -> str:
+    """The tap view paired with `view_name(epoch)` -- `taps/clean`, `taps/epoch=007`.
+
+    Clean taps are rendered too, and are not optional: `identity_loss` passes the
+    clean features back through the adapter, so a ladder with no clean taps
+    would have its tap pathway unconstrained on exactly the inputs the identity
+    term exists to protect.
+    """
+    return f"{TAP_DIR}/{view_name(epoch)}"
 
 
 @dataclass(frozen=True)
@@ -53,9 +75,17 @@ class CacheSpec:
     detector_sha: str = ""
     preprocess_sha: str = ""
     taps: tuple[str, ...] = field(default_factory=tuple)
-    """FUTURE (`grace.models.ladder`). Present from the first render so that
-    enabling intermediate taps later *adds views* to an existing cache rather
-    than changing its on-disk format."""
+    """Names of the intermediate taps rendered alongside the features, in group
+    order -- `("block00", "block02", ...)`, straight from `SplitDetector.taps()`.
+
+    Empty means a cache with no tap views, which is every cache rendered before
+    the ladder existed and every cache for a run that does not want one. The
+    field was reserved from the first render for exactly this: enabling taps
+    *adds views* to the directory layout rather than changing the on-disk format
+    of what is already there.
+    """
+    tap_feature: FeatureSpec | None = None
+    """Shape of one image's stacked taps, `(K, tap_dim)`. Set iff `taps` is."""
 
     def to_dict(self) -> dict:
         return {
@@ -69,6 +99,7 @@ class CacheSpec:
             "detector_sha": self.detector_sha,
             "preprocess_sha": self.preprocess_sha,
             "taps": list(self.taps),
+            "tap_feature": self.tap_feature.to_dict() if self.tap_feature else None,
         }
 
     @classmethod
@@ -84,6 +115,9 @@ class CacheSpec:
             detector_sha=d.get("detector_sha", ""),
             preprocess_sha=d.get("preprocess_sha", ""),
             taps=tuple(d.get("taps", ())),
+            tap_feature=(
+                FeatureSpec.from_dict(d["tap_feature"]) if d.get("tap_feature") else None
+            ),
         )
 
     def save(self, root: str | Path) -> None:
@@ -130,12 +164,33 @@ class CacheSpec:
                     f"cache is stale: {name} differs ({mine} != {theirs}) -- {why}. "
                     f"Re-render with scripts/build_cache.py."
                 )
+        # Taps are checked only when the *reader* wants them. A ladder run
+        # against a cache rendered without taps, or against one tapping other
+        # blocks, is the failure this catches; a plain run against a cache that
+        # happens to carry taps is fine and ignores them.
+        if other.taps and tuple(self.taps) != tuple(other.taps):
+            raise ValueError(
+                f"tap mismatch: cache holds {list(self.taps) or 'no taps'}, this "
+                f"split emits {list(other.taps)}. The ladder would read a "
+                f"different part of the trunk than the one that was rendered. "
+                f"Re-render with scripts/build_cache.py, or align "
+                f"`split_args.tap_blocks` with the cache."
+            )
+
+    def bytes_per_view(self) -> int:
+        """One image, one view -- features plus taps if this cache carries them."""
+        tap = self.tap_feature.bytes_per_image() if self.tap_feature else 0
+        return self.feature.bytes_per_image() + tap
 
     def nbytes(self, n_views: int | None = None) -> int:
         """Total on-disk size. Printed by `build_cache.py --dry-run` before
-        committing to a multi-hour render."""
+        committing to a multi-hour render.
+
+        Taps count: they are the reason to run `--dry-run` at all now, since
+        five of them multiply a DINOv3 cache by six.
+        """
         views = n_views if n_views is not None else max(len(self.views), 1)
-        return self.n * self.feature.bytes_per_image() * views
+        return self.n * self.bytes_per_view() * views
 
 
 def _blake(payload: str) -> str:

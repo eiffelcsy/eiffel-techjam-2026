@@ -1,0 +1,84 @@
+# w_err / w_cos ratio sweep -- rung at ratio 0.25.
+#
+# `align = w_cos * cos + w_err * err`. The two terms are deliberately both
+# present: a pure-cosine objective is free to rescale features and quietly break
+# a head that is sensitive to magnitude, while a pure squared-error objective is
+# dominated by whichever channels happen to have the largest variance.
+#
+# Measured at the canonical solution on 256 training features:
+#   cos = 0.01506511,  err = 0.00523570  (decision-weighted, eps_iso 0.01)
+# so the ratio that BALANCES the two contributions is 2.88, and the canonical
+# w_err/w_cos = 4.0 already sits close to it (41.8% cos / 58.2% err). This
+# ladder spans well past both sides of that balance point:
+#
+#   ratio  w_cos  w_err   err share of align
+#    0.25   2.0    0.5       8.0%
+#    1      1.0    1.0      25.8%
+#    4      0.5    2.0      58.2%   <- dinov3_clean_final.yaml, the canonical run
+#    16     0.25   4.0      84.8%
+#
+# THIS RUNG: ratio 0.25, w_cos 2.0, w_err 0.5 -> err is 8.0% of align.
+#
+# Note the align SCALE also moves across the ladder (0.018 to 0.033), so this
+# varies align's share against head_kl and severity as well as the cos/err
+# balance. That is deliberate -- both are things you would want to know -- but it
+# means a difference here is not attributable to the ratio alone.
+#
+# Read against the seed floor, not in isolation:
+#   python scripts/seed_stats.py dinov3_clean_final_s* --vs dinov3_sweep_wratio_0.25
+#
+#   python scripts/train_adapter.py configs/train/dinov3_sweep_wratio_0.25.yaml
+#
+# Identical to dinov3_clean_final.yaml except `loss.w_cos` and `loss.w_err`.
+
+run_id: dinov3_sweep_wratio_0.25
+
+detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
+split: grace.splits.dinov3.DINOv3Split
+dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
+
+# Held-out IMAGES, alongside the cache's held-out degradations. The two answer
+# different questions and summary.json reports them separately: the degradation
+# axis scores unseen corruptions over images that WERE trained on, and cannot
+# speak to generalization across images; these datasets can.
+val_datasets:
+  - ../eval_pipeline/configs/datasets/ntire_val.yaml
+  - ../eval_pipeline/configs/datasets/ntire_val_hard.yaml
+val_cache_dirs:
+  - cache_val/dinov3-ntire
+  - cache_val_hard/dinov3-ntire
+
+
+cache_dir: cache/dinov3-ntire
+epochs: 12
+seed: 0
+target_view: clean
+source: cache
+checkpoint_every: 2
+val_every: 4
+
+batch_size: 256
+warmup_steps: 10
+
+adapter:
+  bottleneck: 128   # 768 -> 128 -> 768: ~0.4M parameters against a 21M frozen
+                    # trunk. The parameter budget IS the claim -- if the gap only
+                    # closed with a large adapter, the evidence was not merely
+                    # displaced. (v1.3 doubled this to 256 and gained nothing.)
+  n_blocks: 3
+
+loss:               # Jacobian-weighted error + cosine, plus head_kl and severity
+                    # at their defaults. No distribution matching, no identity
+                    # anchor -- see the header.
+  w_err: 0.5
+  w_cos: 2.0
+  eps_iso: 0.01
+  lam_sw: 0.0
+  lam_id: 0.0
+
+# Optional. `--wandb --wandb-group <experiment>` on the command line does the
+# same thing without editing a file, which is what a sweep wants.
+wandb:
+  enabled: true
+  project: grace-adapter
+  group: "e3e_wratio"

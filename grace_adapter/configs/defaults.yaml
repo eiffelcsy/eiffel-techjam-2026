@@ -84,6 +84,12 @@ wandb:                      # off by default. summary.json next to the checkpoin
 
 detector: ../eval_pipeline/configs/detectors/rine-ldm.yaml
 split: grace.splits.rine.RINESplit     # dotted path to the SplitDetector
+split_args: {}              # keyword arguments for the split. The ladder's tap
+                            # set is the one that matters today:
+                            #   split_args: {tap_blocks: [0, 2, 4, 6, 9]}
+                            # Present on cache, train and discrepancy configs,
+                            # and it must be the SAME in all three -- the cache
+                            # records what it rendered and refuses a mismatch.
 dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
 
 out_dir: cache/
@@ -152,7 +158,7 @@ source: cache               # cache = read pre-rendered features (no trunk at al
 epochs: 12
 batch_size: 256             # features, not images -- go large. The
                             # sliced-Wasserstein term is a batch statistic.
-lr: 0.001
+lr: 0.0001
 weight_decay: 0.01
 warmup_steps: 500
 grad_clip: 1.0
@@ -178,6 +184,17 @@ adapter:
                             # on alongside lam_sw: without a distributional term
                             # the optimal policy is to ignore the noise
   severity_film: true       # zero-initialised, so conditioning starts a no-op
+  taps: false               # true builds a LadderAdapter reading the split's
+                            # intermediate taps. A bool, not a block list: WHICH
+                            # blocks is a property of the split (split_args
+                            # below) and of the cache rendered from it, and
+                            # stating it twice invites the two to disagree.
+                            # Requires a cache rendered with the same taps --
+                            # `CacheSpec.taps` records them and a mismatch is
+                            # refused at startup.
+  tap_dim: 64               # width each tap is projected to. Drives the
+                            # ladder's parameter count almost entirely: ~0.22M
+                            # at 64 over five 768-wide taps
 
 sampling:
   k_train: 2

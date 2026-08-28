@@ -143,14 +143,52 @@ class SplitDetector(nn.Module, ABC):
         """
 
     def taps(self) -> tuple[str, ...]:
-        """Names of intermediate activations this split can expose.
+        """Names of the intermediate activations this split exposes, in order.
 
-        Empty for every split today. FUTURE: the ladder adapter
-        (`grace.models.ladder`) consumes these, and `CacheSpec.taps` already
-        carries the field so enabling them adds cache views rather than
-        invalidating the on-disk format.
+        Empty means "no ladder": every consumer treats taps as absent and the
+        split behaves exactly as it did before taps existed. A split that
+        returns names must also override `tap_spec` and `trunk_with_taps`, and
+        `verify_taps` checks that the three agree.
+
+        The names are stored in `CacheSpec.taps` and are what a stale cache is
+        diagnosed against, so they must identify *which* activation was read --
+        `"block04"`, not `"tap0"`.
         """
         return ()
+
+    def tap_spec(self) -> FeatureSpec | None:
+        """Shape of one image's stacked taps, or None when there are none.
+
+        Layout is `layers` and the shape is `(len(taps()), tap_dim)`: the taps
+        are one tensor rather than a dict, because a dict of ragged widths would
+        need its own cache view per tap and its own branch in the adapter, and
+        every split worth tapping reads the same width at every depth anyway.
+
+        Deliberately a `FeatureSpec`, the same type the seam uses: the cache
+        writer, the shard reader and the size estimate then work on taps with no
+        second code path.
+        """
+        return None
+
+    def trunk_with_taps(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Preprocessed batch -> (seam features, taps) in ONE forward pass.
+
+        The taps are activations the trunk already computed and threw away, so
+        the entire point is that this costs the same as `trunk`. An override
+        that runs the trunk twice has given up the only reason to tap at all.
+
+        **`f` must be bit-identical to `trunk(x)`.** The seam is what every
+        cached feature, every baseline number and every frozen head was built
+        against; a tap-emitting path that quietly returns a slightly different
+        `f` would make the ladder's numbers incomparable with the plain
+        adapter's. `verify_taps` asserts it.
+        """
+        if self.taps():
+            raise NotImplementedError(
+                f"{type(self).__name__}.taps() names {len(self.taps())} tap(s) but "
+                f"trunk_with_taps() is not implemented, so nothing can read them."
+            )
+        return self.trunk(x), None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.head(self.trunk(x))

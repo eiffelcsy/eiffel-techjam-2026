@@ -9,6 +9,11 @@ whatsoever: same conditions, same threshold rule, same retention denominator,
 same JSON schema, same report table. The baseline and the adapted model differ by
 one config file, which is the plug-and-play claim in concrete form.
 
+`split_args` reaches the split, and is how a ladder checkpoint is told which
+blocks to tap at inference: `{tap_blocks: [0, 2, 4, 6, 9]}`, matching whatever
+the cache it was trained on was rendered with. Mismatches are refused by
+`load_adapter` rather than silently scored.
+
 Three configurations, all the same class:
 
     checkpoint: null                    the null adapter -- must reproduce the
@@ -21,6 +26,8 @@ included: the dataset is forked into DataLoader workers and must not carry the
 model, and standardising preprocessing across the zoo would break the baselines
 being compared against.
 """
+
+import warnings
 
 import torch
 from PIL import Image
@@ -58,15 +65,21 @@ class AdaptedDetector(FrozenDetector):
         discrepancy: str | None = None,
         k_eval: int = 8,
         name: str = "grace",
+        split_args: dict | None = None,
     ):
         super().__init__()
         detector = build_detector(load_detector_config(base))
-        self.split = build_split(detector, split)
+        self.split = build_split(detector, split, **(split_args or {}))
         self.name = name
         self.k_eval = k_eval
 
         spec = self.split.feature_spec
-        self.adapter = load_adapter(checkpoint, spec) if checkpoint else None
+        # Passed to `load_adapter` so a ladder checkpoint scored against a split
+        # tapping other blocks -- or a plain checkpoint against a tapping split
+        # -- is refused here rather than producing plausible numbers for a model
+        # reading the wrong part of the trunk.
+        tap_spec = self.split.tap_spec()
+        self.adapter = load_adapter(checkpoint, spec, tap_spec) if checkpoint else None
         self.severity_head = None
         self.fused = None
 
@@ -78,6 +91,22 @@ class AdaptedDetector(FrozenDetector):
             if "severity_state_dict" in payload:
                 self.severity_head = SeverityHead(spec.dim)
                 self.severity_head.load_state_dict(payload["severity_state_dict"])
+
+        if self.adapter is not None and self.adapter.stochastic and k_eval == 1:
+            # Not an error -- k_eval: 1 is a valid single draw. But it is almost
+            # never what was meant: scoring a stochastic adapter with one sample
+            # discards the Monte-Carlo averaging the noise input exists for, and
+            # reports a noisier number that understates the method. Silent
+            # because `k = k_eval if stochastic else 1` makes the deterministic
+            # case ignore k_eval entirely, so `k_eval: 1` is correct in every
+            # config until the checkpoint underneath it gains a noise input.
+            warnings.warn(
+                f"{checkpoint} is a stochastic adapter (noise_dim > 0) but k_eval=1, "
+                f"so it will be scored on a SINGLE posterior draw with no averaging. "
+                f"Set k_eval to the train config's sampling.k_eval (8 for the PoC arms) "
+                f"unless a one-draw score is genuinely what you want.",
+                stacklevel=2,
+            )
 
         if discrepancy is not None:
             if self.adapter is None:
@@ -102,11 +131,17 @@ class AdaptedDetector(FrozenDetector):
         return self.split.preprocess_fn()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        f = self.split.trunk(x)
+        # One trunk pass either way: `trunk_with_taps` returns `(f, None)` on a
+        # split with no taps, so the ladder costs nothing at inference beyond
+        # the tap projections themselves. This is the property that makes the
+        # ladder deployable at all -- the taps are activations the forward pass
+        # already produced.
+        f, taps = self.split.trunk_with_taps(x)
         if self.adapter is None:
             return self.split.head(f)
 
         f = f.float()
+        taps = taps.float() if taps is not None and self.adapter.reads_taps else None
         severity = self.severity_head(f) if self.severity_head is not None else None
         k = self.k_eval if self.adapter.stochastic else 1
 
@@ -114,7 +149,7 @@ class AdaptedDetector(FrozenDetector):
         # nonlinear head, so this is cheap Monte-Carlo posterior averaging rather
         # than a redundant restatement of one deterministic pass. k adapter
         # passes cost microseconds against the one trunk pass already spent.
-        draws = self.adapter.sample(f, k, severity=severity)
+        draws = self.adapter.sample(f, k, severity=severity, taps=taps)
         logits = torch.stack([self.split.head(d) for d in draws])
         logit = logits.mean(0)
 

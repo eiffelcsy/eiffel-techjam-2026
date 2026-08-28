@@ -39,6 +39,11 @@ seed: 0
 target_view: clean
 source: cache
 
+# Matches the baseline's cadence so the two held-out curves are sampled at the
+# same epochs and can be plotted against each other.
+checkpoint_every: 2
+val_every: 4
+
 batch_size: 256
 warmup_steps: 10
 

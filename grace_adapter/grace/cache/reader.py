@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from grace.cache.spec import CLEAN_VIEW, INDEX_FILE, CacheSpec, view_name
+from grace.cache.spec import CLEAN_VIEW, INDEX_FILE, CacheSpec, tap_view_name, view_name
 from grace.cache.writer import RECIPE_FILE, is_complete
 
 
@@ -88,10 +88,11 @@ class FeatureCache:
             ]
         return self._shards[name]
 
-    def _gather(self, name: str, rows: np.ndarray) -> torch.Tensor:
+    def _gather(self, name: str, rows: np.ndarray, feature=None) -> torch.Tensor:
+        feature = feature if feature is not None else self._spec.feature
         shards = self._view(name)
         size = self._spec.shard_size
-        out = np.empty((len(rows), *self._spec.feature.shape), dtype=self._spec.feature.dtype)
+        out = np.empty((len(rows), *feature.shape), dtype=feature.dtype)
         shard_ids, offsets = np.divmod(rows, size)
         for shard_id in np.unique(shard_ids):
             sel = shard_ids == shard_id
@@ -105,6 +106,29 @@ class FeatureCache:
 
     def degraded(self, indices, epoch: int) -> torch.Tensor:
         return self._gather(view_name(epoch), self.rows_for(indices))
+
+    @property
+    def has_taps(self) -> bool:
+        return bool(self._spec.taps) and self._spec.tap_feature is not None
+
+    def _tap_gather(self, name: str, indices) -> torch.Tensor:
+        if not self.has_taps:
+            raise FileNotFoundError(
+                f"{self.root} was rendered without taps, so the ladder has nothing "
+                f"to read. Re-render with `split_args.tap_blocks` set "
+                f"(scripts/build_cache.py), or train the plain adapter."
+            )
+        return self._gather(name, self.rows_for(indices), self._spec.tap_feature)
+
+    def clean_taps(self, indices) -> torch.Tensor:
+        """`(B, K, tap_dim)`. Needed as well as the degraded taps because
+        `identity_loss` runs the adapter on clean features -- without these the
+        ladder pathway would be unconstrained on exactly the inputs that term
+        exists to protect."""
+        return self._tap_gather(tap_view_name(None), indices)
+
+    def taps(self, indices, epoch: int) -> torch.Tensor:
+        return self._tap_gather(tap_view_name(epoch), indices)
 
     def recipes(self, epoch: int) -> pd.DataFrame:
         """Per-image recipe table for one epoch, indexed by manifest index.

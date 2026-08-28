@@ -59,11 +59,17 @@ class CachedPairDataset(Dataset):
     One instance per epoch -- the epoch selects the degraded view, and epochs are
     the axis along which the corruption varies. Shuffling *within* an epoch is
     free and expected; manifest order only matters at write time.
+
+    `with_taps` adds `taps_deg` and `taps_clean`, two more memmap reads. Both,
+    not just the degraded one: the ladder is run on clean features by
+    `identity_loss`, and feeding it nothing there would leave the tap pathway
+    free to do whatever it likes on exactly the inputs that term protects.
     """
 
-    def __init__(self, cache: FeatureCache, manifest, epoch: int):
+    def __init__(self, cache: FeatureCache, manifest, epoch: int, with_taps: bool = False):
         self.cache = cache
         self.epoch = epoch
+        self.with_taps = with_taps
         self.index = np.asarray(manifest.index, dtype=np.int64)
         self.labels = np.asarray(manifest["label"], dtype=np.int64)
         severity = cache.recipes(epoch)["severity"]
@@ -74,13 +80,17 @@ class CachedPairDataset(Dataset):
 
     def __getitem__(self, i: int) -> dict:
         idx = self.index[i : i + 1]
-        return {
+        item = {
             "f_deg": self.cache.degraded(idx, self.epoch)[0],
             "f_clean": self.cache.clean(idx)[0],
             "label": int(self.labels[i]),
             "severity": float(self.severity[i]),
             "index": int(self.index[i]),
         }
+        if self.with_taps:
+            item["taps_deg"] = self.cache.taps(idx, self.epoch)[0]
+            item["taps_clean"] = self.cache.clean_taps(idx)[0]
+        return item
 
 
 class LivePairDataset(Dataset):
@@ -91,11 +101,12 @@ class LivePairDataset(Dataset):
     """
 
     def __init__(self, cache: FeatureCache, manifest, schedule: EpochSchedule,
-                 epoch: int, preprocess):
+                 epoch: int, preprocess, with_taps: bool = False):
         self.cache = cache
         self.schedule = schedule
         self.epoch = epoch
         self.preprocess = preprocess
+        self.with_taps = with_taps
         self.paths = manifest["path"].tolist()
         self.index = np.asarray(manifest.index, dtype=np.int64)
         self.labels = np.asarray(manifest["label"], dtype=np.int64)
@@ -107,17 +118,24 @@ class LivePairDataset(Dataset):
         idx = int(self.index[i])
         img = load_normalized(self.paths[i])
         img, recipe = self.schedule.apply(img, idx, self.epoch)
-        return {
+        item = {
             "image": self.preprocess(img),
             "f_clean": self.cache.clean(self.index[i : i + 1])[0],
             "label": int(self.labels[i]),
             "severity": float(self.schedule.severity_of(recipe)),
             "index": idx,
         }
+        if self.with_taps:
+            # Only the CLEAN taps. The degraded ones come out of the same live
+            # `trunk_with_taps` call that produces `f_deg` in the loop -- reading
+            # them from a cache here would be reading a different image than the
+            # one this dataset just degraded.
+            item["taps_clean"] = self.cache.clean_taps(self.index[i : i + 1])[0]
+        return item
 
 
 def build_loader(cfg, cache, manifest, schedule, epoch: int, preprocess=None,
-                 shuffle: bool = True) -> DataLoader:
+                 shuffle: bool = True, with_taps: bool = False) -> DataLoader:
     """Pick the dataset by `cfg.source` and wrap it in a DataLoader.
 
     `cache.worker_init` is passed in both modes: memmaps are opened per worker,
@@ -127,11 +145,13 @@ def build_loader(cfg, cache, manifest, schedule, epoch: int, preprocess=None,
     the other side.
     """
     if cfg.source == "cache":
-        dataset = CachedPairDataset(cache, manifest, epoch)
+        dataset = CachedPairDataset(cache, manifest, epoch, with_taps=with_taps)
     elif cfg.source == "live":
         if preprocess is None:
             raise ValueError("source: live needs the detector's preprocess_fn()")
-        dataset = LivePairDataset(cache, manifest, schedule, epoch, preprocess)
+        dataset = LivePairDataset(
+            cache, manifest, schedule, epoch, preprocess, with_taps=with_taps
+        )
     else:
         raise ValueError(f"source must be 'cache' or 'live', got {cfg.source!r}")
 

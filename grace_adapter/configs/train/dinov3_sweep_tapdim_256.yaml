@@ -1,0 +1,82 @@
+# E7 sweep, rung 3 of 3 -- tap_dim PAST the rank ceiling. The top of the ladder.
+#
+# Above `bottleneck: 128` each (adapter block, tap) map is already rank-capped at
+# 128, so this rung buys no further per-pair rank. What it does buy is a wider
+# SHARED subspace that different pairs can select different 128-d slices from --
+# which is precisely the thing a per-tap-per-block projection was meant to
+# provide, reached through a knob that costs less.
+#
+#   tap_dim   ladder    total    x base   per-pair rank
+#   32        0.094M    0.695M    1.16x      32
+#   64        0.180M    0.781M    1.30x      64          <- dinov3_ladder.yaml
+#   128       0.353M    0.953M    1.59x     128
+#   256       0.697M    1.298M    2.16x     128          <- this file
+#
+# So this rung answers a structural question, not a capacity one: **was one
+# shared 64-d view of the taps the constraint?** If 256 beats 128 by more than
+# 128 beat 64, the answer is yes, and the next move is to widen the shared space
+# further (tap_dim 320 costs 0.870M -- the same budget as a full
+# per-tap-per-block projection, while giving every pair rank 128 instead of 64).
+# If 256 lands on top of 128, the shared subspace was never binding and the
+# per-tap-per-block variant would have been ~0.69M spent on nothing.
+#
+# This is the rung where the parameter budget starts to argue back. At 2.16x the
+# base adapter the ladder is no longer a small addition to a small correction,
+# and a win here is harder to attribute to localization rather than to capacity.
+# Weigh it against rung 1: a null at tap_dim 32 is worth more to the claim than a
+# marginal gain here.
+#
+# THE CACHE IS UNAFFECTED -- every rung reads the same raw (K, 768) taps.
+#
+# Read on `tap_gate/*` and `cosine_to_clean`. If the tap gates here sit where
+# they do at 128, the extra width is inert and the sweep is finished.
+#
+#   python scripts/train_adapter.py configs/train/dinov3_sweep_tapdim_256.yaml
+#
+# Identical to dinov3_ladder.yaml except `adapter.tap_dim`.
+
+run_id: dinov3_sweep_tapdim_256
+
+detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
+split: grace.splits.dinov3.DINOv3Split
+dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
+
+split_args:
+  tap_blocks: [0, 2, 4, 6, 9]
+
+val_datasets:
+  - ../eval_pipeline/configs/datasets/ntire_val.yaml
+  - ../eval_pipeline/configs/datasets/ntire_val_hard.yaml
+val_cache_dirs:
+  - cache_val_taps/dinov3-ntire
+  - cache_val_hard_taps/dinov3-ntire
+
+cache_dir: cache_taps/dinov3-ntire
+epochs: 12
+seed: 0
+target_view: clean
+source: cache
+
+checkpoint_every: 2
+val_every: 4
+
+batch_size: 256
+warmup_steps: 10
+
+adapter:
+  bottleneck: 128
+  n_blocks: 3
+  taps: true
+  tap_dim: 256      # THE swept key
+
+loss:
+  w_err: 2.0
+  w_cos: 0.5
+  eps_iso: 0.01
+  lam_sw: 0.0
+  lam_id: 0.0
+
+wandb:
+  enabled: true
+  project: grace-adapter
+  group: e7_ladder_tapdim

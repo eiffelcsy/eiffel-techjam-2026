@@ -25,16 +25,24 @@ PngImagePlugin.MAX_TEXT_CHUNK = 64 * 1024 * 1024
 def load_normalized(path: str) -> Image.Image:
     """Decode to RGB and drop everything that is not pixels.
 
-    Rebuilding from raw bytes discards EXIF, ICC profiles and the format tag,
-    so nothing about how the file was stored reaches the detector. There is no
-    re-encode step: PNG is lossless, so a round-trip would return the identical
-    array, and it cannot undo compression artefacts already baked into the
-    pixels of a lossy source. Uniform on-disk format is the source's job.
+    EXIF, ICC profiles and the format tag never reach the detector: `convert`
+    returns a fresh image whose pixels are its own, and clearing `info` and
+    `format` drops the metadata that came along with it. There is no re-encode
+    step: PNG is lossless, so a round-trip would return the identical array, and
+    it cannot undo compression artefacts already baked into the pixels of a
+    lossy source. Uniform on-disk format is the source's job.
+
+    This used to rebuild the image from `rgb.tobytes()`, which achieved the same
+    guarantee by copying every pixel a second time -- 5.1 ms of the 12.5 ms this
+    function cost per NTIRE image, or ~40%, to strip four JFIF keys. The cache
+    render calls it 277,643 times.
     """
     with Image.open(path) as im:
         im.load()
         rgb = im.convert("RGB")
-    return Image.frombytes("RGB", rgb.size, rgb.tobytes())
+    rgb.info.clear()
+    rgb.format = None
+    return rgb
 
 
 def _to_tensor(img: Image.Image) -> torch.Tensor:

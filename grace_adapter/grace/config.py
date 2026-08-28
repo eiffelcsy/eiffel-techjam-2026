@@ -151,6 +151,16 @@ class CacheConfig:
     sets render throughput -- see `grace.cache.writer`."""
     max_images: int | None = None
     device: str = "auto"
+    split_args: dict = field(default_factory=dict)
+    """Keyword arguments for the split, e.g. `{tap_blocks: [0, 2, 4, 6, 9]}`.
+
+    The split is named by dotted path and built with no arguments today, so
+    anything that varies *per run* rather than per detector has to arrive here.
+    The ladder's tap set is the first such thing: two runs over one detector can
+    tap different blocks, and the cache each renders is only valid for its own.
+    `CacheSpec.taps` records what was actually rendered, so a train run against a
+    mismatched cache is refused rather than silently mis-fed.
+    """
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
 
 
@@ -164,6 +174,18 @@ class AdapterConfig:
     """0 disables posterior sampling. Only worth turning on alongside `lam_sw`;
     see grace.models.adapter."""
     severity_film: bool = True
+    taps: bool = False
+    """Build a `LadderAdapter` reading the split's intermediate taps.
+
+    A bool, not the block list: *which* blocks are tapped is a property of the
+    split (`split_args.tap_blocks`) and of the cache rendered from it, and
+    stating it twice is an invitation for the two to disagree. This says only
+    whether the adapter reads them. `grace.models.ladder.tap_spec_for` is where
+    the intent and the split's actual taps are reconciled.
+    """
+    tap_dim: int = 64
+    """Width each tap is projected to. Drives the ladder's parameter count
+    almost entirely -- see the budget table in `grace.models.ladder`."""
 
 
 @dataclass
@@ -191,6 +213,29 @@ class DiscrepancyConfig:
     hidden: int = 256
     proj: int = 64
     use_severity: bool = True
+    lam_aux: float = 1.0
+    """Weight on the auxiliary head's OWN supervised loss. 0 restores the
+    fused-only objective.
+
+    Without it the aux head is trained solely through `beta * aux`, which has
+    two consequences. `beta` initializes to 0, so the aux head receives exactly
+    zero gradient on step one and the branch bootstraps off `beta` reacting to
+    aux's random initialization -- making the learned sign a coin flip per run
+    (E4 produced 4 negative and 2 positive). And `loss` depends on the pair only
+    through the product, so `(beta, aux)` and `(-beta, -aux)` are exactly
+    equivalent: nothing breaks the tie.
+
+    Supervising the aux head directly pins the sign to the labels, gives it
+    gradient regardless of `beta`, and -- the reason it matters for E4 -- makes
+    `auc_aux` measure the question the experiment asks. Trained fused-only, the
+    aux head learns whatever residual helps a main head that is already at
+    ~0.9999 AUC on held-out degradations, which is nearly no signal at all. E4
+    asks how much forensic evidence the drift carries *standalone*, and only a
+    standalone objective measures that.
+
+    `beta` is left unconstrained: the sign degeneracy is broken by supervision
+    here, not by reparameterizing the fusion.
+    """
 
 
 @dataclass
@@ -235,6 +280,16 @@ class TrainConfig:
     frozen head is what `head_kl` and the Jacobian weighting differentiate
     through, so the model is loaded whether or not the trunk ever runs."""
     split: str = ""
+    split_args: dict = field(default_factory=dict)
+    """Keyword arguments for the split, e.g. `{tap_blocks: [0, 2, 4, 6, 9]}`.
+
+    The split is named by dotted path and built with no arguments today, so
+    anything that varies *per run* rather than per detector has to arrive here.
+    The ladder's tap set is the first such thing: two runs over one detector can
+    tap different blocks, and the cache each renders is only valid for its own.
+    `CacheSpec.taps` records what was actually rendered, so a train run against a
+    mismatched cache is refused rather than silently mis-fed.
+    """
     dataset: str = ""
     val_datasets: list[str] = field(default_factory=list)
     """Held-out IMAGES for stage-1 validation. Parallel to `val_cache_dirs`.
@@ -312,7 +367,26 @@ class DiscrepancyTrainConfig:
     detector: str = ""
     """Needed to score the main logit that the auxiliary logit is fused with."""
     split: str = ""
+    split_args: dict = field(default_factory=dict)
+    """Keyword arguments for the split, e.g. `{tap_blocks: [0, 2, 4, 6, 9]}`.
+
+    The split is named by dotted path and built with no arguments today, so
+    anything that varies *per run* rather than per detector has to arrive here.
+    The ladder's tap set is the first such thing: two runs over one detector can
+    tap different blocks, and the cache each renders is only valid for its own.
+    `CacheSpec.taps` records what was actually rendered, so a train run against a
+    mismatched cache is refused rather than silently mis-fed.
+    """
     dataset: str = ""
+    val_datasets: list[str] = field(default_factory=list)
+    """Held-out IMAGE sets, same field as TrainConfig's and scored the same way.
+
+    E4 is unreadable without them: on `held_out_degradations` the base head is
+    already at ~0.9999 AUC, so `auc_fused` cannot beat `auc_main` by more than
+    rounding regardless of what the discrepancy branch learned. These sets are
+    where the main head has headroom.
+    """
+    val_cache_dirs: list[str] = field(default_factory=list)
     log_every: int = 50
     discrepancy: DiscrepancyConfig = field(default_factory=DiscrepancyConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig)

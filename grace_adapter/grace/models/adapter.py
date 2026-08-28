@@ -134,6 +134,18 @@ class GatedResidualAdapter(nn.Module):
     def stochastic(self) -> bool:
         return self.noise is not None
 
+    @property
+    def reads_taps(self) -> bool:
+        """False here, True for `grace.models.ladder.LadderAdapter`.
+
+        Every call site passes `taps=` unconditionally and this decides whether
+        they are used or refused, exactly as `noise_dim=0` decides for `z`. The
+        alternative -- an `isinstance` check in the training loop, the losses and
+        the adapted detector -- would put the ladder's existence in four places
+        instead of one.
+        """
+        return False
+
     def gate(self, severity: torch.Tensor | None = None) -> torch.Tensor:
         """The gate, optionally FiLM-modulated by a scalar severity in [0, 1].
 
@@ -157,24 +169,54 @@ class GatedResidualAdapter(nn.Module):
             batch, self.noise_dim, device=device, dtype=dtype, generator=generator
         )
 
+    def _side_input(self, taps: torch.Tensor | None) -> torch.Tensor | None:
+        """Summarize the taps ONCE per forward, or None for no ladder.
+
+        Hoisted out of the block loop because the summary -- a LayerNorm and a
+        projection per tap -- does not depend on `i`, and recomputing it inside
+        an `n_blocks` loop would cost `n_blocks` times the tap arithmetic to
+        produce the same tensor.
+        """
+        return None
+
+    def _side(self, i: int, side: torch.Tensor) -> torch.Tensor:
+        """Block `i`'s read of the tap summary. Unreachable unless
+        `_side_input` was overridden to return something."""
+        raise NotImplementedError(f"{type(self).__name__} has no side pathway")
+
     def forward(
         self,
         f: torch.Tensor,
         z: torch.Tensor | None = None,
         severity: torch.Tensor | None = None,
+        taps: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """`z=None` means a deterministic pass -- no noise is added at all.
 
         Explicit rather than auto-drawn: `identity_loss` and every test want the
         deterministic branch, and implicit sampling would make them flaky.
+
+        `taps` is refused rather than ignored, for the same reason `z` is: a
+        config that renders a tap cache and then trains a plain adapter would
+        otherwise burn the render silently and report an honest-looking number
+        for the wrong model.
         """
         if z is not None and not self.stochastic:
             raise ValueError("adapter was built with noise_dim=0 but was given z")
+        if taps is not None and not self.reads_taps:
+            raise ValueError(
+                f"{type(self).__name__} has no ladder but was given taps of shape "
+                f"{tuple(taps.shape)}. Build a LadderAdapter (set `adapter.taps` in "
+                f"the train config) or stop passing them."
+            )
         g = self.gate(severity)
         if severity is not None:
             g = _expand(g, f)
+        side = self._side_input(taps)
         for i in range(len(self.fc1)):
             h = self.fc1[i](self.norms[i](f))
+            if side is not None:
+                h = h + _expand(self._side(i, side), h)
             if z is not None:
                 h = h + _expand(self.noise[i](z), h)
             f = f + g * self.fc2[i](self.drop(self.act(h)))
@@ -185,6 +227,7 @@ class GatedResidualAdapter(nn.Module):
         f: torch.Tensor,
         k: int,
         severity: torch.Tensor | None = None,
+        taps: torch.Tensor | None = None,
         generator=None,
     ) -> torch.Tensor:
         """k posterior draws, stacked on a new leading axis -> (k, B, *shape).
@@ -195,7 +238,7 @@ class GatedResidualAdapter(nn.Module):
         outs = []
         for _ in range(k):
             z = self.draw_noise(f.shape[0], device=f.device, dtype=f.dtype, generator=generator)
-            outs.append(self(f, z=z, severity=severity))
+            outs.append(self(f, z=z, severity=severity, taps=taps))
         return torch.stack(outs)
 
     def extra_repr(self) -> str:

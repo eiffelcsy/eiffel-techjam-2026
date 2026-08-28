@@ -95,7 +95,10 @@ def sliced_wasserstein(
 
 
 def identity_loss(
-    adapter: nn.Module, f_clean: torch.Tensor, severity: torch.Tensor | None = None
+    adapter: nn.Module,
+    f_clean: torch.Tensor,
+    severity: torch.Tensor | None = None,
+    taps: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """On genuinely clean features, the adapter must do nothing.
 
@@ -107,8 +110,12 @@ def identity_loss(
     Note this is the *explicit* constraint. The implicit one does more work: ~15%
     of training samples are level-0, where the target simply equals the input.
     See `grace.cache.schedule.DEFAULT_LEVEL_WEIGHTS`.
+
+    `taps` must be the taps of the SAME view `f_clean` came from. Handing the
+    ladder a degraded image's taps alongside clean features would teach it that
+    heavy damage calls for no correction -- the precise inverse of the job.
     """
-    return F.mse_loss(adapter(f_clean, severity=severity), f_clean)
+    return F.mse_loss(adapter(f_clean, severity=severity, taps=taps), f_clean)
 
 
 def head_kl(
@@ -146,6 +153,8 @@ def total_loss(
     severity_pred: torch.Tensor | None,
     severity_target: torch.Tensor | None,
     cfg,
+    diagnostics: bool = False,
+    taps: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict]:
     """Sum the terms and return (loss, per-term scalars for the log).
 
@@ -153,6 +162,9 @@ def total_loss(
     sampling; the point-wise terms are averaged over it and the distributional
     term is computed on the pooled draws, which is what gives the noise
     something to do.
+
+    `diagnostics` reports every term regardless of its weight, so a `lam_X: 0`
+    ablation can still be read on the term it ablated. It never changes `loss`.
     """
     sampled = f_adapted.ndim == f_clean.ndim + 1
     draws = f_adapted if sampled else f_adapted.unsqueeze(0)
@@ -170,28 +182,37 @@ def total_loss(
     terms = {"align": _scalar(align)}
     loss = align
 
-    if cfg.lam_sw > 0:
+    # Each term is gated on its own `lam > 0`, so an ablation that zeroes a
+    # weight also stops logging the term it ablates -- exactly the quantity the
+    # ablation is about. Under `diagnostics` the term is still computed and
+    # reported; only its contribution to `loss` stays off. The caller sets this
+    # on logging steps alone, so a disabled term costs nothing on the rest.
+    if cfg.lam_sw > 0 or diagnostics:
         # Pooled over draws against the clean batch tiled to match, so a
         # collapsed posterior is penalised for under-dispersion.
         sw = sliced_wasserstein(
             draws.flatten(0, 1), f_clean.repeat(k, *(1,) * (f_clean.ndim - 1)), cfg.n_proj
         )
-        loss = loss + cfg.lam_sw * sw
+        if cfg.lam_sw > 0:
+            loss = loss + cfg.lam_sw * sw
         terms["sw"] = _scalar(sw)
 
-    if cfg.lam_id > 0:
-        ident = identity_loss(adapter, f_clean, severity_target)
-        loss = loss + cfg.lam_id * ident
+    if cfg.lam_id > 0 or diagnostics:
+        ident = identity_loss(adapter, f_clean, severity_target, taps=taps)
+        if cfg.lam_id > 0:
+            loss = loss + cfg.lam_id * ident
         terms["identity"] = _scalar(ident)
 
-    if cfg.lam_kl > 0:
+    if cfg.lam_kl > 0 or diagnostics:
         kl = sum(head_kl(head, draws[i], f_clean, cfg.kl_temperature) for i in range(k)) / k
-        loss = loss + cfg.lam_kl * kl
+        if cfg.lam_kl > 0:
+            loss = loss + cfg.lam_kl * kl
         terms["head_kl"] = _scalar(kl)
 
-    if cfg.lam_sev > 0 and severity_pred is not None and severity_target is not None:
+    if (cfg.lam_sev > 0 or diagnostics) and severity_pred is not None and severity_target is not None:
         sev = severity_loss(severity_pred, severity_target)
-        loss = loss + cfg.lam_sev * sev
+        if cfg.lam_sev > 0:
+            loss = loss + cfg.lam_sev * sev
         terms["severity"] = _scalar(sev)
 
     terms["total"] = _scalar(loss)

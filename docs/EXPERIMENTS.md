@@ -547,14 +547,24 @@ linear head the gradient `j` is just the constant weight vector `w`. And writing
 it as a blend between the weighted and unweighted terms means `ε = 1` is
 *exactly* `F.mse_loss`.
 
-So `weighting: none` reproduces the GRACE v1 objective **provably**, not
-approximately, and `tests/test_losses.py` pins that equivalence. `lam_kl` also
-returns to v1's `0.5`, because back then `head_kl` was the only term that knew
-anything about the decision.
+So `weighting: none` makes `L_err` **provably** plain `F.mse_loss`, not
+approximately, and `tests/test_losses.py` pins that equivalence.
+
+This arm ablates the weighting **and nothing else** — every other loss key is
+`dinov3_clean.yaml`'s, written out verbatim rather than left to the `LossConfig`
+defaults, which differ from the tuned baseline in six keys. It is therefore not
+"the GRACE v1 objective": v1 also ran `lam_kl: 0.5` and those defaults, and
+adopting them here would confound the one key under test. A v1-objective
+baseline is a legitimate thing to want, but it is a *separate arm*, not this one.
 
 **Read:** `history[].cos_decision`, next to `dinov3_clean`'s. If this arm sits
 near 0 while the weighted run climbs, that is the empirical case for the whole
 weighting term.
+
+> `weighting: none` also switches off the `j` the loss uses, so `loop.py` builds
+> a diagnostic Jacobian on logging steps when the loss did not need one.
+> Without that, `cos_decision` would be missing from precisely the arm this
+> figure is about.
 
 ### E3b + E3c — sliced-Wasserstein off, and posterior sampling on
 
@@ -589,7 +599,7 @@ it is cheap, since k adapter passes cost microseconds against one trunk pass.
 | config | `lam_sw` | `noise_dim` |
 |---|---|---|
 | `dinov3_no_sw.yaml` | `0.0` | 0 |
-| `dinov3_posterior.yaml` | 0.1 (default) | 16 |
+| `dinov3_posterior.yaml` | 0.05 (`dinov3_clean`'s value) | 16 |
 
 **Read:** `validation.*.posterior_spread`, which is the tripwire. If
 `dinov3_posterior` reads ~0, the adapter learned to ignore `z`. That is a
@@ -763,7 +773,7 @@ python scripts/train_adapter.py configs/train/dinov3_live.yaml --epochs 4
   `n_epochs` in `configs/cache/dinov3.yaml` has to go up, which means a
   re-render.
 
-`batch_size` drops from 64 to 32 in this config because it now counts **images**
+`batch_size` drops from 256 to 32 in this config because it now counts **images**
 rather than cached feature vectors: the trunk is back in the loop, so the memory
 cost is the detector's rather than the adapter's. Stage-1 validation still reads
 pre-rendered caches either way.
@@ -805,7 +815,7 @@ Nothing downstream needs touching, because `grace.models.factory` picks the
 |---|---|---|
 | `grace_adapter/checkpoints/probe/<run>/head.summary.json` | `train_probe.py` | P1: per-epoch train AUC, per-val-set AUC/acc, `selected_epoch` |
 | `grace_adapter/results/dinov3_poc_drift.json` | `analyze_drift.py` | E0: `significant`, `asymmetry_ci`, `parallel_fraction`, by level and transform |
-| `grace_adapter/checkpoints/grace/<run>/summary.json` | `train_adapter.py` | E2/E3/E6: `history` (gate, `cos_decision`, loss terms), `validation` on both held-out axes |
+| `grace_adapter/checkpoints/grace/<run>/summary.json` | `train_adapter.py` | E2/E3/E6: `history` (gate, `cos_decision`, loss terms), `validation` on both held-out axes (alignment + `auc_*`/`acc_*`/`retention` per view), `val_history` (the same axes per epoch, when `val_every` is set) |
 | `grace_adapter/checkpoints/grace/<run>/{ema,last}.pt` | `train_adapter.py` | the adapter. `ema.pt` is what the detector configs load |
 | `grace_adapter/checkpoints/grace/<run>/step_*.pt` | `train_adapter.py` (`checkpoint_every`) | E4's x-axis |
 | `grace_adapter/checkpoints/grace/<run>/summary.json` (stage 2) | `train_discrepancy.py` | E4/E5: `beta`, `auc_main`/`auc_aux`/`auc_fused` |

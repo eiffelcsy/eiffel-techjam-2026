@@ -14,7 +14,12 @@ thing that supports random access and multi-worker reads.
     |   |-- feats_00000.npy
     |   |-- recipes.parquet     index, level, recipe label, transforms, severity
     |   `-- .done
-    `-- epoch=001/ ...
+    |-- epoch=001/ ...
+    `-- taps/                   ONLY when the split emits taps
+        |-- clean/
+        |   |-- feats_00000.npy (rows_in_shard, K, tap_dim) float16
+        |   `-- .done
+        `-- epoch=000/ ...
 
 `index.npy` is written once and shared: every view holds the same images in the
 same manifest order, so row `r` means the same image in every view. That is what
@@ -79,7 +84,7 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 from grace.cache.schedule import EpochSchedule
-from grace.cache.spec import DONE_FILE, INDEX_FILE, CacheSpec, view_name
+from grace.cache.spec import DONE_FILE, INDEX_FILE, CacheSpec, tap_view_name, view_name
 from grace.splits.base import SplitDetector
 from pipeline.data.dataset import load_normalized
 
@@ -100,7 +105,17 @@ class ShardWriter:
     `open_memmap(mode="w+")` truncates.
     """
 
-    def __init__(self, view_dir: str | Path, spec: CacheSpec, start_row: int = 0):
+    def __init__(
+        self,
+        view_dir: str | Path,
+        spec: CacheSpec,
+        start_row: int = 0,
+        feature=None,
+    ):
+        """`feature` overrides `spec.feature` for tap views, whose rows are
+        `(K, tap_dim)` rather than the seam's shape. Everything else -- shards,
+        resume, `.done` -- is identical, which is the point of storing taps as
+        ordinary views instead of inventing a second on-disk format."""
         if start_row % spec.shard_size:
             raise ValueError(
                 f"start_row {start_row} is not a multiple of shard_size "
@@ -109,6 +124,7 @@ class ShardWriter:
         self.dir = Path(view_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.spec = spec
+        self.feature = feature if feature is not None else spec.feature
         self.row = start_row
         self._shard_id = -1
         self._shard = None
@@ -123,18 +139,18 @@ class ShardWriter:
             self._shard = np.lib.format.open_memmap(
                 self.dir / f"feats_{shard_id:05d}.npy",
                 mode="w+",
-                dtype=np.dtype(self.spec.feature.dtype),
-                shape=(self._rows_in(shard_id), *self.spec.feature.shape),
+                dtype=np.dtype(self.feature.dtype),
+                shape=(self._rows_in(shard_id), *self.feature.shape),
             )
             self._shard_id = shard_id
         return self._shard
 
     def write(self, features: np.ndarray) -> None:
         """Append a batch. Splits across a shard boundary when it straddles one."""
-        if features.shape[1:] != self.spec.feature.shape:
+        if features.shape[1:] != self.feature.shape:
             raise ValueError(
                 f"trunk emitted {features.shape[1:]}, spec declares "
-                f"{self.spec.feature.shape}"
+                f"{self.feature.shape}"
             )
         written = 0
         while written < len(features):
@@ -170,6 +186,19 @@ class ShardWriter:
 
 def is_complete(view_dir: str | Path) -> bool:
     return (Path(view_dir) / DONE_FILE).exists()
+
+
+def view_is_complete(root: Path, epoch, spec: CacheSpec) -> bool:
+    """A view counts as rendered only when every part of it is.
+
+    With taps, one epoch is two directories. Testing the feature view alone
+    would skip an epoch whose taps were never finished -- and the ladder would
+    then train against whatever a half-written tap shard happens to hold, which
+    is zeros, silently.
+    """
+    if not is_complete(root / view_name(epoch)):
+        return False
+    return not spec.taps or is_complete(root / tap_view_name(epoch))
 
 
 class _Progress:
@@ -292,9 +321,12 @@ def build_cache(
     device = device or next(split.parameters()).device
     np.save(root / INDEX_FILE, np.asarray(manifest.index, dtype=np.int64))
 
-    pending = [e for e in [None, *epochs] if not is_complete(root / view_name(e))]
+    pending = [e for e in [None, *epochs] if not view_is_complete(root, e, spec)]
     if pending:
-        progress = _Progress(root, [view_name(e) for e in pending], spec.shard_size)
+        rendering = [view_name(e) for e in pending]
+        if spec.taps:
+            rendering += [tap_view_name(e) for e in pending]
+        progress = _Progress(root, rendering, spec.shard_size)
         start_row = min(progress.resume_row(), spec.n)
         if start_row:
             print(f"resuming at row {start_row} of {spec.n}")
@@ -328,6 +360,17 @@ def _render(
         ShardWriter(root / view_name(epoch), spec, start_row=start_row)
         for epoch in pending
     ]
+    # Taps ride along in the same pass. Rendering them separately would mean a
+    # second full decode-degrade-forward over the dataset for activations the
+    # first pass already computed and dropped -- which is the exact cost the
+    # single-pass inversion above exists to avoid.
+    tap_writers = [
+        ShardWriter(
+            root / tap_view_name(epoch), spec, start_row=start_row,
+            feature=spec.tap_feature,
+        )
+        for epoch in pending
+    ] if spec.taps else []
 
     # Slicing the manifest rather than the Dataset keeps row N of the cache at
     # manifest position N: the writers start at `start_row` and the loader must
@@ -357,17 +400,29 @@ def _render(
         # few images a batch carries -- `batch_size` is small here because an
         # item is V preprocessed views, not one.
         flat = views.flatten(0, 1).to(device, non_blocking=True)
-        features = torch.cat([
-            split.trunk(flat[lo : lo + trunk_batch_size])
+        chunks = [
+            split.trunk_with_taps(flat[lo : lo + trunk_batch_size])
             for lo in range(0, len(flat), trunk_batch_size)
-        ]).view(images, n_views, *spec.feature.shape)
+        ]
+        features = torch.cat([f for f, _ in chunks]).view(
+            images, n_views, *spec.feature.shape
+        )
+        taps = (
+            torch.cat([t for _, t in chunks]).view(
+                images, n_views, *spec.tap_feature.shape
+            )
+            if tap_writers
+            else None
+        )
 
         for view, writer in enumerate(writers):
             writer.write(features[:, view].to(spec.feature.torch_dtype).cpu().numpy())
+        for view, writer in enumerate(tap_writers):
+            writer.write(taps[:, view].to(spec.tap_feature.torch_dtype).cpu().numpy())
 
         rows += images
         if rows // spec.shard_size > recorded:
-            for writer in writers:
+            for writer in (*writers, *tap_writers):
                 writer.flush()
             # `record` floors to whole shards, so a batch that straddles a
             # boundary checkpoints only the shards behind it; the few rows past
@@ -376,7 +431,7 @@ def _render(
             recorded = rows // spec.shard_size
         bar.set_postfix(rows=rows, refresh=False)
 
-    for writer in writers:
+    for writer in (*writers, *tap_writers):
         writer.finalize()
 
 

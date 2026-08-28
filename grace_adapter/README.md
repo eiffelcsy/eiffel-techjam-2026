@@ -213,7 +213,7 @@ grace/
 ├── probe/train.py   stage 0 — fit the PoC detector's own head. PoC ONLY.
 ├── cache/
 │   ├── schedule.py    (index, epoch) -> degradation, as a pure function    ← §2
-│   ├── spec.py        four fingerprints + the FUTURE `taps` field
+│   ├── spec.py        four fingerprints + the tap views' names and shape
 │   ├── writer.py      offline render: clean view + one view per epoch
 │   └── reader.py      memmap random access, per-worker, by manifest index
 ├── models/
@@ -221,7 +221,7 @@ grace/
 │   ├── severity.py    SeverityHead — target is free from recipes.parquet
 │   ├── discrepancy.py DiscrepancyHead + FusedHead                          ← §1
 │   ├── factory.py     the only layout branch, three lines
-│   ├── ladder.py      FUTURE — blueprint only
+│   ├── ladder.py      LadderAdapter — the correction reads intermediate taps
 │   └── prompts.py     FUTURE — blueprint only
 ├── train/
 │   ├── weighting.py   head_gradient, decision_weighted_error               ← §3
@@ -539,36 +539,82 @@ Three properties the rest of the package depends on:
 
 ---
 
-## 9. Future additions — blueprint only
+## 9. The ladder, and what is still a blueprint
 
-Both raise `NotImplementedError` with the design in the module docstring.
+### `models/ladder.py` — built
 
-- **`models/ladder.py`** — ladder / multi-seam adapter. Hook 4–6 intermediate
-  blocks, project, fuse into the correction at the seam (side-tuning / LST),
-  since degradation corrupts early blocks differently from late ones.
-- **`models/prompts.py`** — degradation prompts. A bank of learnable prompts
-  selected by soft attention (PromptIR), with the degradation embedding obtained
-  contrastively and without labels (AirNet) — a better fit for the label-free
-  framing than the supervised severity scalar. The attention weights are a soft
-  classification of the degradation obtained *without* degradation labels, so
-  comparing them against `recipes.parquet` is a free confusion-matrix figure.
+The plain adapter sees only the seam, so the correction it proposes has to
+*infer* which stage the damage entered at. It is nearly blind to that. Asked to
+identify which of nine L1 transforms hit an image (chance 0.111), the seam alone
+scores **0.376** and five intermediate taps score **0.896**.
 
-> **One forward-compatibility decision was made now**, because it is cheap now
-> and expensive to retrofit: `CacheSpec` carries a `taps` field and
-> `SplitDetector` has a `taps()` hook, both empty. The ladder then *adds views*
-> to an existing cache rather than invalidating its on-disk format.
+`LadderAdapter` gives it the taps directly — activations the trunk already
+computed and threw away, so the extra inference cost is the tap projections and
+nothing else:
+
+```
+corr_i = fc2_i( act( fc1_i(LN(f)) + rung_i(summary(taps)) ) )
+```
+
+Two choices worth knowing, both of which the measurement reversed:
+
+- **Not every block.** Five taps match or beat all thirteen at 5/13 the storage;
+  the damage profiles separate in the first third and run near-parallel after
+  block 6.
+- **Not CLS alone.** CLS at every block loses to `cls+patchmean` at five, which
+  is the same argument POOLS makes about the seam — the traces are local. Taps
+  are pooled through the detector's own `pool_tokens`, so a tap at the last block
+  reduces to the seam exactly, and `verify_taps` checks it.
+
+Identity at init is unaffected (`fc2` is zero-init, so the correction is
+identically zero however the bottleneck is perturbed), and the parameter budget
+holds: ~0.22M on top of the base adapter, because one `tap_proj` is shared across
+taps and each gets only a gate. Those gates are the figure — `tap_gate/*` in the
+history is "how much does the correction lean on block k", per degradation, which
+is the per-layer gate the RINE `layers` split promised without needing a `layers`
+head.
+
+**Storage is what it costs.** Taps are cached as additional views, clean included
+(`identity_loss` runs the adapter on clean features). 7.5 KB per image per view
+against the seam's 1.5 KB — the PoC tap cache is 38.4 GB against 6.4 GB. Run
+`build_cache.py --dry-run` first.
+
+```
+python scripts/build_cache.py   configs/cache/dinov3_taps.yaml --dry-run
+python scripts/build_cache.py   configs/cache/dinov3_taps.yaml
+python scripts/train_adapter.py configs/train/dinov3_ladder.yaml
+```
+
+`configs/train/dinov3_ladder.yaml` is `dinov3_clean_v1.4.yaml` with the taps
+turned on and nothing else changed, so the comparison is controlled.
+
+### `models/prompts.py` — still blueprint
+
+Raises `NotImplementedError` with the design in its docstring. A bank of
+learnable prompts selected by soft attention (PromptIR), with the degradation
+embedding obtained contrastively and without labels (AirNet) — a better fit for
+the label-free framing than the supervised severity scalar. The attention weights
+are a soft classification of the degradation obtained *without* degradation
+labels, so comparing them against `recipes.parquet` is a free confusion-matrix
+figure.
+
+> **The one forward-compatibility decision made up front paid off.** `CacheSpec`
+> carried a `taps` field and `SplitDetector` a `taps()` hook, both empty, from
+> the first render. Building the ladder therefore *added views* to the directory
+> layout rather than changing the on-disk format of what was already there.
 
 ---
 
 ## 10. Status
 
-**Implemented and tested.** The adapter, weighting, losses, diagnostics,
-discrepancy branch, schedule, cache (writer/reader/spec), EMA, both training
-stages, the two-axis validation, the configs, `AdaptedDetector`, the DINOv3
-proof-of-concept path and optional W&B tracking. **224 tests pass**, including a
-real end-to-end render, a two-stage training smoke run, and the full PoC path —
-stage 0 → cache → stage 1 → stage 2 → identity check — against a small
-locally-constructed DINOv3 that needs neither network nor licence.
+**Implemented and tested.** The adapter, the ladder, weighting, losses,
+diagnostics, discrepancy branch, schedule, cache (writer/reader/spec, tap views
+included), EMA, both training stages, the two-axis validation, the configs,
+`AdaptedDetector`, the DINOv3 proof-of-concept path and optional W&B tracking.
+**312 tests pass**, including a real end-to-end render, a two-stage training
+smoke run, and the full PoC path — stage 0 → cache → stage 1 → stage 2 →
+identity check — against a small locally-constructed DINOv3 that needs neither
+network nor licence.
 
 **Run so far.** Stage 0 is done on the full NTIRE train split (277,643 images):
 the selected head is epoch 36, at **0.9596 AUC on `ntire_val`** and **0.8467 on

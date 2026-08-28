@@ -47,15 +47,19 @@ def main():
 
     dataset_cfg = load_dataset_config(args.dataset or cfg.dataset)
     manifest = load_manifest(dataset_cfg.manifest, dataset_cfg.split)
-    split = build_split(build_detector(load_detector_config(cfg.detector)), cfg.split)
+    split = build_split(
+        build_detector(load_detector_config(cfg.detector)), cfg.split, **cfg.split_args
+    )
 
     summary = train_discrepancy(cfg, split, manifest)
     print(f"{cfg.run_id}: beta={summary['beta']:+.4f}")
-    for name, row in summary["validation"].items():
-        print(
-            f"  {name}: main={row['auc_main']:.4f}  aux={row['auc_aux']:.4f}  "
-            f"fused={row['auc_fused']:.4f}"
-        )
+    for axis, rows in summary["validation"].items():
+        print(f"  {axis}:")
+        for name, row in rows.items():
+            print(
+                f"    {name}: main={row['auc_main']:.4f}  aux={row['auc_aux']:.4f}  "
+                f"fused={row['auc_fused']:.4f}  (fused-main={row['auc_fused']-row['auc_main']:+.4f})"
+            )
 
 
 if __name__ == "__main__":

@@ -50,7 +50,9 @@ def main():
 
     dataset_cfg = load_dataset_config(cfg.dataset)
     manifest = load_manifest(dataset_cfg.manifest, dataset_cfg.split)
-    split = build_split(build_detector(load_detector_config(cfg.detector)), cfg.split)
+    split = build_split(
+        build_detector(load_detector_config(cfg.detector)), cfg.split, **cfg.split_args
+    )
     schedule = EpochSchedule(
         grid=load_grid(cfg.schedule.grid_file, cfg.schedule.transforms),
         level_weights={int(k): v for k, v in cfg.schedule.level_weights.items()},
