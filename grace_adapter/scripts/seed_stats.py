@@ -15,7 +15,7 @@ This script measures that noise floor directly:
 The floor it reports is *seed* variance at a fixed configuration, which is the
 right yardstick for comparing configurations trained on the same data. It is
 narrower than the Hanley-McNeil sampling error of the val set itself (0.0081 on
-ntire_val_hard), which is the right yardstick for the absolute number you
+wildfake-train-val), which is the right yardstick for the absolute number you
 finally report. Both matter, and they answer different questions:
 
     seed spread   -- "is configuration A better than configuration B?"
@@ -31,7 +31,7 @@ import statistics as st
 from pathlib import Path
 
 CKPT = Path("checkpoints/grace")
-AXES = ["held_out_degradations", "held_out_images/ntire_val", "held_out_images/ntire_val_hard"]
+AXES = ["held_out_degradations", "held_out_images/wildfake-train-val"]
 METRICS = ["auc_adapted", "acc_adapted", "retention", "cosine_to_clean"]
 
 

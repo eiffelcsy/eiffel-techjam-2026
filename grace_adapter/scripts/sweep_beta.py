@@ -117,7 +117,9 @@ def main():
     fused.eval()
     learned = float(fused.beta.detach())
 
-    expect = _expect_spec(split, tap_spec if adapter.reads_taps else None)
+    expect = _expect_spec(
+        split, tap_spec if adapter.reads_taps else None, cfg.crop.fingerprint()
+    )
     dataset_cfg = load_dataset_config(cfg.dataset)
     sets = [(
         "held_out_degradations",

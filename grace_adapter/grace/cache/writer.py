@@ -264,7 +264,7 @@ class MultiViewDataset(Dataset):
     once.
     """
 
-    def __init__(self, manifest, schedule: EpochSchedule, epochs, preprocess):
+    def __init__(self, manifest, schedule: EpochSchedule, epochs, preprocess, crop=None):
         self.paths = manifest["path"].tolist()
         # The manifest index, not the row position: it is the stable image
         # identity that seeds degradations, so it must survive subsetting.
@@ -272,6 +272,7 @@ class MultiViewDataset(Dataset):
         self.schedule = schedule
         self.epochs = list(epochs)
         self.preprocess = preprocess
+        self.crop = crop
 
     def __len__(self) -> int:
         return len(self.paths)
@@ -281,11 +282,16 @@ class MultiViewDataset(Dataset):
         image = load_normalized(self.paths[i])
         views = []
         for epoch in self.epochs:
-            if epoch is None:
-                views.append(self.preprocess(image))
-            else:
-                degraded, _ = self.schedule.apply(image, index, epoch)
-                views.append(self.preprocess(degraded))
+            # Degrade, then crop. The recipe keeps acting at native resolution,
+            # so the parameter grid keeps the calibration every earlier number
+            # was measured at; the crop is a view selection applied afterwards.
+            view = image if epoch is None else self.schedule.apply(image, index, epoch)[0]
+            # The same window for the clean view and every degraded epoch --
+            # `pipeline.degrade.crop.SAMPLE_EPOCH` explains why the pairing
+            # stage 1 trains on requires it.
+            if self.crop is not None:
+                view = self.crop(view, index)
+            views.append(self.preprocess(view))
         return torch.stack(views), index
 
 
@@ -307,6 +313,7 @@ def build_cache(
     trunk_batch_size: int = 128,
     num_workers: int = 8,
     device=None,
+    crop=None,
 ) -> CacheSpec:
     """Render the clean view plus every requested epoch, in a single pass.
 
@@ -314,6 +321,11 @@ def build_cache(
     picks up at the last checkpoint. A view that already carries `.done` from an
     earlier, completed render is skipped entirely, so adding epochs to a
     finished cache renders only the new ones.
+
+    `crop` is an optional `(image, index) -> image` applied after the degradation
+    recipe and before preprocessing -- see `pipeline.degrade.crop.SampleCrop`.
+    Its identity belongs in `spec.crop_sha`, so features rendered under one
+    window protocol can never be read as if they were another's.
     """
     split.assert_frozen()
     root = Path(root)
@@ -338,6 +350,7 @@ def build_cache(
             split, manifest, root, spec, schedule, pending,
             progress=progress, start_row=start_row, batch_size=batch_size,
             trunk_batch_size=trunk_batch_size, num_workers=num_workers, device=device,
+            crop=crop,
         )
         progress.clear()
 
@@ -353,7 +366,7 @@ def build_cache(
 def _render(
     split, manifest, root: Path, spec: CacheSpec, schedule, pending,
     progress: _Progress, start_row: int, batch_size: int, trunk_batch_size: int,
-    num_workers: int, device,
+    num_workers: int, device, crop=None,
 ) -> None:
     """The single pass: decode each image once, render every pending view of it."""
     writers = [
@@ -376,7 +389,7 @@ def _render(
     # manifest position N: the writers start at `start_row` and the loader must
     # hand them exactly the rows from there on, in order.
     dataset = MultiViewDataset(
-        manifest.iloc[start_row:], schedule, pending, split.preprocess_fn()
+        manifest.iloc[start_row:], schedule, pending, split.preprocess_fn(), crop=crop
     )
     loader = DataLoader(
         dataset,

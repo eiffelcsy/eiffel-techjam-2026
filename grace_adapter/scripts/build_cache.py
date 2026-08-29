@@ -1,11 +1,11 @@
 """Render a feature cache. The expensive step, run once per detector.
 
-    python scripts/build_cache.py configs/cache/rine.yaml --dry-run
-    python scripts/build_cache.py configs/cache/rine.yaml
+    python scripts/build_cache.py configs/cache/dinov3.yaml --dry-run
+    python scripts/build_cache.py configs/cache/dinov3.yaml
 
 `--dry-run` prints the CacheSpec and the on-disk size and exits. Always run it
-first: the difference between a vector layout and RINE's `layers` layout is 24x,
-and finding that out after four hours of GPU time is avoidable.
+first: the seam cache and the tap cache differ by 6x on this detector, and
+finding that out after four hours of GPU time is avoidable.
 
 Resumable at shard granularity -- rerun after an interruption and it picks up at
 the last checkpoint. Views already carrying `.done` from a completed earlier
@@ -71,6 +71,11 @@ def main():
         schedule_sha=schedule.fingerprint(),
         detector_sha=sha_detector(detector_cfg),
         preprocess_sha=sha_preprocess(split.preprocess_fn()),
+        # Empty unless `crop.enabled`, and empty is a claim -- "whole images" --
+        # not a missing value. `preprocess_sha` cannot cover this: the window is
+        # drawn in the dataset, before preprocessing, so that it can be seeded on
+        # the image index without making the transform stochastic.
+        crop_sha=cfg.crop.fingerprint(),
         # Empty unless `split_args.tap_blocks` was set, so a cache config that
         # says nothing about taps renders exactly what it always did.
         taps=split.taps(),
@@ -92,6 +97,12 @@ def main():
             f"the features)"
         )
     print(f"images     {spec.n}")
+    print(
+        f"window     {cfg.crop.s_min}-{cfg.crop.s_max}px {cfg.crop.policy}, "
+        f"one per image"
+        if cfg.crop.enabled
+        else "window     whole images (crop disabled)"
+    )
     print(f"views      {len(epochs) + 1}  (clean + {cfg.n_epochs} train + {cfg.n_val_epochs} val)")
     print(f"total      {gb:.1f} GB -> {root}")
     if args.dry_run:
@@ -101,6 +112,7 @@ def main():
         split, manifest, root, spec, schedule, epochs,
         batch_size=cfg.batch_size, trunk_batch_size=cfg.trunk_batch_size,
         num_workers=cfg.num_workers, device=resolve_device(cfg.device),
+        crop=cfg.crop.build(),
     )
     print(f"done: {root}")
 

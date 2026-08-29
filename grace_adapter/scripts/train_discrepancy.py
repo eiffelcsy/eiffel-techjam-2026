@@ -1,7 +1,7 @@
 """Stage 2: train the discrepancy head against a FROZEN stage-1 adapter.
 
-    python scripts/train_discrepancy.py configs/train/rine_discrepancy.yaml
-    python scripts/train_discrepancy.py configs/train/rine_discrepancy.yaml --adapter checkpoints/grace/rine_clean/step_001000.pt --run-id e4_step1000
+    python scripts/train_discrepancy.py configs/train/dinov3_discrepancy.yaml
+    python scripts/train_discrepancy.py configs/train/dinov3_discrepancy.yaml --adapter checkpoints/grace/dinov3_clean/step_001000.pt --run-id e4_step1000
 
 This is the only part of GRACE that uses image labels, which is why it is a
 separate script against a frozen adapter: GRACE and GRACE-D then ship the same

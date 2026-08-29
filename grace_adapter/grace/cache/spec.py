@@ -74,6 +74,17 @@ class CacheSpec:
     schedule_sha: str = ""
     detector_sha: str = ""
     preprocess_sha: str = ""
+    crop_sha: str = ""
+    """Identity of the multi-scale window protocol -- `SampleCrop.fingerprint()`.
+
+    Empty means no crop, which is every cache rendered before multi-scale
+    training existed. That is not the same as "unknown": `preprocess_sha` cannot
+    cover the crop because the crop happens in the *dataset*, before
+    preprocessing, precisely so its randomness can be seeded on the image index
+    without making the transform stochastic. Two caches over the same manifest,
+    detector and schedule can hold features of entirely different windows of
+    entirely different pixels, and this is the only field that says so.
+    """
     taps: tuple[str, ...] = field(default_factory=tuple)
     """Names of the intermediate taps rendered alongside the features, in group
     order -- `("block00", "block02", ...)`, straight from `SplitDetector.taps()`.
@@ -98,6 +109,7 @@ class CacheSpec:
             "schedule_sha": self.schedule_sha,
             "detector_sha": self.detector_sha,
             "preprocess_sha": self.preprocess_sha,
+            "crop_sha": self.crop_sha,
             "taps": list(self.taps),
             "tap_feature": self.tap_feature.to_dict() if self.tap_feature else None,
         }
@@ -114,6 +126,7 @@ class CacheSpec:
             schedule_sha=d.get("schedule_sha", ""),
             detector_sha=d.get("detector_sha", ""),
             preprocess_sha=d.get("preprocess_sha", ""),
+            crop_sha=d.get("crop_sha", ""),
             taps=tuple(d.get("taps", ())),
             tap_feature=(
                 FeatureSpec.from_dict(d["tap_feature"]) if d.get("tap_feature") else None
@@ -164,6 +177,21 @@ class CacheSpec:
                     f"cache is stale: {name} differs ({mine} != {theirs}) -- {why}. "
                     f"Re-render with scripts/build_cache.py."
                 )
+        # `crop_sha` is compared strictly, empty included, and that is the one
+        # place this method departs from the both-sides-declared rule above. For
+        # the other four an empty string means "this side does not constrain it";
+        # for the crop it means something specific -- WHOLE IMAGES, no window --
+        # and reading a cache of 128-512px windows as though it held whole-image
+        # features is exactly the silent mismatch worth refusing. The features
+        # are of different pixels and nothing downstream would notice.
+        if self.crop_sha != other.crop_sha:
+            described = lambda s: s or "no crop (whole images)"
+            raise ValueError(
+                f"cache is stale: crop_sha differs ({described(self.crop_sha)} != "
+                f"{described(other.crop_sha)}) -- the multi-scale window protocol "
+                f"changed, so these are features of different windows. Re-render "
+                f"with scripts/build_cache.py, or fix `crop:` in the run config."
+            )
         # Taps are checked only when the *reader* wants them, and the rule is
         # SUBSET rather than equality: a cache rendering five blocks can serve a
         # run that reads four of them, because dropping a tap is a column

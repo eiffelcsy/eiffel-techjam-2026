@@ -1,12 +1,12 @@
 """DINOv3 split -- the proof-of-concept seam, and the only one that runs today.
 
-Every other split in this package reconstructs a seam inside a vendored repo
-that is not in this tree, and `RINESplit._head_forward` carries a standing
-warning that it must be checked against its clone. That is the right design for
-adapting somebody else's published detector, and it is a bad way to find out
-whether GRACE works at all: a retention number from a wrongly composed head is a
-comparison against a model that was never benchmarked, and there is no way to
-tell that from the curve.
+The only one at all, now that the zoo splits are gone. They each reconstructed
+a seam inside a vendored repo that was never in this tree, and RINE's head
+composition carried a standing warning that it must be checked against its
+clone. That is the right design for adapting somebody else's published
+detector, and it was a bad way to find out whether GRACE works at all: a
+retention number from a wrongly composed head is a comparison against a model
+that was never benchmarked, and there is no way to tell that from the curve.
 
 `pipeline.detectors.dinov3.DINOv3MLPDetector` is built with the seam already in
 it, so this class delegates rather than reconstructs:
@@ -22,8 +22,8 @@ Layout is `vector`, deliberately
 --------------------------------
 The pooled descriptor is one embedding per image, so the adapter's gate is a
 single `(D,)` vector and there is no per-block damage profile to plot. That
-forfeits RINE's headline interpretability figure, and it is the right trade for a
-PoC: it makes the cache 768 bytes per image per view instead of 48 KB (a factor
+forfeits the per-layer interpretability figure a `layers` seam would give, and
+it is the right trade for a PoC: it makes the cache 768 bytes per image per view instead of 48 KB (a factor
 of 64), which is what lets the whole pipeline -- render, stage 1, stage 2, eval --
 run end to end in minutes on a laptop with no GPU.
 

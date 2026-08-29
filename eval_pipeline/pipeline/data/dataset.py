@@ -59,7 +59,8 @@ class AIGCDataset(Dataset):
     the condition id.
     """
 
-    def __init__(self, manifest, preprocess=None, condition=None, seed: int = 0):
+    def __init__(self, manifest, preprocess=None, condition=None, seed: int = 0,
+                 crop=None):
         self.paths = manifest["path"].tolist()
         self.labels = manifest["label"].tolist()
         self.generators = manifest["generator"].tolist()
@@ -69,6 +70,17 @@ class AIGCDataset(Dataset):
         self.preprocess = preprocess or _to_tensor
         self.condition = condition
         self.seed = seed
+        self.crop = crop
+        """Optional `(image, index) -> image` applied after the condition and
+        before preprocessing -- `pipeline.degrade.crop.SampleCrop`.
+
+        Used by stage 0, so the probe head is fit on the same windows the cache
+        renders. The evaluation sweep leaves it None and selects its window
+        through the detector's `input_mode` instead, because an eval window must
+        be identical across all 26 conditions: the retention denominator compares
+        one image clean against itself degraded, and a per-condition window would
+        quietly make that a comparison between two different pictures.
+        """
 
     def __len__(self) -> int:
         return len(self.paths)
@@ -80,6 +92,10 @@ class AIGCDataset(Dataset):
         if self.condition is not None:
             img, recipe = self.condition(img, index)
             recipe_label, transforms = recipe.label(), recipe.transforms()
+        # Degrade, then crop: the recipe keeps acting at native resolution, so
+        # the parameter grid keeps the calibration it was measured at.
+        if self.crop is not None:
+            img = self.crop(img, index)
         meta = {
             "index": int(index),
             "label": int(self.labels[i]),

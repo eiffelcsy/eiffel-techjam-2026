@@ -28,7 +28,7 @@
 # Prerequisite, once: the DINOv3 backbone is a licence-gated Hub repo. Accept it
 # at https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m and run
 # `hf auth login`. Or point `backbone_id` in
-# ../eval_pipeline/configs/detectors/dinov3-ntire.yaml at a mirror you have.
+# ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml at a mirror you have.
 #
 # WHAT THE ORDER IS FOR. Read docs/EXPERIMENTS.md section 0. Briefly: steps 3-7
 # establish that there is a gap, that the instrument is exact, and what the
@@ -47,7 +47,7 @@ export PYTHONIOENCODING=utf-8
 HARNESS=../eval_pipeline
 R=$HARNESS/results
 CKPT=checkpoints/grace
-BASE=$R/dinov3_poc_baseline__dinov3-ntire__wildfake-coco-dalle3.json
+BASE=$R/dinov3_poc_baseline__dinov3-wildfake__wildfake-coco-dalle3.json
 
 # ---------------------------------------------------------------- interpreter --
 # "One command" has to mean one command, so find the project's own interpreter
@@ -146,15 +146,17 @@ cmp_arm() {                      # cmp_arm <adapted-json> [extra compare.py args
 if step "P0  manifests -- the four tables this path reads"; then
   # `data/` sits at the REPO ROOT, not inside either package, so a dataset
   # config's `../data/...` resolves to the same directory from both.
-  #   ntire_train     the head fit (stage 0) and the adapter fit (stage 1)
-  #   ntire_val   \   stage-0 epoch selection, and stage-1 held-out IMAGE
-  #   ntire_val_hard/ validation. ntire_val.yaml and ntire_val_distorted.yaml
-  #                   are two splits of one table, so one build covers both.
-  #   wildfake        the eval set. Held out from all of the above, and the only
-  #                   set any reported retention number comes from.
-  manifest configs/datasets/ntire_train.yaml          ../data/ntire_train/manifest.parquet
-  manifest configs/datasets/ntire_val.yaml            ../data/ntire_val/manifest.parquet
-  manifest configs/datasets/ntire_val_hard.yaml       ../data/ntire_val_hard/manifest.parquet
+  #   wildfake_train  ONE table, two splits. `train` (100,000) is the head fit
+  #                   and the adapter fit; `validation` (20,000, balanced) is
+  #                   stage-0 epoch selection and stage-1 held-out IMAGE
+  #                   validation, read through wildfake_train_val.yaml. Disjoint
+  #                   by construction, so one build covers both.
+  #   wildfake        the eval set. Held out from the above by `exclude_groups`
+  #                   (DALLE + coco), and the only set any reported retention
+  #                   number comes from.
+  #
+  # Needs the images: ../eval_pipeline/scripts/fetch_wildfake_train.py.
+  manifest configs/datasets/wildfake_train.yaml       ../data/wildfake_train/manifest.parquet
   manifest configs/datasets/wildfake_coco_dalle3.yaml ../data/wildfake_test/manifest.parquet
 fi
 
@@ -171,10 +173,10 @@ if step "P1  stage 0 -- fit the two detector heads on CLEAN features"; then
   # Two heads, differing in `input_mode` alone. They are D1's two arms and they
   # are deliberately not interchangeable: the trunk sees the image at a different
   # scale in each, so `_assert_head_matches` refuses to load one into the other.
-  if have checkpoints/probe/dinov3_ntire/head.pt; then note "resize head exists -- skipping"
-  else "$PY_ABS" scripts/train_probe.py configs/probe/dinov3_ntire.yaml "${SMOKE[@]}" "${WB[@]}"; fi
-  if have checkpoints/probe/dinov3_ntire_crop/head.pt; then note "crop head exists -- skipping"
-  else "$PY_ABS" scripts/train_probe.py configs/probe/dinov3_ntire_crop.yaml "${SMOKE[@]}" "${WB[@]}"; fi
+  if have checkpoints/probe/dinov3_wildfake/head.pt; then note "resize head exists -- skipping"
+  else "$PY_ABS" scripts/train_probe.py configs/probe/dinov3_wildfake.yaml "${SMOKE[@]}" "${WB[@]}"; fi
+  if have checkpoints/probe/dinov3_wildfake_crop/head.pt; then note "crop head exists -- skipping"
+  else "$PY_ABS" scripts/train_probe.py configs/probe/dinov3_wildfake_crop.yaml "${SMOKE[@]}" "${WB[@]}"; fi
 fi
 
 if step "P2  the baseline -- the retention curve everything is measured against"; then
@@ -195,11 +197,11 @@ if step "D1  the preprocessing confound -- the crop-fed baseline"; then
   #
   #   crop collapses, resize does not -> the resize head took the shortcut.
   #                                      Repoint the cache and train configs at
-  #                                      dinov3-ntire-crop.yaml and re-render.
+  #                                      dinov3-wildfake-crop.yaml and re-render.
   #   both collapse                   -> preprocessing was not the confound.
   #   neither collapses               -> the DATASET separates on content. That
   #                                      is the finding, and no adapter fixes it.
-  evalrun "$R/dinov3_poc_baseline_crop__dinov3-ntire-crop__wildfake-coco-dalle3.json" \
+  evalrun "$R/dinov3_poc_baseline_crop__dinov3-wildfake-crop__wildfake-coco-dalle3.json" \
           configs/runs/dinov3_poc_baseline_crop.yaml
   ( cd "$HARNESS" && "$PY_ABS" scripts/report.py --results results/ ) || true
 fi
@@ -235,7 +237,6 @@ if step "P3  render the feature caches -- train + both val sets"; then
   "$PY_ABS" scripts/build_cache.py configs/cache/dinov3.yaml --dry-run
   "$PY_ABS" scripts/build_cache.py configs/cache/dinov3.yaml          "${CACHE_EPOCHS[@]}"
   "$PY_ABS" scripts/build_cache.py configs/cache/dinov3_val.yaml      "${CACHE_EPOCHS[@]}"
-  "$PY_ABS" scripts/build_cache.py configs/cache/dinov3_val_hard.yaml "${CACHE_EPOCHS[@]}"
 fi
 
 if step "E0  drift geometry -- the CEILING on everything after this"; then
@@ -255,14 +256,21 @@ if step "E0  drift geometry -- the CEILING on everything after this"; then
   #
   # It needs the render (it compares the clean view against a degraded one), but
   # it comes before anything is TRAINED, which is the sense in which it is first.
-  if have results/dinov3_poc_drift.json; then note "drift analysis exists -- skipping"
+  # The output carries the dataset in its name, and so does the guard. It used
+  # to be a bare `dinov3_poc_drift.json`, which meant the round-1 NTIRE artifact
+  # sitting in results/ made this step skip silently -- and `parallel_fraction`
+  # is the denominator of the headline claim, so the run would have carried an
+  # NTIRE ceiling into a WildFake pipeline without saying a word. The old file
+  # is kept as `dinov3_poc_drift__ntire-train.json`, a prior rather than a record.
+  if have results/dinov3_poc_drift__wildfake-train.json
+  then note "drift analysis exists -- skipping"
   else
     "$PY_ABS" scripts/analyze_drift.py \
-      --cache    cache/dinov3-ntire \
-      --dataset  ../eval_pipeline/configs/datasets/ntire_train.yaml \
-      --detector ../eval_pipeline/configs/detectors/dinov3-ntire.yaml \
+      --cache    cache/dinov3-wildfake \
+      --dataset  ../eval_pipeline/configs/datasets/wildfake_train.yaml \
+      --detector ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml \
       --split    grace.splits.dinov3.DINOv3Split \
-      --out      results/dinov3_poc_drift.json
+      --out      results/dinov3_poc_drift__wildfake-train.json
   fi
 fi
 
@@ -360,7 +368,10 @@ fi
 if step "E9a hyperparameters -- the loss-weight ratio (the only live axis)"; then
   # The reference is ratio 16, so there is no wratio_16 config. Note the ratio's
   # preference reversed between splits last round -- 16 on ntire_val_hard, 4 on
-  # ntire_val -- and both directions were backed by five-seed families. That is a
+  # ntire_val -- and both directions were backed by five-seed families. There is
+  # only ONE validation split now, so that comparison cannot be repeated; the
+  # split-dependence is a round-1 observation, not something round 2 can re-test.
+  # That is a
   # measured split-dependence to report, not noise to resolve by picking a split.
   stage1 dinov3_sweep_wratio_0.25 configs/train/dinov3_sweep_wratio_0.25.yaml
   stage1 dinov3_sweep_wratio_1    configs/train/dinov3_sweep_wratio_1.yaml
@@ -422,7 +433,6 @@ if step "E7a the ladder -- render the tap caches (a separate ~21 GB)"; then
   "$PY_ABS" scripts/build_cache.py configs/cache/dinov3_taps.yaml --dry-run
   "$PY_ABS" scripts/build_cache.py configs/cache/dinov3_taps.yaml          "${CACHE_EPOCHS[@]}"
   "$PY_ABS" scripts/build_cache.py configs/cache/dinov3_val_taps.yaml      "${CACHE_EPOCHS[@]}"
-  "$PY_ABS" scripts/build_cache.py configs/cache/dinov3_val_hard_taps.yaml "${CACHE_EPOCHS[@]}"
 fi
 
 if step "E7b the ladder -- the 12-epoch arm, and the tap_dim sweep"; then
@@ -451,8 +461,10 @@ if step "E7c the ladder -- stage 2 with and without per-tap drift"; then
   # On a `vector` seam the auxiliary head sees ONE drift norm however deep the
   # damage entered. `use_taps: true` gives it one log1p'd norm per tapped block --
   # the per-block damage profile, which is the closest this PoC gets to the input
-  # a RINE `layers` split would hand it for free. It is the difference between
-  # the branch's weakest possible form and something worth a null result.
+  # a `layers` seam would hand it for free. No such detector is in the tree any
+  # more, so the ladder is now the ONLY way to get that signal here. It is the
+  # difference between the branch's weakest possible form and something worth a
+  # null result.
   stage2 disc_ladder      configs/train/dinov3_discrepancy_ladder.yaml
   stage2 disc_ladder_taps configs/train/dinov3_discrepancy_ladder_taps.yaml
 fi
@@ -509,7 +521,7 @@ Done. What to read, and in what order -- the argument, not the file list.
    collapses, the detector is separating on CONTENT, and no adapter fixes that.
 
 2. WHAT WAS THE MOST ANY REPAIR COULD HAVE DONE?
-   results/dinov3_poc_drift.json -> overall.parallel_fraction
+   results/dinov3_poc_drift__wildfake-train.json -> overall.parallel_fraction
 
    The fraction of the drift that lies along the direction the frozen head can
    see. Everything orthogonal to it is unrepairable BY CONSTRUCTION, because the

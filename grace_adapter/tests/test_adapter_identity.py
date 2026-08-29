@@ -81,8 +81,9 @@ def test_tokens_gate_is_shared_across_tokens():
 
 @pytest.mark.parametrize("layout", list(SPECS))
 def test_mlp_is_shared_across_the_group_axis(layout):
-    """Parameter count must not grow with L or T -- that is what keeps the
-    adapter tiny for RINE's 24 layers and B-Free's 5 windows."""
+    """Parameter count must not grow with L or T -- that is what would keep the
+    adapter tiny on a 24-layer or 5-window seam. No such detector is in the tree
+    any more; this holds the property so one could be added back."""
     spec = SPECS[layout]
     n = sum(p.numel() for p in build_adapter(spec, AdapterConfig()).fc1.parameters())
     assert n == 2 * (spec.dim * 256 + 256)      # n_blocks=2, bottleneck=256

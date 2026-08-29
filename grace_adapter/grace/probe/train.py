@@ -42,18 +42,26 @@ from pipeline.utils.seeding import seed_everything
 
 
 @torch.no_grad()
-def extract_features(split, manifest, batch_size=32, num_workers=4, device=None):
+def extract_features(split, manifest, batch_size=32, num_workers=4, device=None,
+                     crop=None):
     """(N, D) clean trunk features and (N,) labels, in manifest order.
 
     Deliberately reuses `AIGCDataset` with `condition=None` -- the same decode
     path, the same preprocessing and the same row order the cache writer uses
     for its clean view. A probe fit on features extracted any other way would be
-    fit on a feature space subtly unlike the one GRACE corrects toward.
+    fit on a feature space subtly unlike the one GRACE corrects toward. `crop`
+    extends that identity to the window: pass the same one the cache renders
+    under, or the head is fit on whole images and then asked to read crops.
+
+    The trunk runs once and the head trains over the result for `cfg.epochs`, so
+    the window here is per-image and cannot vary per epoch. That is the same
+    constraint the cache's single clean view imposes -- see
+    `pipeline.degrade.crop.SAMPLE_EPOCH`.
     """
     split.assert_frozen()
     device = device or next(split.parameters()).device
     loader = DataLoader(
-        AIGCDataset(manifest, preprocess=split.preprocess_fn()),
+        AIGCDataset(manifest, preprocess=split.preprocess_fn(), crop=crop),
         batch_size=batch_size,
         num_workers=num_workers,
         shuffle=False,
@@ -64,6 +72,38 @@ def extract_features(split, manifest, batch_size=32, num_workers=4, device=None)
         feats.append(split.trunk(batch.to(device)).float().cpu())
         labels.extend(int(m["label"]) for m in metas)
     return torch.cat(feats), torch.tensor(labels, dtype=torch.float32)
+
+
+def _assert_crop_matches_input_mode(cfg, split) -> None:
+    """The head records `input_mode`; the crop lives in `cfg.crop`. They must agree.
+
+    `input_mode` is the only thing travelling in the checkpoint, and it is what
+    `_assert_head_matches` consults at evaluation time to decide which arms this
+    head may be scored under. So a head fit on 128-512px windows while its
+    detector config still said `resize` would be stamped `resize`, pass the guard
+    against a whole-image detector, and score a feature space it never saw --
+    silently, which is the failure the guard exists to prevent, reintroduced
+    through the back door.
+
+    Both directions are errors. Crops without the mode mislabels the head; the
+    mode without crops promises windows that were never drawn.
+    """
+    mode = getattr(split.detector, "input_mode", "resize")
+    if cfg.crop.enabled and mode != "multiscale":
+        raise ValueError(
+            f"crop.enabled is true but the detector config says input_mode={mode!r}. "
+            f"The head would be stamped {mode!r} while actually being fit on "
+            f"{cfg.crop.s_min}-{cfg.crop.s_max}px windows, and would then pass the "
+            f"evaluation-time guard against a detector that feeds whole images. "
+            f"Set input_mode: multiscale in the detector config."
+        )
+    if mode == "multiscale" and not cfg.crop.enabled:
+        raise ValueError(
+            "the detector config says input_mode: multiscale but crop.enabled is "
+            "false, so no window would ever be drawn and the head would be fit on "
+            "whole images under a name that promises otherwise. Set crop.enabled "
+            "and its range (see eval_pipeline/scripts/audit_sizes.py)."
+        )
 
 
 def _auc(logits: torch.Tensor, y: torch.Tensor) -> float:
@@ -87,8 +127,10 @@ def train_probe(cfg, split, manifest, val_sets=None) -> dict:
     device = next(split.parameters()).device
     spec = split.feature_spec
 
+    crop = cfg.crop.build()
+    _assert_crop_matches_input_mode(cfg, split)
     f_train, y_train = extract_features(
-        split, manifest, cfg.batch_size, cfg.num_workers, device
+        split, manifest, cfg.batch_size, cfg.num_workers, device, crop=crop
     )
     # One trunk pass per validation set, held in memory alongside the training
     # features. Selection runs against several datasets now, so each keeps its
@@ -97,7 +139,7 @@ def train_probe(cfg, split, manifest, val_sets=None) -> dict:
     val_feats = []
     for name, val_manifest in ([] if val_sets is None else list(val_sets)):
         f_v, y_v = extract_features(
-            split, val_manifest, cfg.batch_size, cfg.num_workers, device
+            split, val_manifest, cfg.batch_size, cfg.num_workers, device, crop=crop
         )
         val_feats.append((name, f_v, y_v))
 
@@ -152,10 +194,12 @@ def train_probe(cfg, split, manifest, val_sets=None) -> dict:
                 row[f"acc_val/{name}"] = float(((logits > 0).float() == y_v).float().mean())
                 aucs.append(auc)
             if val_feats:
-                # Unweighted across datasets, not across images: ntire_val is 4x
-                # ntire_val_hard, and pooling rows would let the easy set decide
-                # selection on its own. NaN sets (single-class) drop out rather
-                # than poisoning the mean.
+                # Unweighted across datasets, not across images: under NTIRE the
+                # plain val set was 4x the hard one, and pooling rows would have
+                # let the easy set decide selection on its own. With one val set
+                # this is a no-op, and it stays so a second one can be added
+                # without silently changing what the scalar means. NaN sets
+                # (single-class) drop out rather than poisoning the mean.
                 finite = [a for a in aucs if a == a]
                 row["auc_val_mean"] = float(np.mean(finite)) if finite else float("nan")
         history.append(row)

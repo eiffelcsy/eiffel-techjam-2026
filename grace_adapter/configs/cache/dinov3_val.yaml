@@ -1,4 +1,4 @@
-# Stage-1 image-level validation cache -- NTIRE val, undistorted half.
+# Stage-1 image-level validation cache -- the held-out split of wildfake_train.
 #
 #   python scripts/build_cache.py configs/cache/dinov3_val.yaml --dry-run
 #   python scripts/build_cache.py configs/cache/dinov3_val.yaml
@@ -8,19 +8,30 @@
 # under the same out_dir collide -- the second render is rejected on
 # `manifest_sha` rather than silently mixing rows from both. One out_dir each.
 #
-# 5000 images the challenge left undistorted. The UNDISTORTED split
-# specifically: ntire_val.yaml argues the degradation sweep must target it,
-# because L0 is the reference every retention number divides by and an image the
-# challenge already downscaled and JPEG'd has no clean L0. Rendering our grid on
-# top of the distorted half would stack two unknown corruptions.
+# 20,000 images, balanced 10k real / 10k generated, disjoint from the training
+# split by construction: one sampler cut both from a single draw per stratum.
+# They carry the same tier weights and the same stratum proportions as training,
+# so this measures generalization across IMAGES with the generator mix held
+# fixed -- see configs/datasets/wildfake_train_val.yaml.
+#
+# L0 really is L0 here, which is what makes it a usable reference. That was the
+# argument the NTIRE val config had to make at length -- its distorted half had
+# already been downscaled and JPEG'd by the challenge, so our grid would have
+# stacked two unknown corruptions. WildFake ships no corpus-wide degradation
+# pass, so the whole split is clean and no split-by-flag is needed.
 #
 # Held out from stage-1 training in the only sense that matters here -- these
-# images are not in ntire_train. The cache's own val_epochs axis holds out
+# images are not in the `train` split. The cache's own val_epochs axis holds out
 # DEGRADATIONS over training images; this holds out the images themselves.
+#
+# There is no second val cache any more. NTIRE supplied val and val_hard, and
+# every stage-1 config carried a parallel pair of cache roots; WildFake has one
+# validation split, so `val_datasets` and `val_cache_dirs` are single-entry
+# lists everywhere and cache_val_hard/ is gone.
 
-detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
+detector: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
 split: grace.splits.dinov3.DINOv3Split
-dataset: ../eval_pipeline/configs/datasets/ntire_val.yaml
+dataset: ../eval_pipeline/configs/datasets/wildfake_train_val.yaml
 
 out_dir: cache_val/
 n_epochs: 12

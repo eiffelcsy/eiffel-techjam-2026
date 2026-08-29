@@ -1,6 +1,6 @@
 # Stage 0 -- fit the PoC detector's classification head. PoC only.
 #
-#   python scripts/train_probe.py configs/probe/dinov3_ntire.yaml
+#   python scripts/train_probe.py configs/probe/dinov3_wildfake.yaml
 #
 # The one script in this project that trains a detector, and it exists because a
 # DINOv3 trunk has no classifier: GRACE cannot adapt a seam whose head does not
@@ -12,22 +12,31 @@
 # writes and the path the detector loads are one string in one file.
 #
 # Clean images only, no degradation augmentation -- that is the premise. See
-# grace/probe/train.py.
+# grace/probe/train.py. WildFake honours it better than NTIRE did: no
+# corpus-wide degradation pass, so L0 really is L0.
 
-run_id: dinov3_ntire
+run_id: dinov3_wildfake
 
-detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
-dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml   # all six shards, 277,643
+detector: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
+dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml       # split: train, 100,000
 
-# Selection on the challenge's own val sets rather than a held-out training
-# shard. Sound here because the REPORTED benchmark is WildFake, not NTIRE val --
-# nothing selected on these is ever reported against them. Two datasets, so the
-# selection scalar is the unweighted mean of their AUCs; each is also reported
-# on its own, because a head that wins the mean by collapsing on the hard set is
-# the exact failure this project is about.
+# Selection on the held-out validation split of the same manifest -- 20,000
+# images, balanced 10k/10k, disjoint from `train` by construction and carrying
+# the same tier weights and stratum proportions.
+#
+# Sound here for the same reason it was under NTIRE: the REPORTED benchmark is
+# configs/datasets/wildfake_test.yaml (COCO val2017 + DALL-E 3), and nothing
+# selected on this split is ever reported against it.
+#
+# ONE dataset now, where NTIRE supplied two (val + val_hard) and selection was
+# their unweighted mean. There is no "hard" analogue in WildFake, so the mean is
+# gone and the selection scalar is simply this split's AUC. What that costs: the
+# old pair could catch a head that won the mean by collapsing on the hard set,
+# and nothing here can. The per-generator breakdown in `summary.json` is the
+# replacement -- `generator_column` records each fake's architecture, so a head
+# that collapses on one family is visible there rather than in the scalar.
 val_dataset:
-  - ../eval_pipeline/configs/datasets/ntire_val.yaml       # split: undistorted, 5000
-  - ../eval_pipeline/configs/datasets/ntire_val_hard.yaml  # split: hard, 2500
+  - ../eval_pipeline/configs/datasets/wildfake_train_val.yaml
 
 split: grace.splits.dinov3.DINOv3Split
 out: ""             # "" = take it from the detector config's head_checkpoint

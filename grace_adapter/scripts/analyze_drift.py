@@ -1,7 +1,7 @@
 """Test RA-Det's premise on this data, before anything is TRAINED on it.
 
-    python scripts/build_cache.py configs/cache/rine.yaml        # PREREQUISITE
-    python scripts/analyze_drift.py --cache cache/rine --dataset ../eval_pipeline/configs/datasets/ntire_train.yaml
+    python scripts/build_cache.py configs/cache/dinov3.yaml      # PREREQUISITE
+    python scripts/analyze_drift.py --cache cache/dinov3-wildfake --dataset ../eval_pipeline/configs/datasets/wildfake_train.yaml
 
 **Needs a rendered cache**, including at least one finalized degraded view: the
 whole analysis is a comparison of `clean` against `epoch=NNN`, so there is

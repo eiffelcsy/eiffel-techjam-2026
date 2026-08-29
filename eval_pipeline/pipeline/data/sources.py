@@ -391,6 +391,7 @@ class StratifiedCsvSource:
         group_column: str = "Architecture",
         n_total: int = 100_000,
         real_fraction: float | None = None,
+        splits: list[dict] | None = None,
         exclude_groups: list[str] | None = None,
         tiers: list[dict] | None = None,
         where: dict | None = None,
@@ -423,7 +424,36 @@ class StratifiedCsvSource:
         self.group_column = (
             [group_column] if isinstance(group_column, str) else list(group_column)
         )
-        self.n_total = n_total
+        # One manifest, several disjoint splits. Each names its own size and
+        # class balance and is allocated over the SAME stratum sizes, so a
+        # validation split can be balanced 50/50 while training keeps the
+        # corpus's own ratio and both still carry every stratum in the same
+        # proportion. Disjointness is by construction: a stratum draws all its
+        # splits' rows in one sample and hands out consecutive slices, so no row
+        # can reach two splits however the budgets are set.
+        self.splits = [
+            {
+                "name": str(s.get("name", "train")),
+                "n_total": int(s["n_total"]),
+                "real_fraction": (
+                    None if s.get("real_fraction") is None else float(s["real_fraction"])
+                ),
+            }
+            for s in (splits or [{"name": split, "n_total": n_total,
+                                  "real_fraction": real_fraction}])
+        ]
+        for s in self.splits:
+            if s["n_total"] <= 0:
+                raise ValueError(f"split {s['name']!r} has non-positive n_total")
+            if s["real_fraction"] is not None and not 0.0 < s["real_fraction"] < 1.0:
+                raise ValueError(
+                    f"split {s['name']!r} has real_fraction {s['real_fraction']} -- it "
+                    "must lie strictly between 0 and 1, or a split ends up single-class."
+                )
+        if len({s["name"] for s in self.splits}) != len(self.splits):
+            raise ValueError("split names must be unique")
+
+        self.n_total = sum(s["n_total"] for s in self.splits)
         self.real_fraction = real_fraction
         self.exclude_groups = {str(g) for g in (exclude_groups or [])}
         self.where = {k: {str(x) for x in (v if isinstance(v, list) else [v])}
@@ -667,63 +697,99 @@ class StratifiedCsvSource:
                 )
 
         n_real_pool, n_fake_pool = sum(sizes[REAL].values()), sum(sizes[FAKE].values())
-        fraction = (
-            self.real_fraction
-            if self.real_fraction is not None
-            else n_real_pool / (n_real_pool + n_fake_pool)
-        )
-        budgets = {REAL: round(self.n_total * fraction)}
-        budgets[FAKE] = self.n_total - budgets[REAL]
+        plan: dict = {"splits": {}, "groups": {}, "group_tier": group_tier}
 
-        chosen: set[int] = set()
-        plan: dict = {"fraction": fraction, "groups": {}, "tiers": {}, "group_tier": group_tier}
-        for label in (REAL, FAKE):
-            if self.tiers and label == FAKE:
-                alloc = self._allocate_tiered(sizes[FAKE], budgets[FAKE], group_tier, plan)
-            else:
-                alloc = self._allocate(sizes[label], budgets[label])
-            for group, k in sorted(alloc.items()):
-                idx = pools.get((label, group), array("i"))
-                if k > len(idx):
-                    raise ValueError(
-                        f"{group!r} needs {k} rows for its {sizes[label][group]}-row "
-                        f"share of the corpus, but only {len(idx)} are available. "
-                        + (
-                            f"The archive listed in available_lists[{group!r}] is too "
-                            "small for this n_total -- fetch another part, or lower "
-                            "n_total."
-                            if group in self._available
-                            else "This should not be reachable; the pool is the group."
-                        )
+        # Allocate every split first, over the same stratum sizes, and only then
+        # draw. Nothing is sampled until each stratum knows its whole demand, so
+        # the splits can be cut from one sample and are disjoint by slicing
+        # rather than by a subtraction that could quietly overlap.
+        need: dict[tuple[int, str], list[tuple[str, int]]] = {}
+        for spec in self.splits:
+            name, n = spec["name"], spec["n_total"]
+            fraction = (
+                spec["real_fraction"]
+                if spec["real_fraction"] is not None
+                else n_real_pool / (n_real_pool + n_fake_pool)
+            )
+            budgets = {REAL: round(n * fraction)}
+            budgets[FAKE] = n - budgets[REAL]
+            entry = {"fraction": fraction, "n_total": n, "tiers": {}, "groups": {}}
+
+            for label in (REAL, FAKE):
+                if self.tiers and label == FAKE:
+                    alloc = self._allocate_tiered(sizes[FAKE], budgets[FAKE], group_tier, entry)
+                else:
+                    alloc = self._allocate(sizes[label], budgets[label])
+                for group, k in alloc.items():
+                    need.setdefault((label, group), []).append((name, k))
+                    entry["groups"][(label, group)] = k
+            plan["splits"][name] = entry
+
+        assignment: dict[int, str] = {}
+        for (label, group), parts in sorted(need.items()):
+            total = sum(k for _, k in parts)
+            idx = pools.get((label, group), array("i"))
+            if total > len(idx):
+                detail = " + ".join(f"{k} for {n}" for n, k in parts)
+                raise ValueError(
+                    f"{group!r} needs {total} rows ({detail}) for its "
+                    f"{sizes[label][group]}-row share of the corpus, but only "
+                    f"{len(idx)} are available. "
+                    + (
+                        f"The archive listed in available_lists[{group!r}] is too small "
+                        "-- fetch another part, or lower n_total."
+                        if group in self._available
+                        else "This should not be reachable; the pool is the group."
                     )
-                material = f"{self.seed}:{label}:{group}".encode()
-                digest = hashlib.blake2b(material, digest_size=8).digest()
-                rng = random.Random(int.from_bytes(digest, "big"))
-                chosen.update(rng.sample(idx, k) if k < len(idx) else idx)
-                plan["groups"][(label, group)] = (sizes[label][group], k)
+                )
+            material = f"{self.seed}:{label}:{group}".encode()
+            digest = hashlib.blake2b(material, digest_size=8).digest()
+            rng = random.Random(int.from_bytes(digest, "big"))
+            drawn = rng.sample(idx, total) if total < len(idx) else list(idx)
 
-        return chosen, plan
+            at = 0
+            for name, k in parts:
+                for i in drawn[at:at + k]:
+                    assignment[i] = name
+                at += k
+            plan["groups"][(label, group)] = (sizes[label][group], total)
+
+        return assignment, plan
 
     def rows(self, out_dir: str | Path) -> Iterator[dict]:
-        chosen, plan = self._plan()
+        assignment, plan = self._plan()
 
         print(
             f"{type(self).__name__}: sampling {self.n_total} of "
             f"{sum(n for n, _ in plan['groups'].values())} eligible rows "
-            f"(real fraction {plan['fraction']:.4f}, seed {self.seed})"
+            f"(seed {self.seed})"
         )
+        for name, entry in plan["splits"].items():
+            print(
+                f"  [{name}] {entry['n_total']} rows, "
+                f"real fraction {entry['fraction']:.4f}"
+                + (
+                    "  tiers: " + ", ".join(f"{t}={b}" for t, (b, _) in entry["tiers"].items())
+                    if entry["tiers"]
+                    else ""
+                )
+            )
         for (label, group), (have, take) in sorted(
             plan["groups"].items(), key=lambda kv: (kv[0][0], -kv[1][1])
         ):
             kind = "real" if label == REAL else "fake"
-            print(f"  {kind:4s} {group:<14s} {take:>6d} of {have:>7d}")
+            per = "/".join(
+                str(e["groups"].get((label, group), 0)) for e in plan["splits"].values()
+            )
+            print(f"  {kind:4s} {group:<16s} {take:>6d} of {have:>7d}   ({per})")
 
         root = Path(self.root).expanduser()
         kept = {REAL: 0, FAKE: 0}
+        per_split = {s["name"]: {REAL: 0, FAKE: 0} for s in self.splits}
         missing: dict[str, int] = {}
 
         for i, row in self._reader():
-            if i not in chosen:
+            if i not in assignment:
                 continue
             label = _polarity(str(row[self.label_column]), self.fake_values, self.real_values)
             group = self._group(row)
@@ -743,6 +809,7 @@ class StratifiedCsvSource:
                 continue
 
             kept[label] += 1
+            per_split[assignment[i]][label] += 1
             yield {
                 "path": str(path.resolve()),
                 "label": label,
@@ -751,7 +818,7 @@ class StratifiedCsvSource:
                     if label == FAKE
                     else "REAL"
                 ),
-                "split": self.split,
+                "split": assignment[i],
             }
 
         if missing:
@@ -762,6 +829,16 @@ class StratifiedCsvSource:
                 f"on disk ({detail}). The manifest is NO LONGER proportional to the "
                 f"corpus; the groups above are under-represented by exactly these counts."
             )
+        # Per split, not just overall: a validation split with no generated rows
+        # cannot be scored, and an aggregate check would pass it as long as the
+        # training split had some.
+        for name, n in per_split.items():
+            if not n[FAKE] or not n[REAL]:
+                raise ValueError(
+                    f"split {name!r} came out {n[REAL]} real / {n[FAKE]} generated -- "
+                    "a single-class split cannot be scored. Check its real_fraction "
+                    "and n_total."
+                )
         _check_split(kept[FAKE], kept[REAL], self.fake_values)
 
 

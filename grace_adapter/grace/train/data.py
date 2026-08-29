@@ -98,11 +98,14 @@ class LivePairDataset(Dataset):
     """
 
     def __init__(self, cache: FeatureCache, manifest, schedule: EpochSchedule,
-                 epoch: int, preprocess, with_taps: bool = False):
+                 epoch: int, preprocess, with_taps: bool = False, crop=None):
         self.cache = cache
         self.schedule = schedule
         self.epoch = epoch
         self.preprocess = preprocess
+        self.crop = crop
+        """Must match the crop the cache's clean view was rendered under, or
+        `f_clean` is the target for a different window than `image` shows."""
         self.with_taps = with_taps
         """Accepted for interface parity with `CachedPairDataset` and unused:
         the degraded taps come out of the same live `trunk_with_taps` call that
@@ -118,6 +121,8 @@ class LivePairDataset(Dataset):
         idx = int(self.index[i])
         img = load_normalized(self.paths[i])
         img, recipe = self.schedule.apply(img, idx, self.epoch)
+        if self.crop is not None:
+            img = self.crop(img, idx)
         item = {
             "image": self.preprocess(img),
             "f_clean": self.cache.clean(self.index[i : i + 1])[0],
@@ -129,7 +134,7 @@ class LivePairDataset(Dataset):
 
 
 def build_loader(cfg, cache, manifest, schedule, epoch: int, preprocess=None,
-                 shuffle: bool = True, with_taps: bool = False) -> DataLoader:
+                 shuffle: bool = True, with_taps: bool = False, crop=None) -> DataLoader:
     """Pick the dataset by `cfg.source` and wrap it in a DataLoader.
 
     `cache.worker_init` is passed in both modes: memmaps are opened per worker,
@@ -144,7 +149,7 @@ def build_loader(cfg, cache, manifest, schedule, epoch: int, preprocess=None,
         if preprocess is None:
             raise ValueError("source: live needs the detector's preprocess_fn()")
         dataset = LivePairDataset(
-            cache, manifest, schedule, epoch, preprocess, with_taps=with_taps
+            cache, manifest, schedule, epoch, preprocess, with_taps=with_taps, crop=crop
         )
     else:
         raise ValueError(f"source must be 'cache' or 'live', got {cfg.source!r}")

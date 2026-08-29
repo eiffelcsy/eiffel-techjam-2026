@@ -1,15 +1,15 @@
 """DINOv3 ViT-S/16 + a linear-probe MLP head -- the detector GRACE's PoC adapts.
 
-Every other detector in this package is somebody else's published model, loaded
-from somebody else's checkpoint. This one is built here, and it exists for one
-reason: **GRACE needs a detector whose trunk/head seam is not in dispute.**
+The ONLY detector in this package now, and it is built here rather than
+downloaded, for one reason: **GRACE needs a detector whose trunk/head seam is
+not in dispute.**
 
-The zoo splits (`grace.splits.rine`, `.bfree`, `.gapl`) each reconstruct a seam
-inside a repo cloned by hand under `third_party/`, and `RINESplit._head_forward`
-is explicitly marked unverified against its clone. Until those clones exist,
-nothing in the GRACE pipeline can be run end to end on a real detector -- which
-means the interesting claims (does the clean teacher buy retention, does the
-adapter erase forensic evidence) cannot be tested at all.
+The published zoo (B-Free, GAPL, RINE) each reconstructed a seam inside a repo
+cloned by hand under `third_party/`, and RINE's head composition was never
+verified against its clone. All of it has been removed. What that costs is the
+cross-detector evidence: GRACE can now only be demonstrated on this one seam,
+so "the method generalizes across detectors" is no longer a claim this tree can
+support. What it buys is that everything here runs end to end with no clone.
 
 Here the seam is a construction rather than a reconstruction:
 
@@ -50,15 +50,43 @@ import torch.nn as nn
 from PIL import Image
 
 from pipeline.detectors.base import FrozenDetector
-from pipeline.detectors.hf import _CropPreprocess, _ProcessorPreprocess
+from pipeline.detectors.hf import (
+    _CropPreprocess, _CropResizePreprocess, _ProcessorPreprocess, _ResamplePreprocess,
+)
 
 DEFAULT_BACKBONE = "facebook/dinov3-vits16-pretrain-lvd1689m"
 
-INPUT_MODES = ("resize", "crop")
+INPUT_MODES = ("resize", "crop", "multiscale", "crop200", "resample512")
 """How a source image becomes the model's 224x224 input.
 
-    resize   the processor's own transform: squash the whole image to 224x224
-    crop     center 224x224 window at the source's native resolution
+    resize       the processor's own transform: squash the whole image to 224
+    crop         center 224x224 window at the source's native resolution
+    multiscale   the TRAINING protocol: the dataset already handed us a random
+                 128-512px window, so this squashes that window to 224
+    crop200      EVAL ARM (a): centre 200x200 window at native scale, then to 224
+    resample512  EVAL ARM (b): whole image to 512x512, then to 224
+
+The last three exist because WildFake ships its COCO reals pre-resized to a
+uniform 200x200 while its DALL-E 3 fakes are native 1024px output, so on the
+reported benchmark `max(w, h)` separates the classes at AUC 1.0000 -- measured
+over all 13,841 rows, not estimated. A model shown whole images reads that
+instead of the content, and a frequency branch reads it hardest.
+
+`multiscale` is where the fix lives. The crop is drawn in the dataset rather
+than here, seeded on `(index, epoch)` by `pipeline.degrade.crop.multiscale_crop`
+so the render stays reproducible and `sha_preprocess` still sees a deterministic
+transform; by the time preprocessing runs, the window is already chosen and all
+that is left is the squash to 224. The mode name is therefore not describing a
+different transform from `resize` -- it is recording which protocol the head was
+fit under, which is exactly what `_assert_head_matches` needs to tell "resize of
+a whole image" apart from "resize of a native-scale crop".
+
+The two eval arms give every image identical dimensions within an arm, so the
+dimension shortcut is 0.5 by construction rather than by normalisation. Arm (a)
+is in distribution for a multi-scale-trained model (a fixed 200px window is a
+special case of the training draw) and is the informative one. Arm (b) is out of
+distribution -- training never squashes a whole image -- so read it as a
+robustness check rather than as a like-for-like comparison.
 
 `resize` is what the processor config asks for (`size: {224, 224}`,
 `do_center_crop: null`, `default_to_square: true`) and it is the right default
@@ -83,6 +111,47 @@ under it, and one that does not has learned content.
 the traces live at the pixel scale, so the trunk has to be shown pixels at that
 scale or the head has nothing forensic to fit. A 224 window of a 1024px image is
 also ~5% of its area, which cuts how much scene semantics is on offer.
+
+`multiscale` generalises `crop` along the axis `crop` fixed at one value. A
+single 224 window still lets the model infer source resolution from how much
+scene it can see; drawing the window size at random over 128-512px removes that
+too, at the cost of the global artefacts a whole-image view carries -- layout
+regularities, colour statistics, aspect ratio. The trade runs the way this
+project needs, since generation traces are local and high-frequency, but it
+means the 32x32 round-trip check above becomes the load-bearing test: a
+multi-scale head that still survives it has learned content anyway.
+"""
+
+VIEWS = {
+    "crop200": ("crop", 200),
+    "resample512": ("resample", 512),
+}
+"""Eval-arm modes -> (geometry, size). See `pipeline.degrade.crop`.
+
+Sizes are in the name rather than a separate config key so that `input_mode`
+alone identifies the protocol, which is what lets `_assert_head_matches` stay a
+string comparison and what keeps a detector config self-describing.
+"""
+
+HEAD_COMPATIBILITY = {
+    "resize": {"resize"},
+    "crop": {"crop"},
+    "multiscale": {"multiscale", "crop200", "resample512"},
+}
+"""Which `input_mode`s a head trained under a given mode may be scored under.
+
+The guard this feeds exists to catch a head being handed a feature space it was
+never fit on -- a resize-trained head shown native crops scores nonsense, and
+does it silently. Plain equality expressed that correctly until training and
+evaluation used different protocols on purpose: a multi-scale-trained head is
+*meant* to be scored on both fixed arms, so equality would refuse the very
+comparison the benchmark is built to make.
+
+So the check is membership, not equality, and the permissive entry is exactly
+one. `resize` and `crop` heads still refuse everything but themselves, which
+keeps the original guarantee for every head trained before this existed.
+Allowing `multiscale` -> `resample512` is deliberate even though that arm is out
+of distribution: measuring the drop is the arm's purpose.
 """
 
 POOLS = ("cls", "patchmean", "cls+patchmean")
@@ -203,11 +272,7 @@ class DINOv3MLPDetector(FrozenDetector):
         if payload is not None:
             self.head_module.load_state_dict(payload["state_dict"])
 
-        self._preprocess = (
-            _CropPreprocess(self.processor, self.input_size)
-            if input_mode == "crop"
-            else _ProcessorPreprocess(self.processor)
-        )
+        self._preprocess = _build_preprocess(self.processor, input_mode, self.input_size)
         self.freeze()
 
     # -- the seam ------------------------------------------------------------
@@ -251,6 +316,23 @@ class DINOv3MLPDetector(FrozenDetector):
         return self.head(self.trunk(x))
 
 
+def _build_preprocess(processor, input_mode: str, input_size: int):
+    """The one place `input_mode` becomes a transform.
+
+    `multiscale` resolves to the plain processor transform on purpose: under
+    that protocol the window was already chosen upstream, in the dataset, where
+    it can be seeded on the image index. Preprocessing must stay deterministic
+    or `sha_preprocess` refuses it and the feature cache loses its meaning.
+    """
+    if input_mode == "crop":
+        return _CropPreprocess(processor, input_size)
+    if input_mode in VIEWS:
+        geometry, size = VIEWS[input_mode]
+        cls = _CropResizePreprocess if geometry == "crop" else _ResamplePreprocess
+        return cls(processor, size)
+    return _ProcessorPreprocess(processor)
+
+
 def _input_size(processor) -> int:
     """Square side the processor resizes to -- `verify_split` builds its probe
     from this, and a 224 default would silently pass on a 512-input mirror."""
@@ -276,12 +358,18 @@ def _assert_head_matches(payload, path, backbone_id, pool, feature_dim, input_mo
     # Defaulting to it (rather than skipping the check, as the optional keys
     # below do) is what makes an old head refuse a `crop` detector.
     stored_mode = payload.get("input_mode", "resize")
-    if stored_mode != input_mode:
+    allowed = HEAD_COMPATIBILITY.get(stored_mode, {stored_mode})
+    if input_mode not in allowed:
+        extra = (
+            ""
+            if len(allowed) == 1
+            else f" That head may be scored under {sorted(allowed)}."
+        )
         raise ValueError(
             f"{path} was trained on input_mode={stored_mode!r} but this detector "
             f"feeds input_mode={input_mode!r}. The trunk sees a different image "
-            f"scale in each mode, so the features are not the same space. Retrain "
-            f"the probe, or fix `input_mode` in the detector config."
+            f"scale in each mode, so the features are not the same space.{extra} "
+            f"Retrain the probe, or fix `input_mode` in the detector config."
         )
     stored_pool = payload.get("pool")
     if stored_pool is not None and stored_pool != pool:

@@ -22,12 +22,12 @@
 # a layers-layout detector would be, and should be reported that way.
 
 run_id: dinov3_disc
-cache_dir: cache/dinov3-ntire
+cache_dir: cache/dinov3-wildfake
 adapter_checkpoint: checkpoints/grace/dinov3_clean/ema.pt
 
-detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
+detector: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
 split: grace.splits.dinov3.DINOv3Split
-dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
+dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml
 
 # Held-out IMAGES, the same two sets stage 1 scores. Without these E4 reports
 # only `held_out_degradations`, where the base head already sits at ~0.9999 AUC
@@ -36,11 +36,9 @@ dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
 # the main head is at ~0.85 and there are 15 points of headroom for a real
 # signal to show up in.
 val_datasets:
-  - ../eval_pipeline/configs/datasets/ntire_val.yaml
-  - ../eval_pipeline/configs/datasets/ntire_val_hard.yaml
+  - ../eval_pipeline/configs/datasets/wildfake_train_val.yaml
 val_cache_dirs:
-  - cache_val/dinov3-ntire
-  - cache_val_hard/dinov3-ntire
+  - cache_val/dinov3-wildfake
 
 epochs: 4
 batch_size: 64

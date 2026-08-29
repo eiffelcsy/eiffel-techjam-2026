@@ -1,0 +1,42 @@
+# The validation half of wildfake_train. Same manifest file, other split.
+#
+# Built by wildfake_train.yaml -- there is no `source:` here, and there must not
+# be: a second copy of a 200-line sampling spec is a second place for the two
+# halves to drift apart, and the split is disjoint only because ONE sampler cut
+# both from one draw.
+#
+#   python scripts/build_manifest.py --config configs/datasets/wildfake_train.yaml
+#
+# 10,000 rows, balanced 5,000 real / 5,000 generated, carrying the same tier
+# weights and the same stratum proportions as the training split:
+#
+#   advanced_diffusion 2,500    Midjourney|1 1,342   SD|1 1,158
+#   typical_diffusion  1,750    SD|0 1,750
+#   legacy_gan           750    DF-GAN 292   GALIP 247   styleGAN 122
+#                               GigaGAN 42   BigGAN 24   starGAN 23
+#   real               5,000    laion5b 3,687   imagenet 1,313
+#
+# Halved from 20,000 on 2026-08-30, alongside the training split's cut to 50,000
+# -- see wildfake_train.yaml's `splits:` and `exclude_groups:` for what was
+# dropped and why. Balance, tier weights and within-tier proportionality are all
+# unchanged, so this remains the same measurement on fewer rows; what narrowed is
+# generator variety inside `typical_diffusion` (SD only now) and `legacy_gan`
+# (GANs only, no autoencoder family).
+#
+# WHY BALANCED, when training is 28/72. This split exists to SELECT -- stage 0
+# picks its epoch on it and stage 1 reports held-out-image numbers against it --
+# and a selection metric should not inherit the training corpus's class skew.
+# At 28/72 a head that drifts toward the majority class scores better on the
+# thing choosing it, which is the one place that bias does the most damage.
+# 50/50 makes the AUC a statement about the detector rather than about the mix.
+#
+# WHAT IT CAN AND CANNOT ANSWER. These are held-out IMAGES from the same corpus,
+# same generators, same real sources. It measures generalization across images,
+# not across generators or across datasets -- the benchmark
+# (configs/datasets/wildfake_test.yaml, COCO val2017 + DALL-E 3) is the only
+# thing here that speaks to either, and nothing selected on this file is ever
+# reported against it.
+
+name: wildfake-train-val
+manifest: ../data/wildfake_train/manifest.parquet
+split: validation

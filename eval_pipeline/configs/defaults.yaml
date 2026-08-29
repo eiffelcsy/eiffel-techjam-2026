@@ -66,11 +66,22 @@ source:
 # `name` and `target` are required.
 
 name: my-detector           # display name, used in result filenames
-target: pipeline.detectors.hf.HFImageClassifier
+target: pipeline.detectors.dinov3.DINOv3MLPDetector
 args:
-  model_id: some-org/some-detector
-  # fake_labels: [artificial]   # only if the head's id2label is unusual
+  backbone_id: facebook/dinov3-vits16-pretrain-lvd1689m
+  head_checkpoint: ../grace_adapter/checkpoints/probe/<run_id>/head.pt
+  pool: cls+patchmean       # DINOv3's own linear-probe recipe, 768-d
+  input_mode: resize        # resize | crop -- see INPUT_MODES in
+                            # pipeline/detectors/dinov3.py
+  hidden: 512
+  n_layers: 2
 device: auto                # auto -> cuda | mps | cpu; or "cuda:1"
+
+# The ONE detector in the tree. `target` is a dotted import path rather than a
+# registry key, so adding another is a new module under pipeline/detectors/ plus
+# a config like this -- never an edit to pipeline code. The published zoo
+# (B-Free, GAPL, RINE, and a generic Hub classifier) used to live here and was
+# removed; that is what this shape is for if any of it comes back.
 
 
 # -------------------------------------------------------------------- run ----

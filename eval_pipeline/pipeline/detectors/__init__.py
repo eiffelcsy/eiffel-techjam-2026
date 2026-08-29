@@ -5,11 +5,14 @@ registry of known models -- only the contract (`FrozenDetector`), the adapters,
 and the two functions that turn a config entry into a loaded model on the right
 device.
 
-`hf.HFImageClassifier` covers any Hub `AutoModelForImageClassification` from
-config alone. `bfree`, `gapl` and `rine` are the zoo: published detectors whose
-repos are not pip-installable, cloned by hand under `third_party/` and imported
-through `_vendor.vendored`. Each defers its upstream imports into `__init__`, so
-this package stays importable with none of them present.
+ONE detector lives here now: `dinov3.DINOv3MLPDetector`, a frozen DINOv3 trunk
+with an MLP probe head fit by grace_adapter. The published zoo -- B-Free, GAPL,
+RINE and the generic `hf.HFImageClassifier` -- has been removed along with the
+`third_party/` vendoring machinery it needed. `hf` remains for its Hub
+preprocessing helpers, which DINOv3 uses.
+
+The dotted-path contract is what makes that reversible: adding a detector back
+is a module here plus a config line, never an edit to this file.
 """
 
 import torch

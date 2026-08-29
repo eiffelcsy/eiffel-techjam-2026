@@ -1,17 +1,23 @@
-"""Generic adapter for any Hugging Face image-classification detector.
+"""Hub preprocessing, shared by anything built on an `AutoImageProcessor`.
 
-One class covers most published AIGC detectors on the Hub -- the model id goes
-in config, nothing goes in code. The only thing that cannot be assumed is which
-output index means *generated*: Hub detectors disagree, and a fair number order
-`id2label` with the fake class at index 0. Guessing wrong yields a
-plausible-looking (1 - AUC), so the index is resolved from the model's own
-label map and the ambiguous cases raise instead of picking.
+`_ProcessorPreprocess` and `_CropPreprocess` are the two ways a source image
+becomes a model input, and `dinov3.DINOv3MLPDetector` selects between them by
+its `input_mode`. They live here rather than in that module because they are
+properties of the Hub processor contract, not of DINOv3.
+
+`resolve_fake_indices` is kept alongside them for the same reason: which output
+index means *generated* cannot be assumed, Hub detectors disagree, and a fair
+number order `id2label` with the fake class at index 0. Guessing wrong yields a
+plausible-looking (1 - AUC), so the index is resolved from the model's own label
+map and the ambiguous cases raise instead of picking. Nothing in the project
+uses it today -- the generic `HFImageClassifier` went with the detector zoo --
+but it is the piece that would be needed again first.
 """
 
 import torch
 from PIL import Image
 
-from pipeline.detectors.base import FrozenDetector
+from pipeline.degrade.crop import fixed_crop, fixed_resample
 
 DEFAULT_FAKE_LABELS = (
     "artificial", "fake", "ai", "ai_generated", "aigenerated",
@@ -91,58 +97,58 @@ class _CropPreprocess:
         self.size = int(size)
 
     def __call__(self, img: Image.Image) -> torch.Tensor:
-        w, h = img.size
-        if w < self.size or h < self.size:
-            scale = self.size / min(w, h)
-            img = img.resize(
-                (max(self.size, round(w * scale)), max(self.size, round(h * scale))),
-                Image.BICUBIC,
-            )
-            w, h = img.size
-        left, top = (w - self.size) // 2, (h - self.size) // 2
-        img = img.crop((left, top, left + self.size, top + self.size))
-        return self.processor(img, do_resize=False, return_tensors="pt").pixel_values[0]
+        return self.processor(
+            fixed_crop(img, self.size), do_resize=False, return_tensors="pt"
+        ).pixel_values[0]
 
 
-class HFImageClassifier(FrozenDetector):
-    """Any `AutoModelForImageClassification` checkpoint, used as a frozen detector.
+class _CropResizePreprocess:
+    """Crop a window at native scale, then resize it to the model input.
 
-    Parameters
-    ----------
-    model_id    : hub id or local path
-    fake_labels : label names meaning *generated*; override for idiosyncratic heads
-    name        : display name in results; defaults to the model id's last segment
+    Evaluation arm (a). Differs from `_CropPreprocess` in one way that matters:
+    the window is not the model's input size. A 200px window cannot be fed to a
+    patch-16 ViT directly (200/16 is not an integer) and, more to the point, the
+    window size is a property of the *dataset* -- 200 is the largest square every
+    image in WildFake supplies from its own pixels, because every real in it is
+    exactly 200x200 -- while 224 is a property of the model. Cropping at the
+    former and resizing to the latter keeps the two decisions separate.
+
+    Every image in this arm therefore has identical dimensions going in, which is
+    what makes the dimension shortcut 0.5 by construction rather than by
+    normalisation. On the reported benchmark the reals are passed through
+    untouched and nothing is upsampled.
     """
 
-    def __init__(
-        self,
-        model_id: str,
-        fake_labels=DEFAULT_FAKE_LABELS,
-        revision: str | None = None,
-        name: str | None = None,
-    ):
-        super().__init__()
-        from transformers import AutoImageProcessor, AutoModelForImageClassification
+    def __init__(self, processor, crop_size: int):
+        self.processor = processor
+        self.crop_size = int(crop_size)
 
-        self.model_id = model_id
-        self.name = name or model_id.rstrip("/").split("/")[-1]
-        self.processor = AutoImageProcessor.from_pretrained(model_id, revision=revision)
-        self.model = AutoModelForImageClassification.from_pretrained(model_id, revision=revision)
+    def __call__(self, img: Image.Image) -> torch.Tensor:
+        return self.processor(
+            fixed_crop(img, self.crop_size), return_tensors="pt"
+        ).pixel_values[0]
 
-        id2label = self.model.config.id2label
-        self.fake_idx = resolve_fake_indices(id2label, fake_labels)
-        self.real_idx = sorted(set(int(i) for i in id2label) - set(self.fake_idx))
-        self._preprocess = _ProcessorPreprocess(self.processor)
-        self.freeze()
 
-    def preprocess(self, img: Image.Image) -> torch.Tensor:
-        return self._preprocess(img)
+class _ResamplePreprocess:
+    """Squash the whole image to a fixed square, then to the model input.
 
-    def preprocess_fn(self):
-        return self._preprocess
+    Evaluation arm (b), and materially the `resize` protocol made explicit: it
+    is a continuity arm against the existing baselines rather than a new view.
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        logits = self.model(pixel_values=x).logits
-        fake = torch.logsumexp(logits[:, self.fake_idx], dim=1)
-        real = torch.logsumexp(logits[:, self.real_idx], dim=1)
-        return fake - real
+    Read it as a scale-robustness check, not as evidence about frequency. It
+    upsamples WildFake's 200x200 reals 2.56x while downsampling the fakes 2x, so
+    the reals carry near-zero energy above 200-Nyquist by construction and the
+    spectral-rolloff floor sits very high here. It is also out of distribution
+    for a multi-scale-trained model, which never sees a whole image -- that is
+    the point of the arm, but it means a drop here is a generalisation result and
+    not a like-for-like comparison against arm (a).
+    """
+
+    def __init__(self, processor, size: int):
+        self.processor = processor
+        self.size = int(size)
+
+    def __call__(self, img: Image.Image) -> torch.Tensor:
+        return self.processor(
+            fixed_resample(img, self.size), return_tensors="pt"
+        ).pixel_values[0]

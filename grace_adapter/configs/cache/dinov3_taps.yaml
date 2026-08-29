@@ -7,14 +7,17 @@
 # five taps at cls+patchmean width are 7.5 KB per image per view against the
 # seam's 1.5 KB, so the total is SIX times configs/cache/dinov3.yaml.
 #
-#     features   vector(768,)       1.5 KB/image/view       6.4 GB
-#     taps       5 x (768,)         7.5 KB/image/view      32.0 GB
-#     total                         9.0 KB/image/view      38.4 GB
+#     features   vector(768,)       1.5 KB/image/view       2.3 GB
+#     taps       5 x (768,)         7.5 KB/image/view      11.3 GB
+#     total                         9.0 KB/image/view      13.5 GB
+#
+# (100,000 train images x 15 views. Under NTIRE this was 38.4 GB over 277,643
+# images -- the ratio is what matters, not the total.)
 #
 # Why a separate out_dir
 # ----------------------
 # Taps are additional VIEWS in the same layout, so rendering them into
-# `cache/dinov3-ntire` would work -- and would rewrite the feature shards that
+# `cache/dinov3-wildfake` would work -- and would rewrite the feature shards that
 # are already there, because `ShardWriter` opens shards with `mode="w+"`, which
 # truncates. An interrupted tap render would then leave the working cache half
 # destroyed. The trunk pass has to run again either way (that is what produces
@@ -33,9 +36,9 @@
 # old one: `CacheSpec.taps` records the names and a mismatched train run is
 # refused at startup rather than silently reading a different trunk depth.
 
-detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
+detector: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
 split: grace.splits.dinov3.DINOv3Split
-dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
+dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml
 
 split_args:
   tap_blocks: [0, 2, 4, 6, 9]
@@ -48,11 +51,17 @@ trunk_batch_size: 128
 num_workers: 4
 # 4, not the usual 8, and the reason is host RAM rather than throughput.
 # `pipeline.degrade.ops.gaussian_noise` draws its noise with `rng.normal(...)`,
-# which returns FLOAT64: on a 4032x3024 NTIRE train image that is a 279 MiB
-# noise array plus a 279 MiB sum, so ~560 MB of transient per call, per worker.
-# At 8 workers that is ~4.5 GB of spikes on a 16 GB box and the render dies with
-# a MemoryError inside a DataLoader worker, part-way through. The val sets never
-# hit it -- their images are small enough.
+# which returns FLOAT64: on a 4032x3024 image that is a 279 MiB noise array plus
+# a 279 MiB sum, so ~560 MB of transient per call, per worker. At 8 workers that
+# is ~4.5 GB of spikes on a 16 GB box and the render dies with a MemoryError
+# inside a DataLoader worker, part-way through.
+#
+# That measurement was made on NTIRE, whose train images are ~12 MP. WildFake's
+# are far smaller -- generator output is mostly 512-1024 px square -- so the
+# spike should be one to two orders of magnitude lower and 8 workers would
+# probably be safe. Left at 4 until someone measures it on the real corpus:
+# the failure mode is a render that dies hours in, which is worse than being
+# slow. Raise it once the images are on disk and the sizes are known.
 #
 # Halving the workers halves the spike. It costs little: the writer's own
 # measurements put 8 workers at ~2.4x a single one, not 8x, because PIL

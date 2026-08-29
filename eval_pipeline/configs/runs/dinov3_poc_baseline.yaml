@@ -11,13 +11,16 @@
 #
 #   python scripts/run_eval.py --config configs/runs/dinov3_poc_baseline.yaml
 #
-# WHY WILDFAKE AND NOT NTIRE VAL. ntire_val is a selection set in this project:
-# stage 0 picks the head's epoch on it (with ntire_val_hard) and stage 1
-# validates on it at image level. Reporting retention there would be optimistic
-# for exactly the reason ntire_train.yaml used to give about the benchmark.
-# WildFake is the held-out test set -- 4998 COCO val2017 real / 8843 DALL-E 3
-# Advanced generated, a generator the head never saw, from a corpus nothing in
-# this project fits on.
+# WHY THE BENCHMARK AND NOT THE VALIDATION SPLIT. wildfake_train_val is a
+# selection set in this project: stage 0 picks the head's epoch on it and stage 1
+# validates on it at image level. Reporting retention there would be optimistic,
+# and it is drawn from the same strata as training besides, so it cannot speak to
+# generalization across generators at all.
+#
+# wildfake_coco_dalle3 is the held-out test set -- 4998 COCO val2017 real / 8843
+# DALL-E 3 Advanced generated. Both halves are excluded from wildfake_train by
+# `exclude_groups`, so the head has seen neither this generator nor this real
+# corpus.
 #
 # CLASS BALANCE is 4998 : 8843 (1 : 1.77). Left unbalanced: AUC is insensitive
 # to it and the retention curve is AUC-based. Set `max_images: 4998` to score it
@@ -25,7 +28,7 @@
 
 run_id: dinov3_poc_baseline
 
-detector: configs/detectors/dinov3-ntire.yaml
+detector: configs/detectors/dinov3-wildfake.yaml
 
 datasets:
   - configs/datasets/wildfake_coco_dalle3.yaml

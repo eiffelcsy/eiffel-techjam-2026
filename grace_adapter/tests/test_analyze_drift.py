@@ -103,7 +103,7 @@ def clean_only_cache(tmp_path):
 def test_no_cache_at_all_fails_before_anything_else(tmp_path):
     with pytest.raises((FileNotFoundError, OSError)):
         _run(["--cache", str(tmp_path / "never-rendered"),
-              "--dataset", "../eval_pipeline/configs/datasets/ntire_train.yaml"])
+              "--dataset", "../eval_pipeline/configs/datasets/wildfake_train.yaml"])
 
 
 def test_clean_view_without_a_degraded_epoch_exits_with_the_reason(clean_only_cache, tmp_path):

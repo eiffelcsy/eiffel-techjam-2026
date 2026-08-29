@@ -88,24 +88,32 @@ def _cache_loader_cfg(cfg):
     })()
 
 
-def _expect_spec(split, tap_spec) -> CacheSpec:
+def _expect_spec(split, tap_spec, crop_sha: str = "") -> CacheSpec:
     """What this run needs a cache to be, for `CacheSpec.assert_compatible`.
 
     `tap_spec` is passed in rather than derived: stage 1 gets it from its
     adapter config, stage 2 from the checkpoint it is about to score, and those
     are genuinely different questions about the same cache.
 
-    Only the parts that vary per run go in: the feature layout, and the taps.
-    The four fingerprints are left blank because the *cache* is the authority on
-    those -- a run does not know the manifest hash it wants, it knows the split
-    it is training against. Naming the taps here is what turns "ladder trained
-    on a cache rendered for other blocks" from a silent shape coincidence into a
-    refusal at startup.
+    Only the parts that vary per run go in: the feature layout, the taps, and the
+    crop. The four fingerprints are left blank because the *cache* is the
+    authority on those -- a run does not know the manifest hash it wants, it
+    knows the split it is training against. Naming the taps here is what turns
+    "ladder trained on a cache rendered for other blocks" from a silent shape
+    coincidence into a refusal at startup.
+
+    `crop_sha` is the exception to "the cache is the authority", and it is passed
+    rather than blank for the same reason the taps are named: the run genuinely
+    does know which window protocol it wants, because its own `crop:` block
+    determines what `source: live` will draw and what the clean targets have to
+    be windows of. A blank here would make every cropped cache readable by a
+    whole-image run.
     """
     return CacheSpec(
         detector=split.name,
         feature=split.feature_spec,
         n=0,
+        crop_sha=crop_sha,
         taps=split.taps() if tap_spec is not None else (),
         tap_feature=tap_spec,
     )
@@ -207,7 +215,7 @@ def train_adapter(cfg, split, manifest, schedule) -> dict:
     # read them. Resolved before the cache is opened so a ladder run against a
     # tapless cache is refused at startup, not several thousand steps in.
     tap_spec = tap_spec_for(split, cfg.adapter)
-    expect = _expect_spec(split, tap_spec)
+    expect = _expect_spec(split, tap_spec, cfg.crop.fingerprint())
     cache = FeatureCache(cfg.cache_dir, expect=expect)
 
     val_sets = _load_val_sets(cfg, spec, expect)
@@ -251,6 +259,11 @@ def train_adapter(cfg, split, manifest, schedule) -> dict:
         loader = build_loader(
             cfg, cache, manifest, schedule, epoch, preprocess,
             with_taps=tap_spec is not None,
+            # Only reaches `source: live`, and there it must be the crop the
+            # cache's clean view was rendered under: `f_clean` is the target for
+            # whatever window `image` shows. `crop_sha` on the cache is what
+            # catches a run that gets this wrong.
+            crop=cfg.crop.build(),
         )
         for batch in tqdm(loader, desc=f"epoch {epoch}", leave=False):
             split.assert_frozen()
@@ -574,7 +587,9 @@ def train_discrepancy(cfg, split, manifest) -> dict:
     adapter = load_adapter(cfg.adapter_checkpoint, spec, tap_spec).to(device).eval()
     adapter.requires_grad_(False)
 
-    expect = _expect_spec(split, tap_spec if adapter.reads_taps else None)
+    expect = _expect_spec(
+        split, tap_spec if adapter.reads_taps else None, cfg.crop.fingerprint()
+    )
     cache = FeatureCache(cfg.cache_dir, expect=expect)
     val_sets = _load_val_sets(cfg, spec, expect)
 

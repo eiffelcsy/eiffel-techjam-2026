@@ -18,7 +18,7 @@
 name: dinov3+grace-d
 target: grace.detectors.adapted.AdaptedDetector
 args:
-  base: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
+  base: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
   split: grace.splits.dinov3.DINOv3Split
   checkpoint: ../grace_adapter/checkpoints/grace/dinov3_clean/ema.pt
   discrepancy: ../grace_adapter/checkpoints/grace/dinov3_disc/discrepancy.pt

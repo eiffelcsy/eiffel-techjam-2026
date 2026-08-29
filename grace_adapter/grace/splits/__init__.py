@@ -1,6 +1,6 @@
 """Splits are named by dotted import path, as detectors and datasets are.
 
-    {target: "grace.splits.rine.RINESplit"}
+    {target: "grace.splits.dinov3.DINOv3Split"}
 
 No registry: a new detector is a new module here plus a config line, never an
 edit to code in this package. `build_split` takes an already-constructed

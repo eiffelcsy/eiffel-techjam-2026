@@ -38,15 +38,16 @@
 # trained under augmentation would have partly solved the problem GRACE exists to
 # solve, and every retention number downstream would measure the augmentation.
 
-run_id: dinov3_ntire
-detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
-dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml        # split: train
-val_dataset:                # one path, or several. Selection is the unweighted
-  - ../eval_pipeline/configs/datasets/ntire_val.yaml       # mean of their AUCs,
-  - ../eval_pipeline/configs/datasets/ntire_val_hard.yaml  # so a head that wins
-                            # by collapsing on the hard set cannot be selected.
-                            # NOT ntire_train_eval.yaml -- that split is empty
-                            # now that all six shards are `split: train`.
+run_id: dinov3_wildfake
+detector: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
+dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml        # split: train
+val_dataset:                # one path, or several -- selection is the unweighted
+  - ../eval_pipeline/configs/datasets/wildfake_train_val.yaml
+                            # mean of their AUCs. One entry now: it is the
+                            # held-out `validation` split of the SAME manifest,
+                            # disjoint from `train` by construction. NOT the
+                            # benchmark (wildfake_coco_dalle3.yaml) -- nothing
+                            # selected here may ever be reported against that.
 split: grace.splits.dinov3.DINOv3Split
 
 out: ""                     # "" = the head_checkpoint the DETECTOR config names,
@@ -89,15 +90,15 @@ wandb:                      # off by default. summary.json next to the checkpoin
 # ------------------------------------------------------------------ cache ----
 # configs/cache/<name>.yaml
 
-detector: ../eval_pipeline/configs/detectors/rine-ldm.yaml
-split: grace.splits.rine.RINESplit     # dotted path to the SplitDetector
+detector: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
+split: grace.splits.dinov3.DINOv3Split # dotted path to the SplitDetector
 split_args: {}              # keyword arguments for the split. The ladder's tap
                             # set is the one that matters today:
                             #   split_args: {tap_blocks: [0, 2, 4, 6, 9]}
                             # Present on cache, train and discrepancy configs,
                             # and it must be the SAME in all three -- the cache
                             # records what it rendered and refuses a mismatch.
-dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
+dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml
 
 out_dir: cache/
 n_epochs: 12                # degraded views to render. Each is one full trunk
@@ -106,7 +107,9 @@ n_val_epochs: 2             # held-out degradations, numbered from 10000 so thei
                             # `replicate` can never collide with a training epoch
 dtype: float16              # cache dtype; losses always compute in float32
 shard_size: 50000
-batch_size: 32              # 1 for B-Free -- native resolution, cannot stack
+batch_size: 32              # IMAGES per trunk forward. Lower it for a detector
+                            # that takes images at native resolution and cannot
+                            # stack them into a batch.
 num_workers: 8
 max_images: null            # per class; null = all
 device: auto
@@ -128,12 +131,12 @@ schedule:
 # configs/train/<name>.yaml -- the label-free adapter.
 # `run_id` and `cache_dir` are the only keys without a default.
 
-run_id: rine_clean
-cache_dir: cache/rine
+run_id: dinov3_clean
+cache_dir: cache/dinov3-wildfake
 
-detector: ../eval_pipeline/configs/detectors/rine-ldm.yaml
-split: grace.splits.rine.RINESplit
-dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
+detector: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
+split: grace.splits.dinov3.DINOv3Split
+dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml
 # The detector is loaded even in `source: cache` mode: the frozen head is what
 # head_kl and the Jacobian weighting differentiate through, so the model is
 # needed whether or not the trunk ever runs.
@@ -236,13 +239,13 @@ wandb:                      # off by default. summary.json next to the checkpoin
 # The adapter is frozen, so GRACE and GRACE-D ship the same weights bit for bit
 # and "the adapter is trained without labels" stays literally true.
 
-run_id: rine_disc
-cache_dir: cache/rine
-adapter_checkpoint: checkpoints/grace/rine_clean/ema.pt
+run_id: dinov3_disc
+cache_dir: cache/dinov3-wildfake
+adapter_checkpoint: checkpoints/grace/dinov3_clean/ema.pt
 
-detector: ../eval_pipeline/configs/detectors/rine-ldm.yaml
-split: grace.splits.rine.RINESplit
-dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
+detector: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
+split: grace.splits.dinov3.DINOv3Split
+dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml
 
 epochs: 4
 batch_size: 256
@@ -284,12 +287,12 @@ wandb:                      # off by default. summary.json next to the checkpoin
 # configs/detectors/<name>+grace.yaml
 # Written in the HARNESS's DetectorConfig shape, because the harness reads it.
 
-name: rine+grace
+name: dinov3+grace
 target: grace.detectors.adapted.AdaptedDetector
 args:
-  base: ../eval_pipeline/configs/detectors/rine-ldm.yaml
-  split: grace.splits.rine.RINESplit
-  checkpoint: checkpoints/grace/rine_clean/ema.pt   # null = identity, i.e. the
-                                                    # untouched base detector
+  base: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
+  split: grace.splits.dinov3.DINOv3Split
+  checkpoint: checkpoints/grace/dinov3_clean/ema.pt  # null = identity, i.e. the
+                                                     # untouched base detector
   discrepancy: null         # a stage-2 checkpoint here makes this GRACE-D
 device: auto

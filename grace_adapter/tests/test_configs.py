@@ -21,11 +21,17 @@ def _paths(subdir):
     return sorted(CONFIGS.joinpath(subdir).glob("*.yaml"))
 
 
-FAMILIES = ["rine", "dinov3"]
+FAMILIES = ["dinov3"]
 """Detector families with a full config set. Every structural check below runs
 over all of them: a PoC config set that quietly diverged from the one the tests
 describe would be worse than not having one, since the PoC exists precisely to
-be the arm that runs end to end."""
+be the arm that runs end to end.
+
+ONE family now. `rine` was the second, and it was the only evidence that the
+config structure -- and the method behind it -- is not specific to a single
+seam. It went with the detector zoo. These checks still catch a config set that
+drifts internally; they can no longer catch one that is shaped around DINOv3
+alone, because there is nothing left to compare against."""
 
 
 @pytest.mark.parametrize("path", _paths("probe"), ids=lambda p: p.name)
@@ -161,8 +167,8 @@ def test_referenced_detectors_and_datasets_exist(path):
         value = raw.get(key)
         if not value:
             continue
-        # `val_dataset` takes one path or several -- selection now runs against
-        # ntire_val and ntire_val_hard together.
+        # `val_dataset` takes one path or several. One today: the held-out
+        # `validation` split of the training manifest.
         for ref in [value] if isinstance(value, str) else value:
             assert (HERE / ref).resolve().is_file(), f"{path.name}: {key} -> {ref}"
     for key in ("val_datasets", "val_cache_dirs"):

@@ -4,7 +4,7 @@ Detectors and dataset sources are named in config by dotted import path, not by
 a registry key. That keeps the pipeline agnostic: adding a component is a new
 module plus a config line, never an edit to code in here.
 
-    {target: "pipeline.detectors.hf.HFImageClassifier", args: {model_id: ...}}
+    {target: "pipeline.detectors.dinov3.DINOv3MLPDetector", args: {backbone_id: ...}}
 """
 
 import importlib

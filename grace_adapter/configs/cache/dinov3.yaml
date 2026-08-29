@@ -1,20 +1,23 @@
 # The PoC cache: DINOv3 ViT-S/16, pooled to one 768-d vector per image.
 #
-# `vector` layout, 768 dims x 2 bytes = 1.5 KB per image per view -- against
-# RINE's 48 KB. At 16 views (clean + 12 train + 2 val, plus the clean target)
-# that is ~24 KB per image, so the full 277,643-image train manifest renders to
-# ~6.7 GB. Stage 1 then reads it at memory bandwidth: the trunk never runs again.
+# `vector` layout, 768 dims x 2 bytes = 1.5 KB per image per view -- a `layers`
+# seam emitting one token per encoder block would be ~48 KB. At 16 views (clean
+# + 12 train + 2 val, plus the clean target) that is ~24 KB per image, so the
+# 100,000-image train split renders to ~2.4 GB.
+# Stage 1 then reads it at memory bandwidth: the trunk never runs again.
 #
 #   python scripts/build_cache.py configs/cache/dinov3.yaml --dry-run
 #   python scripts/build_cache.py configs/cache/dinov3.yaml
 #
-# Cached on the TRAIN split (ntire_train.yaml) -- now all six shards, 277,643
-# images, since shard 5 was folded back in when stage-0 selection moved to the
-# challenge's own val sets.
+# Cached on the TRAIN split of wildfake_train.yaml -- 100,000 of the manifest's
+# 120,000 rows. The other 20,000 are `split: validation` and are rendered
+# separately; `dataset.split` is what keeps the two apart, so this cache cannot
+# pick up a validation row by accident.
 #
-# Stage-1 image-level validation is rendered separately by configs/cache/
-# dinov3_val.yaml and dinov3_val_hard.yaml, each to its own out_dir. Their rows
-# are disjoint from this cache's by construction: different datasets entirely.
+# Stage-1 image-level validation is rendered by configs/cache/dinov3_val.yaml to
+# its own out_dir. ONE val cache now, where NTIRE needed two (val and val_hard);
+# every stage-1 config's `val_datasets` / `val_cache_dirs` are single-entry
+# lists to match.
 #
 # Stage 0 must have run first: build_cache loads the detector, and the detector
 # loads a head checkpoint that does not exist until then. (The features
@@ -22,9 +25,9 @@
 # invalidate this cache -- `detector_sha` hashes the config, and the head path in
 # it names weights these features never saw.)
 
-detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
+detector: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
 split: grace.splits.dinov3.DINOv3Split
-dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
+dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml
 
 out_dir: cache/
 n_epochs: 12

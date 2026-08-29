@@ -1,6 +1,6 @@
 """Stage 0: fit the PoC detector's classification head on clean features.
 
-    python scripts/train_probe.py configs/probe/dinov3_ntire.yaml
+    python scripts/train_probe.py configs/probe/dinov3_wildfake.yaml
 
 Run this once, before build_cache.py. Nothing else in the pipeline trains a
 detector; this exists because the PoC detector is a DINOv3 trunk plus a head
@@ -69,7 +69,7 @@ def main():
     # row number within ONE manifest file, so two separately-built manifests both
     # start at 0 and an index test reports a collision between datasets that
     # share no image at all -- which is exactly the case now that selection runs
-    # against ntire_val rather than a second split of the training manifest.
+    # against the manifest's own held-out `validation` split.
     # `path` is the image identity and is comparable across manifests.
     train_paths = set(manifest["path"])
     val_sets = []

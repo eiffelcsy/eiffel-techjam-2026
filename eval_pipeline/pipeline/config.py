@@ -72,12 +72,12 @@ class RunConfig:
     `max_images` is a scope decision for this run -- none of them describe what
     the dataset is.
 
-    Detectors are a list so a zoo is one command and one results directory. Each
-    is loaded, scored across every dataset, and released before the next is
-    built, so a run costs one detector's memory however many are named. Note
-    that the loader knobs are shared: a detector needing its own `batch_size`
-    -- B-Free takes images at native resolution and cannot batch -- belongs in
-    its own run rather than in a zoo list.
+    Detectors are a list so several are one command and one results directory.
+    Each is loaded, scored across every dataset, and released before the next
+    is built, so a run costs one detector's memory however many are named.
+    Note that the loader knobs are shared: a detector needing its own
+    `batch_size` -- one taking images at native resolution, which cannot be
+    stacked -- belongs in its own run rather than in a shared list.
 
     Only `run_id`, `detectors` and `datasets` have no default.
     """

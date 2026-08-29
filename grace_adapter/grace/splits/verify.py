@@ -2,11 +2,13 @@
 
     head(trunk(x)) == detector(x)
 
-Every zoo split composes modules that live in a vendored repo under
-`third_party/`, cloned by hand and not present in this tree. A split whose head
-composition is subtly wrong does not crash -- it produces plausible logits from a
-model that was never benchmarked, and every retention number computed from it is
-a comparison against nothing.
+This mattered most for the vendored zoo splits, which composed modules from a
+hand-cloned repo and are now gone. It still matters for the one split left: a
+head composition that is subtly wrong does not crash -- it produces plausible
+logits from a model that was never benchmarked, and every retention number
+computed from it is a comparison against nothing. DINOv3Split delegates rather
+than reconstructs, so the check should be trivially true; that is exactly the
+condition under which an edit breaks it unnoticed.
 
 So each split runs this on one random batch in `__init__`. The cost is one
 forward pass; the alternative is finding out on day 5.

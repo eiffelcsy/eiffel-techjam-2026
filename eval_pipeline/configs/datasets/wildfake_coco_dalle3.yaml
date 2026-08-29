@@ -12,14 +12,23 @@
 #   modelscope.cn/datasets/hy2628982280/WildFake
 #
 # WHY BOTH SPLITS. `split: test` below is this dataset's role in OUR experiment,
-# not a copy of WildFake's own bookkeeping. NTIRE supplies training and model
-# selection -- the head is fit on `ntire_train` shards 0-4 and selected on the
-# held-out shard 5 -- and WildFake is only ever scored, never fit on. A
-# train/test boundary internal to WildFake therefore constrains nothing here,
-# and honouring it would discard 80% of the benchmark for no methodological
-# gain. WildFake's test split is a uniform 20% sample: the 1000 : 1769 this
-# config used to name was exactly that slice of the full 4998 : 8843, at the
-# same class ratio.
+# not a copy of WildFake's own bookkeeping. A train/test boundary internal to
+# WildFake constrains nothing here, and honouring it would discard 80% of the
+# benchmark for no methodological gain: WildFake's test split is a uniform 20%
+# sample, so the 1000 : 1769 this config used to name was exactly that slice of
+# the full 4998 : 8843, at the same class ratio.
+#
+# WHAT KEEPS THIS HELD OUT, now that training also comes from WildFake. It is no
+# longer "we never fit on this corpus" -- configs/datasets/wildfake_train.yaml
+# draws 120,000 images from it. The guarantee is `exclude_groups` there: `DALLE`
+# and `coco` are dropped from BOTH metadata tables, so no row of either class
+# below can reach the training manifest whichever table it came from. That is a
+# stronger property than the split boundary would have given, and it is why
+# reading both tables here is still sound.
+#
+# The exclusions are deliberately wider than this file: all of DALL-E, not just
+# the Advanced tier, and all 163,846 COCO images, not just val2017. See the
+# leakage guard section of wildfake_train.yaml.
 #
 # Both tables are read because a single-class source cannot be built --
 # `CsvMetadataSource` runs `_check_split` over its own rows and raises if either

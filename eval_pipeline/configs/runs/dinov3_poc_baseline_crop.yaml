@@ -1,19 +1,19 @@
 # dinov3_poc_baseline, with the crop-fed head. The preprocessing ablation.
 #
 # A SEPARATE run rather than a second detector in the baseline run, for the same
-# reason configs/detectors/dinov3-ntire-crop.yaml is a separate detector: the
+# reason configs/detectors/dinov3-wildfake-crop.yaml is a separate detector: the
 # resize baseline is a number that has already been measured, and re-running it
 # to add a column would invite editing it. This writes its own JSON beside it and
 # report.py compares the two.
 #
-#   cd ../grace_adapter && python scripts/train_probe.py configs/probe/dinov3_ntire_crop.yaml
+#   cd ../grace_adapter && python scripts/train_probe.py configs/probe/dinov3_wildfake_crop.yaml
 #   cd ../eval_pipeline && python scripts/run_eval.py --config configs/runs/dinov3_poc_baseline_crop.yaml
 #
 # WHAT IT DECIDES. GRACE needs a detector whose accuracy COLLAPSES under
 # degradation -- that collapse is the gap the adapter exists to close. A head
 # that reads content rather than generation traces does not collapse, and its
 # retention curve is a flat line at 100% with no room for a repair. See the
-# table in configs/detectors/dinov3-ntire-crop.yaml: on this project's previous
+# table in configs/detectors/dinov3-wildfake-crop.yaml: on this project's previous
 # dataset the resize probe held ~100% retention through blur sigma=2.0 and a
 # 0.25x resize, which nothing reading local high-frequency traces survives.
 #
@@ -23,11 +23,11 @@
 #                                       shortcut. Refit the PoC path on the crop
 #                                       detector: point configs/cache/dinov3.yaml
 #                                       and configs/train/dinov3_*.yaml at
-#                                       dinov3-ntire-crop.yaml and re-render.
+#                                       dinov3-wildfake-crop.yaml and re-render.
 #   both collapse                    -> preprocessing was not the confound on
-#                                       NTIRE, and the resize baseline stands.
+#                                       WildFake, and the resize baseline stands.
 #   neither collapses                -> the DATASET separates on content. That is
-#                                       a finding about NTIRE, and no adapter
+#                                       a finding about WildFake, and no adapter
 #                                       fixes it.
 #
 # Everything except `detector` is byte-identical to dinov3_poc_baseline.yaml, so
@@ -36,7 +36,7 @@
 
 run_id: dinov3_poc_baseline_crop
 
-detector: configs/detectors/dinov3-ntire-crop.yaml
+detector: configs/detectors/dinov3-wildfake-crop.yaml
 
 datasets:
   - configs/datasets/wildfake_coco_dalle3.yaml

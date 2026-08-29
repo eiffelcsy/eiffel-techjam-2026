@@ -18,14 +18,13 @@ from pipeline.config import (
 from pipeline.data.manifest import build_manifest, load_manifest
 from pipeline.degrade.conditions import build_conditions, load_grid
 from pipeline.detectors import build_detector
-from pipeline.detectors._vendor import THIRD_PARTY
 from pipeline.eval.report import headline_table, load_results
 from pipeline.eval.runner import run_eval
 from tests.fixtures import SyntheticSource
 
 GRID_FILE = "configs/degradations.yaml"
 N_PER_CLASS, N_REPLICATES = 8, 2
-ZOO_CONFIGS = sorted(Path("configs/detectors").glob("*.yaml"))
+DETECTOR_CONFIGS = sorted(Path("configs/detectors").glob("*.yaml"))
 DATASET_CONFIGS = sorted(Path("configs/datasets").glob("*.yaml"))
 
 
@@ -180,7 +179,7 @@ def test_a_zoo_of_detectors_lands_in_one_comparable_table(result, tmp_path):
     assert list(headline.index) == [("stub-a", "synthetic"), ("stub-b", "synthetic")]
 
 
-@pytest.mark.parametrize("path", ZOO_CONFIGS, ids=lambda p: p.stem)
+@pytest.mark.parametrize("path", DETECTOR_CONFIGS, ids=lambda p: p.stem)
 def test_detector_configs_load(path):
     """Every shipped detector config parses and names an importable target.
 
@@ -202,7 +201,7 @@ def test_dataset_configs_load(path):
     Not that it builds -- that needs the data, which this suite deliberately
     does not have -- only that the spec is well-formed and the target resolves.
     A `source:` block is optional: a config that only names a manifest built by
-    another config (ntire_val) is a legitimate spec with nothing to import.
+    another config (wildfake_train_val) is a legitimate spec with nothing to import.
     """
     from pipeline.config import load_dataset_config
     from pipeline.utils.imports import locate
@@ -409,51 +408,24 @@ def test_stratified_source_refuses_an_unmatched_exclusion(tmp_path):
         list(source(["heldgen", "heldreal"]).rows(tmp_path / "u"))
 
 
-VENDORED = ("pipeline.detectors.bfree.", "pipeline.detectors.gapl.", "pipeline.detectors.rine.")
-"""Detectors whose weights come from a repo cloned by hand under `third_party/`.
-
-Selected by target rather than by name: `sdxl` and `dinov3-ntire` load from the
-Hub and would fail this test with a network or licence error that says nothing
-about a missing clone, and a fourth Hub detector added later should not have to
-remember to opt out."""
-
-
-def _is_vendored(path) -> bool:
-    from pipeline.config import load_detector_config
-
-    return load_detector_config(path).target.startswith(VENDORED)
-
-
-@pytest.mark.skipif(THIRD_PARTY.is_dir(), reason="the zoo is cloned on this machine")
-@pytest.mark.parametrize(
-    "path", [p for p in ZOO_CONFIGS if _is_vendored(p)], ids=lambda p: p.stem
-)
-def test_missing_zoo_clone_says_how_to_fix_it(path):
-    """A missing clone is the likeliest first-run failure; it must be actionable."""
-    from pipeline.config import load_detector_config
-
-    with pytest.raises(FileNotFoundError, match="git clone"):
-        build_detector(load_detector_config(path))
-
-
 def test_run_config_takes_one_detector_or_many(tmp_path):
     """`detector:` and `detectors:` are the same key at different arities."""
     def write(body: str) -> Path:
         path = tmp_path / "run.yaml"
         path.write_text(
-            f"run_id: r\ndatasets: [configs/datasets/ntire_train.yaml]\n{body}"
+            f"run_id: r\ndatasets: [configs/datasets/wildfake_train.yaml]\n{body}"
         )
         return path
 
-    one = load_run_config(write("detector: configs/detectors/rine-ldm.yaml\n"))
-    assert [d.name for d in one.detectors] == ["rine-ldm"]
+    one = load_run_config(write("detector: configs/detectors/dinov3-wildfake.yaml\n"))
+    assert [d.name for d in one.detectors] == ["dinov3-wildfake"]
 
     many = load_run_config(write(
         "detectors:\n"
-        "  - configs/detectors/rine-ldm.yaml\n"
-        "  - configs/detectors/rine-4class.yaml\n"
+        "  - configs/detectors/dinov3-wildfake.yaml\n"
+        "  - configs/detectors/dinov3-wildfake-crop.yaml\n"
     ))
-    assert [d.name for d in many.detectors] == ["rine-ldm", "rine-4class"]
+    assert [d.name for d in many.detectors] == ["dinov3-wildfake", "dinov3-wildfake-crop"]
 
     with pytest.raises(KeyError):
         load_run_config(write("detector: x\ndetectors: [y]\n"))

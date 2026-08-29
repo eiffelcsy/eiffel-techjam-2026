@@ -23,6 +23,67 @@ from typing import Any
 import yaml
 
 from grace.cache.schedule import DEFAULT_LEVEL_WEIGHTS
+from pipeline.degrade.crop import POLICIES, SampleCrop
+
+
+@dataclass
+class CropConfig:
+    """The multi-scale window shown to the model, in place of a whole image.
+
+    Applied after the degradation recipe and before preprocessing, drawn
+    deterministically from `(index, epoch, seed)` so a rendered cache stays
+    reproducible. Shared by stage 0, the cache render and live training, because
+    a head fit on one window protocol and features rendered under another are not
+    the same feature space -- which is what `input_mode` records and
+    `_assert_head_matches` enforces at evaluation time.
+
+    Off by default. Every config predating this keeps whole-image behaviour, and
+    turning it on is a single key, which is the repo's unit of ablation.
+
+    `s_max` has no default on purpose. The safe upper bound is a property of the
+    corpus, not of the method: a window larger than a source cannot be taken, so
+    if one class's images are systematically smaller its crops are systematically
+    smaller too, and the realized crop size becomes the label. On `wildfake_test`
+    a 128-512 range scores E-cropsize 0.9895 -- almost exactly the shortcut the
+    crop was introduced to remove. Run `eval_pipeline/scripts/audit_sizes.py`
+    against the corpus being trained on and write down what it says.
+    """
+
+    enabled: bool = False
+    s_min: int = 128
+    s_max: int | None = None
+    policy: str = "uniform"
+    seed: int = 0
+
+    def __post_init__(self):
+        if not self.enabled:
+            return
+        if self.s_max is None:
+            raise ValueError(
+                "crop.enabled is true but crop.s_max is unset. The safe range is a "
+                "property of the corpus, so it has no default: run "
+                "eval_pipeline/scripts/audit_sizes.py --config <the training "
+                "dataset> and use the s_max it recommends."
+            )
+        if self.policy not in POLICIES:
+            raise ValueError(f"crop.policy must be one of {POLICIES}, got {self.policy!r}")
+        if self.s_min < 1 or self.s_max < self.s_min:
+            raise ValueError(
+                f"need 1 <= crop.s_min <= crop.s_max, got s_min={self.s_min}, "
+                f"s_max={self.s_max}"
+            )
+
+    def build(self) -> SampleCrop | None:
+        """The `(image, index) -> image` the render and training paths apply."""
+        if not self.enabled:
+            return None
+        return SampleCrop(self.s_min, self.s_max, self.seed, self.policy)
+
+    def fingerprint(self) -> str:
+        """`CacheSpec.crop_sha`. Empty means whole images, which is a protocol
+        rather than a missing value -- see the field's own note."""
+        crop = self.build()
+        return crop.fingerprint() if crop is not None else ""
 
 
 @dataclass
@@ -90,11 +151,15 @@ class ProbeConfig:
     val_dataset: str | list[str] = ""
     """Held-out images for model selection. One config path, or several.
 
-    Several because selection now runs against the challenge's own val sets
-    (ntire_val + ntire_val_hard) rather than a held-out training shard, and one
-    scalar has to come out of two datasets: the selection score is the unweighted
-    mean of their AUCs, so a head that wins by collapsing on the hard set cannot
-    be selected. Per-dataset AUC and accuracy are reported alongside it.
+    A list because selection has taken more than one dataset before: under NTIRE
+    it ran against val + val_hard, and one scalar had to come out of both, so the
+    selection score is the unweighted mean of their AUCs and a head that won by
+    collapsing on the hard set could not be selected. Per-dataset AUC and
+    accuracy are reported alongside it either way.
+
+    Today it holds ONE entry -- wildfake_train_val, the held-out split of the
+    training manifest -- so the mean is over a single set and that protection is
+    inactive. Whatever it holds, it must never name the reported benchmark.
     """
     out: str = ""
     hidden: int = 512
@@ -111,6 +176,7 @@ class ProbeConfig:
     seed: int = 0
     device: str = "auto"
     split: str = "grace.splits.dinov3.DINOv3Split"
+    crop: CropConfig = field(default_factory=CropConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig)
 
     def val_datasets(self) -> list[str]:
@@ -162,6 +228,7 @@ class CacheConfig:
     mismatched cache is refused rather than silently mis-fed.
     """
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
+    crop: CropConfig = field(default_factory=CropConfig)
 
 
 @dataclass
@@ -358,6 +425,7 @@ class TrainConfig:
     adapter: AdapterConfig = field(default_factory=AdapterConfig)
     loss: LossConfig = field(default_factory=LossConfig)
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
+    crop: CropConfig = field(default_factory=CropConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig)
 
 
@@ -406,6 +474,11 @@ class DiscrepancyTrainConfig:
     val_cache_dirs: list[str] = field(default_factory=list)
     log_every: int = 50
     discrepancy: DiscrepancyConfig = field(default_factory=DiscrepancyConfig)
+    crop: CropConfig = field(default_factory=CropConfig)
+    """Stage 2 never decodes an image -- it reads cached features throughout --
+    but it still has to name the window protocol, because `crop_sha` is what
+    stops it reading a whole-image cache as though the stage-1 adapter it is
+    freezing had been trained on one. Set it to whatever stage 1 used."""
     wandb: WandbConfig = field(default_factory=WandbConfig)
 
     def __post_init__(self):

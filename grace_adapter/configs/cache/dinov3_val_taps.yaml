@@ -1,4 +1,5 @@
-# Stage-1 image-level validation cache WITH taps -- NTIRE val, undistorted half.
+# Stage-1 image-level validation cache WITH taps -- the held-out split of
+# wildfake_train.
 #
 #   python scripts/build_cache.py configs/cache/dinov3_val_taps.yaml --dry-run
 #   python scripts/build_cache.py configs/cache/dinov3_val_taps.yaml
@@ -10,9 +11,9 @@
 #
 # `tap_blocks` must match configs/cache/dinov3_taps.yaml exactly.
 
-detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
+detector: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
 split: grace.splits.dinov3.DINOv3Split
-dataset: ../eval_pipeline/configs/datasets/ntire_val.yaml
+dataset: ../eval_pipeline/configs/datasets/wildfake_train_val.yaml
 
 split_args:
   tap_blocks: [0, 2, 4, 6, 9]

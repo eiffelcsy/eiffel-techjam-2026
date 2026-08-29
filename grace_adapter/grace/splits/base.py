@@ -31,9 +31,15 @@ from pipeline.detectors.base import FrozenDetector
 LAYOUTS = ("vector", "tokens", "layers")
 """What the trunk emits, per image, ignoring the batch dimension.
 
-    vector  (D,)      one embedding                      -- GAPL
-    tokens  (T, D)    per-patch or per-window tokens      -- B-Free (5 windows)
-    layers  (L, D)    one CLS token per encoder block     -- RINE
+    vector  (D,)      one embedding                      -- DINOv3 (the only
+                                                            seam in this tree)
+    tokens  (T, D)    per-patch or per-window tokens      -- historical: B-Free
+    layers  (L, D)    one CLS token per encoder block     -- historical: RINE
+
+Only `vector` has a live detector behind it now. The other two are kept because
+the adapter, the cache and the factory all branch on layout and are tested
+across all three -- removing them would delete working generality, not dead
+code, and would have to be rebuilt to adapt any seam that is not pooled.
 
 `tokens` and `layers` are the same tensor rank and differ only in what the
 adapter does with the group axis: tokens share one gate, layers get one gate

@@ -27,10 +27,10 @@
 # compare.py refuses two result files from different eval sets, because
 # retention is only comparable on one. So: baseline and arms, same datasets list.
 #
-# WildFake and not ntire_val, for the reason dinov3_poc_baseline.yaml gives at
-# length -- ntire_val is a SELECTION set here (stage 0 picks the head's epoch on
-# it, stage 1 validates on it at image level), so a retention curve measured
-# there is optimistic for both the baseline and the adapter. ntire_val is still
+# The benchmark and not wildfake_train_val, for the reason dinov3_poc_baseline.yaml
+# gives at length -- that split is a SELECTION set here (stage 0 picks the head's
+# epoch on it, stage 1 validates on it at image level), so a retention curve
+# measured there is optimistic for both the baseline and the adapter. It is still
 # reported for stage 1, but in checkpoints/grace/<run>/summary.json under
 # `validation`, not through the harness.
 

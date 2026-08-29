@@ -42,18 +42,16 @@
 
 run_id: dinov3_gate_nodecay
 
-detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
+detector: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
 split: grace.splits.dinov3.DINOv3Split
-dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
+dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml
 
 val_datasets:
-  - ../eval_pipeline/configs/datasets/ntire_val.yaml
-  - ../eval_pipeline/configs/datasets/ntire_val_hard.yaml
+  - ../eval_pipeline/configs/datasets/wildfake_train_val.yaml
 val_cache_dirs:
-  - cache_val/dinov3-ntire
-  - cache_val_hard/dinov3-ntire
+  - cache_val/dinov3-wildfake
 
-cache_dir: cache/dinov3-ntire
+cache_dir: cache/dinov3-wildfake
 epochs: 12
 seed: 0
 target_view: clean

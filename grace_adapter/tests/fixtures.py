@@ -1,10 +1,11 @@
 """Tiny stand-ins so the core math is testable without any detector weights.
 
-The zoo repos are cloned by hand under `third_party/` and are not in this tree,
-so a test that needed real weights would never run. Everything GRACE actually
-invents -- the adapter, the weighting, the losses, the fusion, the schedule, the
-cache -- is independent of which detector it is attached to, and is tested
-against these.
+The one real detector left is a licence-gated Hub download, so a test that
+needed its weights would not run in CI. Everything GRACE actually invents --
+the adapter, the weighting, the losses, the fusion, the schedule, the cache --
+is independent of which detector it is attached to, and is tested against
+these. That independence is now only asserted by these fixtures: the second
+real seam that used to demonstrate it went with the detector zoo.
 
 `ToyDetector` mirrors the real arrangement rather than faking it: the detector
 owns the parameters and `ToySplit` is a view over it, so `assert_frozen` and
