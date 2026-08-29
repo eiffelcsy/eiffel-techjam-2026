@@ -1,9 +1,14 @@
-# The PoC comparison, in one run: the same detector three ways.
+# The PoC comparison: the same detector two ways, against the baseline.
 #
-#   +identity   null adapter. MUST reproduce dinov3_poc_baseline exactly -- if it
-#               does not, the split is wrong and nothing below means anything.
 #   +grace      the label-free adapter (stage 1)
 #   +grace-d    stage 1 plus the supervised discrepancy branch (stage 2)
+#
+# The third arm, +identity, is NOT here. It is E1, the gate on everything else,
+# and it lives in configs/runs/dinov3_poc_identity.yaml so it can be scored right
+# after the baseline -- before the cache render, before stage 1, before stage 2.
+# Bundling it here would have meant the check that decides whether any of this is
+# measurable could not run until all of it had been trained. It also saves a full
+# pass over the eval set, since the identity arm is scored once instead of twice.
 #
 # Same conditions, same threshold rule, same retention denominator, same JSON
 # schema as the baseline, because it is the same harness and the same code path.
@@ -32,7 +37,6 @@
 run_id: dinov3_poc_grace
 
 detectors:
-  - ../grace_adapter/configs/detectors/dinov3+identity.yaml
   - ../grace_adapter/configs/detectors/dinov3+grace.yaml
   - ../grace_adapter/configs/detectors/dinov3+grace-d.yaml
 

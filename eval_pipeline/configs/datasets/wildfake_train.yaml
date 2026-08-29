@@ -1,0 +1,227 @@
+# WildFake -- the TRAINING corpus. 100k images, weighted toward the state of
+# the art rather than toward whatever WildFake happens to hold most of.
+#
+# Replaces NTIRE for stage 0 (head fit) and stage 1 (adapter fit). The reported
+# benchmark stays configs/datasets/wildfake_test.yaml, and the two are disjoint
+# by construction -- see "The leakage guard".
+#
+#   python scripts/fetch_wildfake_train.py          # ~289 GB, mines 100k images
+#   python scripts/build_manifest.py --config configs/datasets/wildfake_train.yaml
+#
+# Expect 100,000 rows: 28,382 real / 71,618 generated.
+#
+# --------------------------------------------------------- TWO-LEVEL WEIGHTING
+# The generated half is allocated in two steps, and they answer different
+# questions on purpose.
+#
+#   1. ACROSS TIERS -- a judgement, set by hand below. How much of the corpus
+#      should sit near the state of the art. 50 / 35 / 15.
+#   2. WITHIN A TIER -- a measurement. Once a tier's budget is fixed, its strata
+#      divide it in the proportion they occupy in WildFake. Nothing inside a
+#      tier is hand-weighted.
+#
+# Straight corpus-proportional sampling was rejected because WildFake's mass is
+# in its oldest material: SD v1.5/v2.0 alone is 681,115 of 2.49M generated rows,
+# so proportional weighting hands 27% of the training corpus to the *oldest*
+# Stable Diffusion and 8% to the newest. The benchmark is DALL-E 3. Training a
+# detector mostly on 2022 generators to report on a 2023 one inverts the
+# question the project is asking.
+#
+# `IsAdvanced` is WildFake's own tier flag and the only one that is consistent
+# -- `Weight` and `Category` mix model versions (`SDv15`, `SDv2`) with
+# dreambooth subject names (`backpack`, `cat_`) for SD, and merely restate the
+# architecture everywhere else. It ranks WITHIN a family, though, not across the
+# corpus: DF-GAN and GALIP are flagged Advanced but are text-to-image GANs,
+# while ADM, VQDM, DDPM, DDIM and Imagen are flagged Typical but are real
+# diffusion models. That is why the tiers below are cut on `Generator` first and
+# `IsAdvanced` second, rather than on the flag alone -- sorting by the flag
+# would rank GANs above diffusion.
+#
+#   tier                budget   strata
+#   advanced_diffusion  35,809   Midjourney|1 19,218   SD|1 16,591
+#   typical_diffusion   25,066   SD|0 12,359   Midjourney|0 3,666   ADM 2,813
+#                                VQDM 2,785    DDPM 1,389   DDIM 1,193
+#                                Imagen 861
+#   legacy_gan          10,743   DF-GAN 3,076  GALIP 2,606  MAGE 1,602
+#                                styleGAN 1,282  VQVAE 881  GigaGAN 442
+#                                BigGAN 249  starGAN 247  VQGAN 224  MAE 134
+#
+# 17 generator architectures against the benchmark's one. `Other_based` (MAGE,
+# VQGAN, VQVAE, MAE) rides in the legacy tier: masked-image and autoencoder
+# generators, further from the diffusion state of the art than either
+# diffusion tier and not usefully separable from the GANs for this purpose.
+#
+# `group_column` carries `IsAdvanced` so a stratum can never span two tiers --
+# the source raises if one does, rather than letting a tier boundary fall
+# invisibly inside a group.
+#
+# ------------------------------------------------------------ the leakage guard
+# `exclude_groups` holds the evaluation set's own strata, and it is the ONLY
+# thing keeping training data out of the benchmark. Entries match a whole
+# composite key ("SD|0") or a family ("DALLE", every tier of it).
+#
+#   DALLE   the test set is DALL-E 3 (`IsAdvanced=1`, 8,843 images). Excluding
+#           the family also drops DALL-E 2's 55,638 -- the same lineage one
+#           generation back, the closest thing in the corpus to training on the
+#           test generator.
+#   coco    the test set is COCO val2017 (4,998), but WildFake files all 163,846
+#           COCO images under one `coco` architecture and only the path
+#           separates val2017 from train2017/test2017. Excluding by architecture
+#           drops all three. Keeping train2017 would be disjoint image-by-image
+#           and would still put the benchmark's exact real distribution -- same
+#           photographers, same collection, same encoder -- into training.
+#   wukong  NOT a leakage guard. `Images/Real/wukong.zip` is a 164-byte stub in
+#           the ModelScope repo, so its 265,696 rows cannot be fetched at all.
+#           Excluded so the shortfall is redistributed openly rather than
+#           surfacing as missing files half way through a build.
+#
+# The source raises if any entry matches zero rows. That check is the point: a
+# typo would not fail, it would quietly train on the generator the paper
+# reports, and no later assertion could detect it.
+#
+# WildFake's OWN train/test split is not the guard and is not honoured -- both
+# tables are read as one corpus, exactly as wildfake_test.yaml does. The
+# exclusions make the two sets disjoint whichever table a row came from.
+#
+# ---------------------------------------------------- the four partial strata
+# WildFake is 1,199 GB, not the ~110 GB its dataset card implies: SD (497 GB)
+# and Midjourney (530 GB) are 86% of it, re-uploaded as multi-part archives.
+# Neither can be taken whole, so one part of each tier is fetched and those four
+# strata are drawn from inside it:
+#
+#   SD|1          SD/originalSD/Advanced/part_1.zip    48.0 GB   need 16,591
+#   Midjourney|1  Midjourney/Advanced/part_7.zip       46.9 GB   need 19,218
+#   SD|0          SD/originalSD/Typical/part_3.zip     15.1 GB   need 12,359
+#   Midjourney|0  Midjourney/Typical/part_4.zip        32.8 GB   need  3,666
+#
+# `available_lists` points at the file lists those archives turn out to hold,
+# written by fetch_wildfake_train.py from each zip's own index. Every stratum
+# keeps its FULL weight regardless: the source allocates on how big a family is
+# in WildFake and only *draws* from what is available. If a part turns out too
+# small to cover its share the planner raises rather than under-filling.
+#
+# Midjourney|0 is poor value -- 32.8 GB for 3,666 images -- and is the first
+# thing to cut if bandwidth matters more than holding the tier proportions
+# exactly. Dropping it costs the typical tier its second-largest stratum.
+#
+# Regenerating those lists re-plans the sample. Do not delete them.
+#
+# ------------------------------------------------------------------- the ratio
+# `real_fraction: 0.283821` is the real share of the WHOLE corpus
+# (1,013,446 / 3,570,724), held deliberately rather than inherited. The pool's
+# own ratio is lower, because the exclusions remove far more reals (COCO's
+# 163,846 plus wukong's 265,696) than fakes (DALL-E's 64,481) -- an artifact of
+# which subset the benchmark uses and which archive is broken, not a property of
+# the corpus. Tiers apply to the generated half only; reals carry
+# `Generator: Real` and stay corpus-proportional:
+#
+#   laion5b 13,213 (46.55%)   imagenet 4,705 (16.58%)   church 4,052 (14.28%)
+#   ffhq     3,402 (11.99%)   afhq     1,552 ( 5.47%)   celebahq 1,458 ( 5.14%)
+#
+# ----------------------------------------------------- CAVEAT: real monoculture
+# Read this before quoting anything from D1.
+#
+# 10,464 of the 28,382 reals (36.9%) are single-subject corpora: ffhq and
+# celebahq are faces, church is LSUN churches, afhq is animal faces. The
+# benchmark's reals are COCO val2017, chosen in wildfake_test.yaml precisely
+# because it is "photographic, multi-object, no face or church monoculture".
+# Losing wukong pushed this up from 25.3% and pushed laion5b to 46.6%.
+#
+# So the training and evaluation real distributions differ in content, and D1 --
+# the experiment asking whether the head reads generation traces or semantics --
+# has a confound NTIRE did not have. Deliberate, not a bug, but state it
+# wherever D1 is reported.
+#
+# The one-line alternative if D1 comes back ambiguous: add ffhq, celebahq,
+# church and afhq to `exclude_groups`, leaving 368,619 broad photographic reals
+# (laion5b + imagenet) -- still 13x the 28,382 needed.
+#
+# ----------------------------------------------------------------- LICENSING
+# WildFake is an aggregate; its constituents carry their own terms, which the
+# corpus-level license does not replace. Verify before training -- this is the
+# axis that disqualified NTIRE:
+#
+#   laion5b   LAION-5B, withdrawn Dec 2023 (Stanford CSAM report), re-released
+#             as Re-LAION. Highest-risk item here, and 46.6% of the real half.
+#   imagenet  research-only, non-commercial
+#   ffhq      CC BY-NC-SA 4.0     celebahq  non-commercial research only
+#   afhq      CC BY-NC 4.0        church    LSUN terms
+#
+# Evaluation is unaffected: wildfake_test.yaml is COCO val2017 + DALL-E 3, and
+# COCO is the most permissive subset in the corpus.
+#
+# ------------------------------------------------------------------- download
+#   python scripts/fetch_wildfake_train.py --dry-run
+#   python scripts/fetch_wildfake_train.py
+#
+# ~289 GB moves over the wire; each archive is deleted once the images this
+# sample names are mined out of it, so peak disk is one archive plus the
+# extracted set rather than the 289 GB an unpack-everything approach would
+# strand. `--resume` restarts an interrupted run without re-downloading.
+#
+# The metadata tables are copied here from ../wildfake_test/ so each dataset
+# directory is self-contained. They are read as UTF-8 -- SD's lora/ tree carries
+# CJK filenames the Windows locale codec cannot decode.
+#
+# `on_missing: error` matters more here than anywhere else: the sample is
+# weighted, and skipping an archive that failed to unpack would silently
+# re-weight every remaining stratum.
+#
+# NEVER rebuild this manifest once a feature cache has been rendered against it.
+# `seed`, the tier weights and the availability lists are all part of
+# `manifest_sha`; rebuilding invalidates every cache and checkpoint downstream.
+
+name: wildfake-train
+manifest: ../data/wildfake_train/manifest.parquet
+split: train
+
+source:
+  target: pipeline.data.sources.StratifiedCsvSource
+  args:
+    csv_paths:
+      # Test table first, matching wildfake_test.yaml, so a row's position in
+      # the concatenated stream is the same in both configs.
+      - ../data/wildfake_train/split_train_test/csv_file/total_split/test_metadata.csv
+      - ../data/wildfake_train/split_train_test/csv_file/total_split/train_metadata.csv
+    root: ../data/wildfake_train/images
+
+    path_column: Image_path
+    label_column: IsFake          # WildFake's own polarity: 1 = generated
+    fake_values: ["1"]
+    real_values: ["0"]
+
+    group_column:                 # composite, so a stratum cannot span a tier
+      - Architecture              # generator of a fake, source corpus of a real
+      - IsAdvanced                # WildFake's within-family generation flag
+
+    exclude_groups:               # first two are the leakage guard; the third
+      - DALLE                     # is a broken archive. See the header.
+      - coco
+      - wukong
+
+    # Ordered, first match wins, generated rows only. Weights are relative.
+    tiers:
+      - name: advanced_diffusion
+        weight: 50
+        where: {Generator: Diffusion_based, IsAdvanced: 1}
+      - name: typical_diffusion
+        weight: 35
+        where: {Generator: Diffusion_based, IsAdvanced: 0}
+      - name: legacy_gan          # GANs and the masked/autoencoder generators
+        weight: 15
+        where: {Generator: [GAN_based, Other_based]}
+
+    available_lists:              # partially-downloaded strata; each keeps its
+      SD|1: ../data/wildfake_train/available/SD_1.txt            # full weight
+      SD|0: ../data/wildfake_train/available/SD_0.txt
+      Midjourney|1: ../data/wildfake_train/available/Midjourney_1.txt
+      Midjourney|0: ../data/wildfake_train/available/Midjourney_0.txt
+
+    n_total: 100000
+    real_fraction: 0.283821       # the whole corpus's real share, held
+                                  # deliberately. null = the pool's own ratio
+    seed: 0                       # part of the manifest's identity
+
+    generator_column: Architecture
+    split: train
+    on_missing: error

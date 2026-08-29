@@ -60,10 +60,8 @@ class CachedPairDataset(Dataset):
     the axis along which the corruption varies. Shuffling *within* an epoch is
     free and expected; manifest order only matters at write time.
 
-    `with_taps` adds `taps_deg` and `taps_clean`, two more memmap reads. Both,
-    not just the degraded one: the ladder is run on clean features by
-    `identity_loss`, and feeding it nothing there would leave the tap pathway
-    free to do whatever it likes on exactly the inputs that term protects.
+    `with_taps` adds `taps_deg`, one more memmap read. The cache also holds
+    clean taps, but nothing in the objective reads them, so they are not loaded.
     """
 
     def __init__(self, cache: FeatureCache, manifest, epoch: int, with_taps: bool = False):
@@ -89,7 +87,6 @@ class CachedPairDataset(Dataset):
         }
         if self.with_taps:
             item["taps_deg"] = self.cache.taps(idx, self.epoch)[0]
-            item["taps_clean"] = self.cache.clean_taps(idx)[0]
         return item
 
 
@@ -107,6 +104,9 @@ class LivePairDataset(Dataset):
         self.epoch = epoch
         self.preprocess = preprocess
         self.with_taps = with_taps
+        """Accepted for interface parity with `CachedPairDataset` and unused:
+        the degraded taps come out of the same live `trunk_with_taps` call that
+        produces `f_deg` in the loop, and nothing else reads taps here."""
         self.paths = manifest["path"].tolist()
         self.index = np.asarray(manifest.index, dtype=np.int64)
         self.labels = np.asarray(manifest["label"], dtype=np.int64)
@@ -125,12 +125,6 @@ class LivePairDataset(Dataset):
             "severity": float(self.schedule.severity_of(recipe)),
             "index": idx,
         }
-        if self.with_taps:
-            # Only the CLEAN taps. The degraded ones come out of the same live
-            # `trunk_with_taps` call that produces `f_deg` in the loop -- reading
-            # them from a cache here would be reading a different image than the
-            # one this dataset just degraded.
-            item["taps_clean"] = self.cache.clean_taps(self.index[i : i + 1])[0]
         return item
 
 
@@ -162,5 +156,6 @@ def build_loader(cfg, cache, manifest, schedule, epoch: int, preprocess=None,
         num_workers=cfg.num_workers,
         collate_fn=_collate,
         worker_init_fn=_WorkerInit(cache),
-        drop_last=True,     # the sliced-Wasserstein term is a batch statistic
+        drop_last=True,     # every logged step on the same batch size, so the
+                            # per-term scalars are comparable along the run
     )

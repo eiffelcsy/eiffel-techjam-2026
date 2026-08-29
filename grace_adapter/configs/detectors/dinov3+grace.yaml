@@ -9,12 +9,6 @@
 #
 # Ceiling: restoration cannot exceed the clean-feature score, so retention <= 1.0
 # by construction. Beating that is GRACE-D's job.
-#
-# `k_eval: 1` because dinov3_clean.yaml leaves `noise_dim: 0` -- the adapter is
-# deterministic and AdaptedDetector forces k to 1 regardless. Stated rather than
-# left at the 8 default so the config does not imply sampling that is not
-# happening. Turn on posterior sampling by setting `noise_dim` in the TRAIN
-# config (alongside lam_sw, never alone) and raising this to 8.
 
 name: dinov3+grace
 target: grace.detectors.adapted.AdaptedDetector
@@ -23,5 +17,4 @@ args:
   split: grace.splits.dinov3.DINOv3Split
   checkpoint: ../grace_adapter/checkpoints/grace/dinov3_clean/ema.pt
   discrepancy: null
-  k_eval: 1
 device: auto

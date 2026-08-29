@@ -78,12 +78,12 @@ def test_enabled_starts_a_run_named_by_run_id(stub_wandb):
     calls, _ = stub_wandb
     tracker = build_tracker(
         _cfg(group="e4", tags=["poc"]), run_id="dinov3_clean",
-        job_type="stage1", config={"loss": {"lam_sw": 0.1}},
+        job_type="stage1", config={"loss": {"lam_kl": 0.1}},
     )
     (kw,) = calls["init"]
     assert kw["name"] == "dinov3_clean" and kw["group"] == "e4"
     assert kw["job_type"] == "stage1" and kw["tags"] == ["poc"]
-    assert kw["config"] == {"loss/lam_sw": 0.1}
+    assert kw["config"] == {"loss/lam_kl": 0.1}
     assert tracker.enabled and tracker.url
 
 
@@ -159,7 +159,7 @@ def test_a_failing_log_warns_once_then_goes_quiet(stub_wandb):
 def test_flatten_config_takes_a_dataclass():
     flat = flatten_config(TrainConfig(run_id="r", cache_dir="c"))
     assert flat["run_id"] == "r"
-    assert flat["loss/lam_sw"] == 0.1          # nested dataclass, flattened
+    assert flat["loss/lam_kl"] == 0.1          # nested dataclass, flattened
     assert flat["adapter/bottleneck"] == 256
     assert "loss" not in flat                  # and not also present as a blob
 

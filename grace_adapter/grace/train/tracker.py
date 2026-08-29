@@ -158,7 +158,7 @@ def flatten_config(config) -> dict:
     """A run config -- dataclass or dict -- as flat `a/b: value` pairs.
 
     Flat rather than nested so the W&B runs table can group and filter on
-    `loss/lam_sw` directly, which is the whole reason to send the config at all.
+    `loss/lam_kl` directly, which is the whole reason to send the config at all.
     """
     if is_dataclass(config) and not isinstance(config, type):
         config = asdict(config)

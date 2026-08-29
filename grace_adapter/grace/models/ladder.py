@@ -32,15 +32,15 @@ This adds it to the **bottleneck** instead, which is the same place `z` enters.
 Two reasons. A tap term added to `corr` can only *translate* the correction -- it
 is a bias, constant in `f` -- whereas the ladder's job is to say what *kind* of
 correction this damage calls for, which means modulating a function of `f`, not
-offsetting it. And the noise path already established the pattern: side signals
-perturb the proposed correction, they do not bypass it. One mechanism, one place
-to reason about.
+offsetting it. Side signals perturb the proposed correction; they do not bypass
+it.
 
 Identity at initialization is unaffected, and not by luck: `fc2` is zero-init in
 `GatedResidualAdapter`, so the correction is identically zero however the
 bottleneck is perturbed. The ladder cannot break the guarantee that makes a
-clean-AUC change attributable. `tap_gate` still starts at `GATE_INIT` (~0.018)
-rather than at zero -- belt to the same braces, and a hard zero there would put a
+clean-AUC change attributable. `tap_gate` still starts at the seam gate's own
+init (`GATE_INIT`, ~0.018, or whatever `adapter.gate_init` sets) rather than at
+zero -- belt to the same braces, and a hard zero there would put a
 second multiplicative zero in front of `tap_proj` and leave it gradient-starved
 for the first stretch of training.
 
@@ -70,7 +70,7 @@ degradation. Log it.
 import torch
 import torch.nn as nn
 
-from grace.models.adapter import GATE_INIT, GatedResidualAdapter
+from grace.models.adapter import GatedResidualAdapter
 from grace.splits.base import FeatureSpec, SplitDetector
 
 
@@ -78,7 +78,7 @@ class LadderAdapter(GatedResidualAdapter):
     """`GatedResidualAdapter` plus a read of the trunk's intermediate taps.
 
     Everything the plain adapter does, it still does: same gate, same residual,
-    same noise and severity paths, same exact identity at init. `taps=None`
+    same severity path, same exact identity at init. `taps=None`
     makes it behave as the plain adapter, which is what `AdaptedDetector` relies
     on when a ladder checkpoint is scored on a split that emits no taps.
 
@@ -116,7 +116,9 @@ class LadderAdapter(GatedResidualAdapter):
         # ViT-S/16); the projection is shared because damage is damage.
         self.tap_norms = nn.ModuleList(nn.LayerNorm(tap_in) for _ in range(n_taps))
         self.tap_proj = nn.Linear(tap_in, tap_dim)
-        self.tap_gate_logit = nn.Parameter(torch.full((n_taps, tap_dim), GATE_INIT))
+        self.tap_gate_logit = nn.Parameter(
+            torch.full((n_taps, tap_dim), self.gate_init)
+        )
 
         bottleneck = self.fc1[0].out_features
         self.rung = nn.ModuleList(
@@ -140,6 +142,32 @@ class LadderAdapter(GatedResidualAdapter):
             g = self.tap_gate().mean(dim=-1)
         return {name: float(g[k]) for k, name in enumerate(self.tap_names)}
 
+    def tap_drift(self, taps: torch.Tensor) -> torch.Tensor:
+        """`(B, K, tap_in)` -> `(B, K, tap_dim)`: the gated per-tap read.
+
+        The ladder's own description of "what damage is this, at block k",
+        computed from the degraded image alone. `_side_input` flattens this into
+        the bottleneck; it is exposed separately because the discrepancy head
+        wants the same tensor UNflattened, so it can take one norm per tap and
+        recover a per-block damage profile.
+
+        That profile is what the `layers` layout gives GRACE-D for free and a
+        `vector` seam like DINOv3's does not: Δ is one vector however deep the
+        damage entered, so without this the head sees a single drift norm and
+        cannot say WHERE the image was hit. Free here -- the ladder computes this
+        tensor for its own forward pass either way.
+        """
+        if taps.ndim != 3 or tuple(taps.shape[1:]) != (self.n_taps, self.tap_in):
+            raise ValueError(
+                f"expected taps of shape (B, {self.n_taps}, {self.tap_in}), got "
+                f"{tuple(taps.shape)}. The adapter and the cache disagree about "
+                f"the tap set -- check `adapter.taps` against the cache's spec.json."
+            )
+        normed = torch.stack(
+            [self.tap_norms[k](taps[:, k]) for k in range(self.n_taps)], dim=1
+        )
+        return self.tap_proj(normed) * self.tap_gate()
+
     def _side_input(self, taps: torch.Tensor | None) -> torch.Tensor | None:
         """`(B, K, tap_in)` -> `(B, K * tap_dim)`, once per forward.
 
@@ -150,16 +178,7 @@ class LadderAdapter(GatedResidualAdapter):
         """
         if taps is None:
             return None
-        if taps.ndim != 3 or tuple(taps.shape[1:]) != (self.n_taps, self.tap_in):
-            raise ValueError(
-                f"expected taps of shape (B, {self.n_taps}, {self.tap_in}), got "
-                f"{tuple(taps.shape)}. The adapter and the cache disagree about "
-                f"the tap set -- check `adapter.taps` against the cache's spec.json."
-            )
-        normed = torch.stack(
-            [self.tap_norms[k](taps[:, k]) for k in range(self.n_taps)], dim=1
-        )
-        return (self.tap_proj(normed) * self.tap_gate()).flatten(1)
+        return self.tap_drift(taps).flatten(1)
 
     def _side(self, i: int, side: torch.Tensor) -> torch.Tensor:
         return self.rung[i](side)
@@ -185,8 +204,8 @@ def build_ladder(spec: FeatureSpec, tap_spec: FeatureSpec, cfg, tap_names=()) ->
         bottleneck=cfg.bottleneck,
         n_blocks=cfg.n_blocks,
         dropout=cfg.dropout,
-        noise_dim=cfg.noise_dim,
         severity_film=cfg.severity_film,
+        gate_init=cfg.gate_init,
     )
 
 

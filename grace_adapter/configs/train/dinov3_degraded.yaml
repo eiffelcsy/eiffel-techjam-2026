@@ -48,12 +48,9 @@ adapter:
   n_blocks: 3
 
 loss:
-  w_err: 2.0
-  w_cos: 0.5
+  w_err: 4.0        # the reference arm's -- NOT the swept key
+  w_cos: 0.25
   eps_iso: 0.01
-  lam_sw: 0.05
-  n_proj: 384
-  lam_id: 0.1
 
 # Optional. `--wandb --wandb-group <experiment>` on the command line does the
 # same thing without editing a file, which is what a sweep wants.

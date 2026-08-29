@@ -1,14 +1,13 @@
 """Measurements that decide whether the objective is doing what it claims.
 
-Three questions, each cheap enough to log continuously:
+Two questions, each cheap enough to log continuously:
 
   1. Is the correction pointed at the decision, or wasted?   -> decision_alignment
   2. Does drift carry forensic signal we are erasing?        -> drift_asymmetry
-  3. Is the posterior actually stochastic?                    -> posterior_spread
 
-None of these is a loss. They exist so that a result can be explained rather than
-just reported, and (2) in particular is run *before* any training, on the cache
-alone, by `scripts/analyze_drift.py`.
+Neither is a loss. They exist so that a result can be explained rather than just
+reported, and (2) in particular is run *before* any training, on the cache alone,
+by `scripts/analyze_drift.py`.
 """
 
 import numpy as np
@@ -104,19 +103,6 @@ def drift_asymmetry(
         out["orthogonal_asymmetry"] = float(orth[lab].mean() - orth[~lab].mean())
         out["parallel_fraction"] = float((para / d.norm(dim=1).clamp_min(EPS)).mean())
     return out
-
-
-def posterior_spread(logits: torch.Tensor) -> float:
-    """Std of the logit across posterior draws, averaged over the batch.
-
-    The posterior-collapse tripwire. Under point-wise reconstruction losses alone
-    the optimal stochastic policy is to ignore `z`, and this reads ~0. That is a
-    reportable negative result about the objective, not a bug to paper over --
-    see `grace.train.losses.sliced_wasserstein`.
-    """
-    if logits.ndim < 2 or logits.shape[0] < 2:
-        return 0.0
-    return float(logits.std(dim=0).mean())
 
 
 def bootstrap_gap(values: np.ndarray, labels: np.ndarray, n: int = 1000, seed: int = 0):

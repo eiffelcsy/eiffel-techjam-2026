@@ -4,7 +4,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from grace.train.losses import alignment_loss, head_kl, identity_loss, sliced_wasserstein
+from grace.train.losses import alignment_loss, head_kl
 from grace.train.weighting import decision_weighted_error, head_gradient
 from tests.fixtures import SPECS, LinearHead, MLPHead, features
 
@@ -75,48 +75,6 @@ def test_alignment_weighting_none_matches_v1():
     manual = 1.0 * (1 - (F.normalize(a, dim=-1) * F.normalize(b, dim=-1)).sum(-1)).mean()
     manual = manual + (a - b).pow(2).mean()
     assert torch.allclose(alignment_loss(a, b, weighting="none"), manual, atol=1e-6)
-
-
-@pytest.mark.parametrize("layout", list(SPECS))
-def test_sliced_wasserstein_is_zero_for_identical_batches(layout):
-    spec = SPECS[layout]
-    a = features(spec, batch=64)
-    assert float(sliced_wasserstein(a, a.clone(), n_proj=32)) == pytest.approx(0.0, abs=1e-6)
-
-
-def test_sliced_wasserstein_is_permutation_invariant():
-    """It compares distributions, not pairs -- unlike every other term here."""
-    spec = SPECS["vector"]
-    a = features(spec, batch=64)
-    torch.manual_seed(0)
-    shuffled = a[torch.randperm(a.shape[0])]
-    torch.manual_seed(0)
-    same = sliced_wasserstein(a, shuffled, n_proj=32)
-    assert float(same) == pytest.approx(0.0, abs=1e-6)
-
-
-def test_sliced_wasserstein_penalises_under_dispersion():
-    """The property that gives the adapter's noise input a job: a collapsed,
-    over-concentrated batch is penalised even when its mean is right."""
-    spec = SPECS["vector"]
-    clean = features(spec, batch=128)
-    collapsed = clean.mean(0, keepdim=True).expand_as(clean).contiguous()
-    torch.manual_seed(0)
-    a = float(sliced_wasserstein(collapsed, clean, n_proj=64))
-    torch.manual_seed(0)
-    b = float(sliced_wasserstein(clean * 1.0, clean, n_proj=64))
-    assert a > b
-
-
-@pytest.mark.parametrize("layout", list(SPECS))
-def test_identity_loss_is_zero_at_init(layout):
-    from grace.config import AdapterConfig
-    from grace.models.factory import build_adapter
-
-    spec = SPECS[layout]
-    adapter = build_adapter(spec, AdapterConfig())
-    f = features(spec)
-    assert float(identity_loss(adapter, f).detach()) == pytest.approx(0.0, abs=1e-10)
 
 
 def test_head_kl_is_zero_when_features_match():

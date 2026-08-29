@@ -79,12 +79,12 @@ modelscope download --dataset hy2628982280/WildFake \
 On Windows, set `PYTHONIOENCODING=utf-8` first — the downloader prints a `->`
 through the console codepage and dies on the encode otherwise.
 
-Unpack both under `data/wildfake/images/` so the tables' relative paths resolve
+Unpack both under `data/wildfake_test/images/` so the tables' relative paths resolve
 against it:
 
 ```
-data/wildfake/images/Real/coco/coco2017/val2017/*.jpg
-data/wildfake/images/Diffusion_based/DALLE/Advanced/DALLE3/*/*.jpg
+data/wildfake_test/images/Real/coco/coco2017/val2017/*.jpg
+data/wildfake_test/images/Diffusion_based/DALLE/Advanced/DALLE3/*/*.jpg
 ```
 
 `DALLE.zip` is ~25 GB and also holds DALL-E 2; `coco.zip` is ~2.4 GB and also

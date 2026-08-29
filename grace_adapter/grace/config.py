@@ -170,9 +170,6 @@ class AdapterConfig:
     n_blocks: int = 2
     per_channel_gate: bool = True
     dropout: float = 0.0
-    noise_dim: int = 0
-    """0 disables posterior sampling. Only worth turning on alongside `lam_sw`;
-    see grace.models.adapter."""
     severity_film: bool = True
     taps: bool = False
     """Build a `LadderAdapter` reading the split's intermediate taps.
@@ -186,23 +183,25 @@ class AdapterConfig:
     tap_dim: int = 64
     """Width each tap is projected to. Drives the ladder's parameter count
     almost entirely -- see the budget table in `grace.models.ladder`."""
+    gate_init: float = -4.0
+    """Logit the seam gate -- and the ladder's `tap_gate` -- starts at.
 
-
-@dataclass
-class SamplingConfig:
-    k_train: int = 2
-    k_eval: int = 8
+    A LOGIT, not a gate value: sigmoid(-4) ~= 0.018. Small so the adapter is a
+    near-no-op at step 0 even if the exact-identity guarantee ever breaks, and
+    non-zero so gradient reaches the gate (and, in the ladder, `tap_proj` behind
+    it) from the first step. Sweeping it is an experiment about the second of
+    those -- see `grace.models.adapter.GATE_INIT`."""
 
 
 @dataclass
 class LossConfig:
-    weighting: str = "jacobian"     # "none" reproduces the GRACE v1 objective
+    weighting: str = "jacobian"     # "none" makes L_err plain F.mse_loss. It does
+                                    # NOT reproduce the GRACE v1 objective: v1 also
+                                    # ran lam_kl 0.5 and the since-removed lam_sw /
+                                    # n_proj / lam_id terms. See EXPERIMENTS.md §8.
     eps_iso: float = 0.05           # 1.0 is exactly plain MSE
     w_cos: float = 1.0
     w_err: float = 1.0
-    lam_sw: float = 0.1
-    n_proj: int = 64
-    lam_id: float = 0.5
     lam_kl: float = 0.1             # demoted: subsumed by the Jacobian weighting
     kl_temperature: float = 2.0
     lam_sev: float = 0.1
@@ -213,6 +212,18 @@ class DiscrepancyConfig:
     hidden: int = 256
     proj: int = 64
     use_severity: bool = True
+    use_taps: bool = False
+    """Feed the ladder's per-tap drift norms to the head, alongside Δ.
+
+    Requires a ladder stage-1 checkpoint -- it is the ladder that computes the
+    per-tap read, and stage 2 never rebuilds the adapter. False against a ladder
+    is the control this arm is read against; True against a plain adapter is a
+    config error, raised at startup rather than silently ignored.
+
+    The point is the `vector` seam. On DINOv3 the head sees ONE drift norm no
+    matter how deep the damage entered, which is the weakest form of the RA-Det
+    argument; the tap norms are the per-block damage profile a `layers` seam
+    would have supplied for free. See `grace.models.discrepancy`."""
     lam_aux: float = 1.0
     """Weight on the auxiliary head's OWN supervised loss. 0 restores the
     fused-only objective.
@@ -250,6 +261,13 @@ class TrainConfig:
     batch_size: int = 256           # features, not images -- go large
     lr: float = 1e-3
     weight_decay: float = 0.01
+    decay_gate: bool = True
+    """Apply `weight_decay` to the gate logits along with everything else.
+
+    True is what every run before this was trained under. False exempts
+    `gate_logit`/`tap_gate_logit` and nothing else: decoupled decay pulls a logit
+    toward 0, i.e. the gate toward 0.5, so with it on the gate opens whether or
+    not the objective asks it to -- see `grace.train.loop._param_groups`."""
     warmup_steps: int = 500
     grad_clip: float = 1.0
     ema_decay: float = 0.999
@@ -272,7 +290,7 @@ class TrainConfig:
     default) is exactly the old behaviour.
 
     Not free: each pass scores every held-out degradation epoch and every row of
-    every `val_datasets` cache at `sampling.k_eval` draws. Seconds on the PoC
+    every `val_datasets` cache once through. Seconds on the PoC
     cache; worth timing against the epoch before setting it to 1 on a large one.
     """
     detector: str = ""
@@ -338,7 +356,6 @@ class TrainConfig:
                 f"points. Raise it instead."
             )
     adapter: AdapterConfig = field(default_factory=AdapterConfig)
-    sampling: SamplingConfig = field(default_factory=SamplingConfig)
     loss: LossConfig = field(default_factory=LossConfig)
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig)

@@ -62,12 +62,12 @@
 # On Windows, set PYTHONIOENCODING=utf-8 first -- the downloader prints a "->"
 # through the console codepage and dies on the encode otherwise.
 #
-# Unpack both under `../data/wildfake/images/` so that the tables' paths hang
+# Unpack both under `../data/wildfake_test/images/` so that the tables' paths hang
 # off it -- they name `./Real/coco/...` and `./Diffusion_based/DALLE/...`,
 # so those two directories must be immediate children of `root`:
 #
-#   ../data/wildfake/images/Real/coco/coco2017/val2017/*.jpg
-#   ../data/wildfake/images/Diffusion_based/DALLE/Advanced/DALLE3/*/*.jpg
+#   ../data/wildfake_test/images/Real/coco/coco2017/val2017/*.jpg
+#   ../data/wildfake_test/images/Diffusion_based/DALLE/Advanced/DALLE3/*/*.jpg
 #
 # DALLE.zip is ~25 GB and holds DALL-E 2 as well; only the Advanced/ half is
 # read. coco.zip is ~2.4 GB and holds train2017 and test2017 as well; only
@@ -80,7 +80,7 @@
 # Expect: 13841 rows (4998 real / 8843 generated).
 
 name: wildfake-coco-dalle3
-manifest: ../data/wildfake/manifest.parquet
+manifest: ../data/wildfake_test/manifest.parquet
 split: test
 
 source:
@@ -92,8 +92,8 @@ source:
       # prefix of this one, and the index is what seeds each degradation.
       - target: pipeline.data.sources.CsvMetadataSource
         args: &wildfake
-          csv_path: ../data/wildfake/split_train_test/csv_file/total_split/test_metadata.csv
-          root: ../data/wildfake/images
+          csv_path: ../data/wildfake_test/split_train_test/csv_file/total_split/test_metadata.csv
+          root: ../data/wildfake_test/images
           path_column: Image_path
           label_column: IsFake        # WildFake's own polarity: 1 = generated, 0 = real
           fake_values: ["1"]
@@ -115,4 +115,4 @@ source:
       - target: pipeline.data.sources.CsvMetadataSource
         args:
           <<: *wildfake
-          csv_path: ../data/wildfake/split_train_test/csv_file/total_split/train_metadata.csv
+          csv_path: ../data/wildfake_test/split_train_test/csv_file/total_split/train_metadata.csv

@@ -53,10 +53,10 @@ def view_name(epoch: int | None) -> str:
 def tap_view_name(epoch: int | None) -> str:
     """The tap view paired with `view_name(epoch)` -- `taps/clean`, `taps/epoch=007`.
 
-    Clean taps are rendered too, and are not optional: `identity_loss` passes the
-    clean features back through the adapter, so a ladder with no clean taps
-    would have its tap pathway unconstrained on exactly the inputs the identity
-    term exists to protect.
+    Clean taps are rendered alongside the degraded ones so that the two views
+    of a row stay a single lookup at the same offset. Nothing in the objective
+    reads them today; `FeatureCache.clean_taps` is what makes them available to
+    analysis scripts without a re-render.
     """
     return f"{TAP_DIR}/{view_name(epoch)}"
 
@@ -164,18 +164,36 @@ class CacheSpec:
                     f"cache is stale: {name} differs ({mine} != {theirs}) -- {why}. "
                     f"Re-render with scripts/build_cache.py."
                 )
-        # Taps are checked only when the *reader* wants them. A ladder run
-        # against a cache rendered without taps, or against one tapping other
-        # blocks, is the failure this catches; a plain run against a cache that
-        # happens to carry taps is fine and ignores them.
-        if other.taps and tuple(self.taps) != tuple(other.taps):
-            raise ValueError(
-                f"tap mismatch: cache holds {list(self.taps) or 'no taps'}, this "
-                f"split emits {list(other.taps)}. The ladder would read a "
-                f"different part of the trunk than the one that was rendered. "
-                f"Re-render with scripts/build_cache.py, or align "
-                f"`split_args.tap_blocks` with the cache."
-            )
+        # Taps are checked only when the *reader* wants them, and the rule is
+        # SUBSET rather than equality: a cache rendering five blocks can serve a
+        # run that reads four of them, because dropping a tap is a column
+        # selection at read time and needs no re-render. Adding one does -- the
+        # bytes are simply not there -- so a requested tap the cache does not
+        # hold is still a hard refusal.
+        #
+        # A plain run against a cache that happens to carry taps is fine and
+        # ignores them, which is why this is gated on `other.taps`.
+        if other.taps:
+            missing = [t for t in other.taps if t not in self.taps]
+            if missing:
+                raise ValueError(
+                    f"tap mismatch: this split wants {list(other.taps)} but the "
+                    f"cache holds {list(self.taps) or 'no taps'} -- {missing} "
+                    f"was never rendered. Taps can be dropped at read time but "
+                    f"not conjured: re-render with scripts/build_cache.py, or "
+                    f"align `split_args.tap_blocks` with the cache."
+                )
+            if (
+                self.tap_feature is not None
+                and other.tap_feature is not None
+                and self.tap_feature.dim != other.tap_feature.dim
+            ):
+                raise ValueError(
+                    f"tap width mismatch: cache holds {self.tap_feature.dim}-d "
+                    f"taps, this split emits {other.tap_feature.dim}-d. Selecting "
+                    f"a subset changes how many taps are read, never how wide "
+                    f"they are -- this is a different detector or pooling."
+                )
 
     def bytes_per_view(self) -> int:
         """One image, one view -- features plus taps if this cache carries them."""

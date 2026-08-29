@@ -27,8 +27,6 @@ model, and standardising preprocessing across the zoo would break the baselines
 being compared against.
 """
 
-import warnings
-
 import torch
 from PIL import Image
 
@@ -54,7 +52,6 @@ class AdaptedDetector(FrozenDetector):
                   every comparison downstream is against a model that was never
                   benchmarked.
     discrepancy : stage-2 checkpoint. Present = GRACE-D.
-    k_eval      : posterior draws. Forced to 1 for a deterministic adapter.
     """
 
     def __init__(
@@ -63,7 +60,6 @@ class AdaptedDetector(FrozenDetector):
         split: str,
         checkpoint: str | None = None,
         discrepancy: str | None = None,
-        k_eval: int = 8,
         name: str = "grace",
         split_args: dict | None = None,
     ):
@@ -71,7 +67,6 @@ class AdaptedDetector(FrozenDetector):
         detector = build_detector(load_detector_config(base))
         self.split = build_split(detector, split, **(split_args or {}))
         self.name = name
-        self.k_eval = k_eval
 
         spec = self.split.feature_spec
         # Passed to `load_adapter` so a ladder checkpoint scored against a split
@@ -91,22 +86,6 @@ class AdaptedDetector(FrozenDetector):
             if "severity_state_dict" in payload:
                 self.severity_head = SeverityHead(spec.dim)
                 self.severity_head.load_state_dict(payload["severity_state_dict"])
-
-        if self.adapter is not None and self.adapter.stochastic and k_eval == 1:
-            # Not an error -- k_eval: 1 is a valid single draw. But it is almost
-            # never what was meant: scoring a stochastic adapter with one sample
-            # discards the Monte-Carlo averaging the noise input exists for, and
-            # reports a noisier number that understates the method. Silent
-            # because `k = k_eval if stochastic else 1` makes the deterministic
-            # case ignore k_eval entirely, so `k_eval: 1` is correct in every
-            # config until the checkpoint underneath it gains a noise input.
-            warnings.warn(
-                f"{checkpoint} is a stochastic adapter (noise_dim > 0) but k_eval=1, "
-                f"so it will be scored on a SINGLE posterior draw with no averaging. "
-                f"Set k_eval to the train config's sampling.k_eval (8 for the PoC arms) "
-                f"unless a one-draw score is genuinely what you want.",
-                stacklevel=2,
-            )
 
         if discrepancy is not None:
             if self.adapter is None:
@@ -143,17 +122,10 @@ class AdaptedDetector(FrozenDetector):
         f = f.float()
         taps = taps.float() if taps is not None and self.adapter.reads_taps else None
         severity = self.severity_head(f) if self.severity_head is not None else None
-        k = self.k_eval if self.adapter.stochastic else 1
 
-        # Average the LOGITS, not the features: E[h(f)] != h(E[f]) for any
-        # nonlinear head, so this is cheap Monte-Carlo posterior averaging rather
-        # than a redundant restatement of one deterministic pass. k adapter
-        # passes cost microseconds against the one trunk pass already spent.
-        draws = self.adapter.sample(f, k, severity=severity, taps=taps)
-        logits = torch.stack([self.split.head(d) for d in draws])
-        logit = logits.mean(0)
+        f_adapted = self.adapter(f, severity=severity, taps=taps)
+        logit = self.split.head(f_adapted)
 
         if self.fused is not None:
-            delta = draws.mean(0) - f
-            logit = self.fused(logit, delta, severity)
+            logit = self.fused(logit, f_adapted - f, severity)
         return logit

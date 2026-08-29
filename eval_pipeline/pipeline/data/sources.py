@@ -259,7 +259,12 @@ class CsvMetadataSource:
         kept = {REAL: 0, FAKE: 0}
         missing = 0
 
-        with open(self.csv_path, newline="") as f:
+        # encoding is explicit: Python's default is the locale's, which is
+        # cp1252 on a stock Windows box, and WildFake's tables carry CJK
+        # filenames under Stable Diffusion's lora/ tree. Decoding those with the
+        # locale codec raises part-way through the file, so the same config
+        # would build on Linux and crash on Windows.
+        with open(self.csv_path, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for column in (self.path_column, self.label_column, *self.where):
                 if column not in (reader.fieldnames or []):
@@ -303,6 +308,460 @@ class CsvMetadataSource:
 
         if missing:
             print(f"{type(self).__name__}: skipped {missing} row(s) with no file on disk")
+        _check_split(kept[FAKE], kept[REAL], self.fake_values)
+
+
+class StratifiedCsvSource:
+    """A proportional sample of a metadata CSV, stratified by one column.
+
+    `CsvMetadataSource` can subset a table but not *sample* it: its `limit` is
+    the first N rows per class in table order, and WildFake's tables are sorted
+    by generator, so `limit` there would take one contiguous block -- a few
+    hundred consecutive BigGAN frames -- rather than a spread. This source
+    answers the other question: "give me N rows total, with every architecture
+    and every real corpus represented in the proportion it occupies in the
+    corpus."
+
+    Why not one `CsvMetadataSource` per group under a `ConcatSource`
+    ------------------------------------------------------------------
+    Because a per-architecture source is single-class by construction, and
+    `_check_split` (rightly) raises on that: it cannot tell a deliberate
+    fake-only shard from a mislabelled dataset. Stratification therefore has to
+    happen inside one source that sees both classes at once.
+
+    Held-out groups
+    ---------------
+    `exclude_groups` is the leakage guard, and it is checked rather than
+    trusted: a name that matches zero rows raises. That matters because the
+    names being excluded are usually the evaluation set's own -- a typo in
+    "DALLE" would not fail, it would quietly train on the generator the
+    benchmark reports, and every downstream number would be contaminated in a
+    way no later assertion could see.
+
+    Determinism
+    -----------
+    The sample is seeded per (seed, label, group) through blake2b rather than
+    `hash()`, whose randomization across processes would give a different corpus
+    on every run -- and a manifest whose row order seeds every degradation must
+    be reproducible. Rows are emitted in table order, so the manifest index
+    keeps meaning the same thing it does for every other source.
+
+    Parameters
+    ----------
+    csv_paths        : one table, or several read in order as if concatenated
+    root             : directory the tables' paths resolve against
+    group_column     : the stratum. WildFake's `Architecture` names both the
+                       generator of a fake and the source corpus of a real, so
+                       one column strata-fies both classes.
+    n_total          : rows in the finished manifest, real + fake
+    real_fraction    : share of `n_total` that is real. None = the sampled
+                       pool's own ratio. Set it to hold the ratio of a corpus
+                       wider than the pool -- e.g. to keep WildFake's overall
+                       real:fake balance while excluding one real corpus.
+    exclude_groups   : `group_column` values to drop entirely, before sampling
+    generator_column : record each fake's own group as its `generator`, instead
+                       of one fixed string -- what makes a per-generator
+                       breakdown possible later without rebuilding
+    available_lists  : {group: path to a newline-separated file listing the
+                       relative paths of that group that actually exist}. For a
+                       stratum whose archive was downloaded only in part: the
+                       group keeps its full proportional COUNT, but is drawn
+                       from the listed subset instead of from the whole family.
+                       Written by scripts/fetch_wildfake_train.py from each
+                       archive's own zip index, so the sample and the extraction
+                       are planned against exactly the same set of files. A
+                       group whose list is shorter than its share raises, rather
+                       than quietly under-filling the stratum.
+    seed             : sampling seed; part of the manifest's identity
+
+    Group allocation is proportional with largest-remainder rounding, so the
+    parts sum to exactly `n_total`. A group smaller than its share contributes
+    everything it has and the shortfall is redistributed over the groups with
+    headroom left.
+    """
+
+    def __init__(
+        self,
+        csv_paths: list[str] | str,
+        root: str,
+        fake_values: list,
+        real_values: list | None = None,
+        path_column: str = "path",
+        label_column: str = "label",
+        group_column: str = "Architecture",
+        n_total: int = 100_000,
+        real_fraction: float | None = None,
+        exclude_groups: list[str] | None = None,
+        tiers: list[dict] | None = None,
+        where: dict | None = None,
+        generator_column: str | None = None,
+        generator: str = "UNKNOWN",
+        available_lists: dict | None = None,
+        split: str = "train",
+        seed: int = 0,
+        on_missing: str = "error",
+    ):
+        if on_missing not in ("error", "skip"):
+            raise ValueError(f"on_missing must be 'error' or 'skip', not {on_missing!r}")
+        if n_total <= 0:
+            raise ValueError(f"n_total must be positive, not {n_total}")
+        if real_fraction is not None and not 0.0 < real_fraction < 1.0:
+            raise ValueError(
+                f"real_fraction must lie strictly between 0 and 1, not {real_fraction} "
+                "-- a manifest with only one class cannot be scored."
+            )
+        self.csv_paths = [csv_paths] if isinstance(csv_paths, str) else list(csv_paths)
+        self.root = root
+        self.fake_values = {str(v).lower() for v in fake_values}
+        self.real_values = {str(v).lower() for v in real_values} if real_values else None
+        self.path_column = path_column
+        self.label_column = label_column
+        # One column, or several joined by "|". A composite key is how a tier
+        # becomes a stratum in its own right: WildFake's `IsAdvanced` splits SD
+        # and Midjourney into their current and previous generations, which
+        # `Architecture` alone folds together and samples over blindly.
+        self.group_column = (
+            [group_column] if isinstance(group_column, str) else list(group_column)
+        )
+        self.n_total = n_total
+        self.real_fraction = real_fraction
+        self.exclude_groups = {str(g) for g in (exclude_groups or [])}
+        self.where = {k: {str(x) for x in (v if isinstance(v, list) else [v])}
+                      for k, v in (where or {}).items()}
+
+        # Ordered, first match wins. Each entry is {name, weight, where}; the
+        # weights are relative and get normalized, so 50/35/15 and 10/7/3 mean
+        # the same thing.
+        self.tiers = []
+        for spec in tiers or []:
+            missing = {"name", "weight", "where"} - set(spec)
+            if missing:
+                raise ValueError(f"tier {spec.get('name', spec)!r} is missing {sorted(missing)}")
+            if float(spec["weight"]) <= 0:
+                raise ValueError(f"tier {spec['name']!r} has non-positive weight")
+            self.tiers.append((
+                str(spec["name"]),
+                float(spec["weight"]),
+                {k: {str(x) for x in (v if isinstance(v, list) else [v])}
+                 for k, v in spec["where"].items()},
+            ))
+        if len({t[0] for t in self.tiers}) != len(self.tiers):
+            raise ValueError("tier names must be unique")
+        self.generator_column = generator_column
+        self.generator = generator
+        self.available_lists = dict(available_lists or {})
+        self.split = split
+        self.seed = seed
+        self.on_missing = on_missing
+        self._available: dict[str, set] | None = None
+
+    def _selects(self, row: dict) -> bool:
+        for column, allowed in self.where.items():
+            if str(row[column]) not in allowed:
+                return False
+        return True
+
+    def _group(self, row: dict) -> str:
+        return "|".join(str(row[c]) for c in self.group_column)
+
+    def _tier_of(self, row: dict) -> str | None:
+        for name, _, cond in self.tiers:
+            if all(str(row[c]) in allowed for c, allowed in cond.items()):
+                return name
+        return None
+
+    def _excluded(self, group: str) -> str | None:
+        """Which `exclude_groups` entry drops this stratum, if any.
+
+        A composite key is matched either whole ("SD|0", one tier) or by its
+        family ("DALLE", every tier of it). The leakage guards are family-level
+        -- a generation of DALL-E is not safer to train on than another -- so
+        naming the family has to keep working once tiers become strata.
+        """
+        if group in self.exclude_groups:
+            return group
+        family = group.split("|")[0]
+        return family if family in self.exclude_groups else None
+
+    def _reader(self):
+        """Every table in order, as one stream of (global_index, row).
+
+        The index counts *every* row read, filtered or not, so the counting pass
+        and the emitting pass agree on what row 1_234_567 is.
+        """
+        import csv
+
+        i = 0
+        required = (
+            self.path_column, self.label_column, *self.group_column, *self.where,
+            *{c for _, _, cond in self.tiers for c in cond},
+        )
+        for csv_path in self.csv_paths:
+            with open(csv_path, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for column in required:
+                    if column not in (reader.fieldnames or []):
+                        raise KeyError(
+                            f"{csv_path} has no column {column!r} -- "
+                            f"it has {reader.fieldnames}"
+                        )
+                for row in reader:
+                    yield i, row
+                    i += 1
+
+    @staticmethod
+    def _allocate(sizes: dict[str, int], budget: int) -> dict[str, int]:
+        """Proportional shares summing to exactly `budget`, capped at group size."""
+        if budget >= sum(sizes.values()):
+            return dict(sizes)
+
+        alloc = {g: 0 for g in sizes}
+        room = {g: n for g, n in sizes.items() if n > 0}
+        remaining = budget
+
+        while remaining > 0 and room:
+            total = sum(room.values())
+            raw = {g: remaining * n / total for g, n in room.items()}
+            take = {g: min(int(r), room[g]) for g, r in raw.items()}
+
+            # Largest remainder, ties broken by name so the split is stable.
+            short = remaining - sum(take.values())
+            if short > 0:
+                for g in sorted(room, key=lambda g: (-(raw[g] - int(raw[g])), g)):
+                    if short == 0:
+                        break
+                    if take[g] < room[g]:
+                        take[g] += 1
+                        short -= 1
+            if not any(take.values()):
+                break
+
+            for g, k in take.items():
+                alloc[g] += k
+                room[g] -= k
+                remaining -= k
+            room = {g: n for g, n in room.items() if n > 0}
+
+        return alloc
+
+    def _allocate_tiered(self, sizes, budget, group_tier, plan) -> dict[str, int]:
+        """Split the budget across tiers by weight, then within a tier by size.
+
+        The two levels answer different questions and must not be collapsed. The
+        tier split is a JUDGEMENT -- how much of the corpus should be near the
+        state of the art -- and is set by hand. The split inside a tier is a
+        MEASUREMENT: once a tier's budget is fixed, its strata divide it in the
+        proportion they occupy in WildFake, so nothing inside a tier is
+        hand-weighted.
+        """
+        total_w = sum(w for _, w, _ in self.tiers)
+        raw = {name: budget * w / total_w for name, w, _ in self.tiers}
+        tier_budget = {name: int(v) for name, v in raw.items()}
+        short = budget - sum(tier_budget.values())
+        for name in sorted(raw, key=lambda n: (-(raw[n] - int(raw[n])), n)):
+            if short == 0:
+                break
+            tier_budget[name] += 1
+            short -= 1
+
+        alloc: dict[str, int] = {}
+        for name, weight, _ in self.tiers:
+            members = {g: n for g, n in sizes.items() if group_tier.get(g) == name}
+            if not members:
+                raise ValueError(
+                    f"tier {name!r} carries weight {weight} but no generated stratum "
+                    "landed in it. Its budget cannot be spent, and the manifest would "
+                    "come out short -- drop the tier or widen its `where`."
+                )
+            if sum(members.values()) < tier_budget[name]:
+                raise ValueError(
+                    f"tier {name!r} is allotted {tier_budget[name]} rows but its strata "
+                    f"hold only {sum(members.values())}. Lower its weight or n_total."
+                )
+            got = self._allocate(members, tier_budget[name])
+            alloc.update(got)
+            plan["tiers"][name] = (tier_budget[name], sum(members.values()))
+        return alloc
+
+    def _plan(self) -> tuple[set[int], dict]:
+        """Pass one: count the strata, then choose which rows survive."""
+        import hashlib
+        import random
+        from array import array
+
+        if self._available is None:
+            self._available = {
+                group: {
+                    _norm(line)
+                    for line in Path(listing).read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                }
+                for group, listing in self.available_lists.items()
+            }
+
+        pools: dict[tuple[int, str], array] = {}
+        # Counted over EVERY row of the group, including ones no downloaded
+        # archive holds. The distinction is load-bearing: a stratum's share must
+        # come from how big it is in the corpus, not from how much of it was
+        # downloaded, or fetching one part of Stable Diffusion would drop it
+        # from 35% of the fake half to 2% and silently re-weight all the rest.
+        true_sizes: dict[tuple[int, str], int] = {}
+        group_tier: dict[str, str] = {}
+        excluded_hits = {g: 0 for g in self.exclude_groups}
+
+        for i, row in self._reader():
+            group = self._group(row)
+            hit = self._excluded(group)
+            if hit is not None:
+                excluded_hits[hit] += 1
+                continue
+            if not self._selects(row):
+                continue
+            label = _polarity(str(row[self.label_column]), self.fake_values, self.real_values)
+            if label is None:
+                continue
+            if self.tiers and label == FAKE:
+                tier = self._tier_of(row)
+                if tier is None:
+                    raise ValueError(
+                        f"no tier matches the generated row {row[self.path_column]!r} "
+                        f"(group {group!r}). Every generated stratum must land in a "
+                        "tier, or its share of the corpus would be silently dropped "
+                        "-- add a catch-all tier, or widen the last one's `where`."
+                    )
+                if group_tier.setdefault(group, tier) != tier:
+                    raise ValueError(
+                        f"stratum {group!r} spans tiers {group_tier[group]!r} and "
+                        f"{tier!r}. Add the tier's distinguishing column to "
+                        "group_column so the split is visible in the manifest."
+                    )
+            true_sizes[(label, group)] = true_sizes.get((label, group), 0) + 1
+            if group in self._available:
+                if _norm(row[self.path_column]) not in self._available[group]:
+                    continue
+            pools.setdefault((label, group), array("i")).append(i)
+
+        missed = sorted(g for g, n in excluded_hits.items() if n == 0)
+        if missed:
+            raise ValueError(
+                f"exclude_groups={missed} matched no row of "
+                f"{'|'.join(self.group_column)!r}. "
+                "These names are the held-out set's own, so a typo here would "
+                "silently train on the data the benchmark reports -- fix the "
+                "spelling rather than removing the entry."
+            )
+        if not true_sizes:
+            raise ValueError(
+                f"no row survived where={self.where} and "
+                f"exclude_groups={sorted(self.exclude_groups)}"
+            )
+
+        sizes = {REAL: {}, FAKE: {}}
+        for (label, group), n in true_sizes.items():
+            sizes[label][group] = n
+        for label, name in ((REAL, "real"), (FAKE, "generated")):
+            if not sizes[label]:
+                raise ValueError(
+                    f"the sampling pool has no {name} rows left after "
+                    f"exclude_groups={sorted(self.exclude_groups)}"
+                )
+
+        n_real_pool, n_fake_pool = sum(sizes[REAL].values()), sum(sizes[FAKE].values())
+        fraction = (
+            self.real_fraction
+            if self.real_fraction is not None
+            else n_real_pool / (n_real_pool + n_fake_pool)
+        )
+        budgets = {REAL: round(self.n_total * fraction)}
+        budgets[FAKE] = self.n_total - budgets[REAL]
+
+        chosen: set[int] = set()
+        plan: dict = {"fraction": fraction, "groups": {}, "tiers": {}, "group_tier": group_tier}
+        for label in (REAL, FAKE):
+            if self.tiers and label == FAKE:
+                alloc = self._allocate_tiered(sizes[FAKE], budgets[FAKE], group_tier, plan)
+            else:
+                alloc = self._allocate(sizes[label], budgets[label])
+            for group, k in sorted(alloc.items()):
+                idx = pools.get((label, group), array("i"))
+                if k > len(idx):
+                    raise ValueError(
+                        f"{group!r} needs {k} rows for its {sizes[label][group]}-row "
+                        f"share of the corpus, but only {len(idx)} are available. "
+                        + (
+                            f"The archive listed in available_lists[{group!r}] is too "
+                            "small for this n_total -- fetch another part, or lower "
+                            "n_total."
+                            if group in self._available
+                            else "This should not be reachable; the pool is the group."
+                        )
+                    )
+                material = f"{self.seed}:{label}:{group}".encode()
+                digest = hashlib.blake2b(material, digest_size=8).digest()
+                rng = random.Random(int.from_bytes(digest, "big"))
+                chosen.update(rng.sample(idx, k) if k < len(idx) else idx)
+                plan["groups"][(label, group)] = (sizes[label][group], k)
+
+        return chosen, plan
+
+    def rows(self, out_dir: str | Path) -> Iterator[dict]:
+        chosen, plan = self._plan()
+
+        print(
+            f"{type(self).__name__}: sampling {self.n_total} of "
+            f"{sum(n for n, _ in plan['groups'].values())} eligible rows "
+            f"(real fraction {plan['fraction']:.4f}, seed {self.seed})"
+        )
+        for (label, group), (have, take) in sorted(
+            plan["groups"].items(), key=lambda kv: (kv[0][0], -kv[1][1])
+        ):
+            kind = "real" if label == REAL else "fake"
+            print(f"  {kind:4s} {group:<14s} {take:>6d} of {have:>7d}")
+
+        root = Path(self.root).expanduser()
+        kept = {REAL: 0, FAKE: 0}
+        missing: dict[str, int] = {}
+
+        for i, row in self._reader():
+            if i not in chosen:
+                continue
+            label = _polarity(str(row[self.label_column]), self.fake_values, self.real_values)
+            group = self._group(row)
+
+            path = root / _norm(row[self.path_column])
+            if not path.is_file():
+                if self.on_missing == "error":
+                    raise FileNotFoundError(
+                        f"{path} is named by the metadata table but is not on disk "
+                        f"({kept[REAL] + kept[FAKE]} rows resolved before it). The "
+                        f"archive holding {group!r} is probably not unpacked under "
+                        f"root={self.root!r}. Do NOT set on_missing: skip to get past "
+                        f"this -- the sample is proportional, and silently dropping "
+                        f"one archive re-weights every stratum in the manifest."
+                    )
+                missing[group] = missing.get(group, 0) + 1
+                continue
+
+            kept[label] += 1
+            yield {
+                "path": str(path.resolve()),
+                "label": label,
+                "generator": (
+                    (row[self.generator_column] if self.generator_column else self.generator)
+                    if label == FAKE
+                    else "REAL"
+                ),
+                "split": self.split,
+            }
+
+        if missing:
+            total = sum(missing.values())
+            detail = ", ".join(f"{g}:{n}" for g, n in sorted(missing.items()))
+            print(
+                f"{type(self).__name__}: WARNING -- skipped {total} row(s) with no file "
+                f"on disk ({detail}). The manifest is NO LONGER proportional to the "
+                f"corpus; the groups above are under-represented by exactly these counts."
+            )
         _check_split(kept[FAKE], kept[REAL], self.fake_values)
 
 

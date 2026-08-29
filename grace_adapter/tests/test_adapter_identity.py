@@ -2,8 +2,8 @@
 
 Approximate is not good enough: an adapter that perturbs clean features at step 0
 makes any clean-AUC change unattributable. The guarantee has to survive every
-optional input -- noise, severity conditioning, dropout -- because each of them
-is a place a future change could break it silently.
+optional input -- severity conditioning, dropout -- because each of them is a
+place a future change could break it silently.
 """
 
 import pytest
@@ -24,23 +24,38 @@ def test_identity_at_init(layout):
 
 
 @pytest.mark.parametrize("layout", list(SPECS))
-def test_identity_holds_for_any_noise_and_severity(layout):
+def test_identity_holds_for_any_severity(layout):
     """The zero-init of the last projection makes the correction identically zero
-    whatever conditions it -- which is why both optional inputs are safe to add."""
+    whatever conditions it -- which is why the optional input is safe to add."""
     spec = SPECS[layout]
     adapter = build_adapter(
-        spec, AdapterConfig(noise_dim=8, severity_film=True, dropout=0.3)
+        spec, AdapterConfig(severity_film=True, dropout=0.3)
     )
     f = features(spec)
-    z = torch.randn(f.shape[0], 8)
     sev = torch.rand(f.shape[0])
-    assert torch.allclose(adapter(f, z=z, severity=sev), f, atol=1e-6)
+    assert torch.allclose(adapter(f, severity=sev), f, atol=1e-6)
 
 
 def test_gate_starts_low():
     adapter = GatedResidualAdapter(dim=16)
     assert torch.allclose(adapter.gate(), torch.sigmoid(torch.tensor(GATE_INIT)), atol=1e-6)
     assert float(adapter.gate().mean().detach()) < 0.02
+
+
+@pytest.mark.parametrize("layout", list(SPECS))
+def test_identity_survives_a_swept_gate_init(layout):
+    """`gate_init` is a sweepable config key, and sweeping it must not quietly
+    cost the guarantee the whole comparison rests on. `fc2` is zero-init, so the
+    correction is identically zero for ANY gate -- this is what makes a
+    gate_init arm attributable against its control."""
+    spec = SPECS[layout]
+    cfg = AdapterConfig(gate_init=-3.0, severity_film=True)
+    adapter = build_adapter(spec, cfg)
+    f = features(spec)
+
+    assert torch.allclose(adapter.gate(), torch.sigmoid(torch.tensor(-3.0)), atol=1e-6)
+    assert torch.allclose(adapter(f), f, atol=1e-6)
+    assert torch.allclose(adapter(f, severity=torch.rand(f.shape[0])), f, atol=1e-6)
 
 
 @pytest.mark.parametrize("layout", list(SPECS))

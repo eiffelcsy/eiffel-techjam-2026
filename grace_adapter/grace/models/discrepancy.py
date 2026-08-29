@@ -41,6 +41,14 @@ class DiscrepancyHead(nn.Module):
       interpretability figure. For `vector` it is one number.
     * **a projection of Δ.** Direction, not just magnitude: which *way* the
       features moved is more informative than how far.
+    * **per-tap drift norms**, when the stage-1 adapter is a ladder and
+      `use_taps` is set. `(B, K)` -- one number per tapped block, from
+      `LadderAdapter.tap_drift`. This is the per-block damage profile that a
+      `layers` seam would have given the head for nothing, on a detector whose
+      seam is a single vector: Δ says how far the features moved, these say
+      where the damage entered. RA-Det's argument is about drift under
+      perturbation being deeper for generated images, and depth is exactly what
+      one seam vector cannot express.
     * **predicted severity**, when available. Lets the head calibrate "is this
       drift large *for this much corruption*", which is the actually
       discriminative question -- a heavily degraded real image drifts a lot too.
@@ -56,13 +64,15 @@ class DiscrepancyHead(nn.Module):
         hidden: int = 256,
         proj: int = 64,
         use_severity: bool = True,
+        n_taps: int = 0,
     ):
         super().__init__()
         self.spec = spec
         self.use_severity = use_severity
+        self.n_taps = n_taps
 
         self.proj = nn.Sequential(nn.LayerNorm(spec.dim), nn.Linear(spec.dim, proj))
-        n_in = spec.n_groups + proj + (1 if use_severity else 0)
+        n_in = spec.n_groups + proj + (1 if use_severity else 0) + n_taps
         self.net = nn.Sequential(
             nn.LayerNorm(n_in),
             nn.Linear(n_in, hidden),
@@ -70,7 +80,12 @@ class DiscrepancyHead(nn.Module):
             nn.Linear(hidden, 1),
         )
 
-    def features(self, delta: torch.Tensor, severity: torch.Tensor | None = None) -> torch.Tensor:
+    def features(
+        self,
+        delta: torch.Tensor,
+        severity: torch.Tensor | None = None,
+        tap_drift: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """The head's input vector, exposed so diagnostics can inspect it."""
         flat = delta if delta.ndim > 2 else delta.unsqueeze(1)   # (B, G, D)
         norms = torch.log1p(flat.norm(dim=-1))                   # (B, G)
@@ -79,10 +94,27 @@ class DiscrepancyHead(nn.Module):
             if severity is None:
                 raise ValueError("head was built with use_severity=True but got severity=None")
             parts.append(severity.reshape(-1, 1))
+        if self.n_taps:
+            if tap_drift is None:
+                raise ValueError(
+                    f"head was built over {self.n_taps} tap(s) but got "
+                    f"tap_drift=None. Stage 2 must pass "
+                    f"`adapter.tap_drift(taps)` -- a head trained on the "
+                    f"per-block profile scored without it is reading a "
+                    f"different model."
+                )
+            # One norm per tap, squashed like Δ's own: "how hard was block k
+            # hit". `(B, K, tap_dim)` -> `(B, K)`, the per-block damage profile.
+            parts.append(torch.log1p(tap_drift.norm(dim=-1)))
         return torch.cat(parts, dim=-1)
 
-    def forward(self, delta: torch.Tensor, severity: torch.Tensor | None = None) -> torch.Tensor:
-        return self.net(self.features(delta, severity)).squeeze(-1)
+    def forward(
+        self,
+        delta: torch.Tensor,
+        severity: torch.Tensor | None = None,
+        tap_drift: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        return self.net(self.features(delta, severity, tap_drift)).squeeze(-1)
 
 
 class FusedHead(nn.Module):
@@ -104,5 +136,6 @@ class FusedHead(nn.Module):
         logit_main: torch.Tensor,
         delta: torch.Tensor,
         severity: torch.Tensor | None = None,
+        tap_drift: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        return logit_main + self.beta * self.aux(delta, severity)
+        return logit_main + self.beta * self.aux(delta, severity, tap_drift)

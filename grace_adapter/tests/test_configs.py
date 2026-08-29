@@ -72,9 +72,9 @@ def test_unknown_key_is_rejected(tmp_path):
 def test_nested_unknown_key_is_rejected(tmp_path):
     path = tmp_path / "typo.yaml"
     path.write_text(
-        "run_id: x\ncache_dir: y\nloss:\n  lam_sliced: 0.1\n", encoding="utf-8"
+        "run_id: x\ncache_dir: y\nloss:\n  lam_kel: 0.1\n", encoding="utf-8"
     )
-    with pytest.raises(KeyError, match="lam_sliced"):
+    with pytest.raises(KeyError, match="lam_kel"):
         load_train_config(path)
 
 

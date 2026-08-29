@@ -273,13 +273,13 @@ def test_stage_one_then_stage_two(poc_run):
         run_id="s1", cache_dir=str(cache_dir), epochs=2, batch_size=8,
         warmup_steps=1, num_workers=0, out_dir=str(root / "ckpt"),
         adapter=AdapterConfig(bottleneck=16, n_blocks=1),
-        loss=LossConfig(lam_sw=0.1),
+        loss=LossConfig(lam_kl=0.1),
     )
     s1 = train_adapter(cfg, split, manifest, schedule)
     assert s1["steps"] > 0
     assert (root / "ckpt" / "s1" / "ema.pt").exists()
     # The gate must move off its sigmoid(-4) = 0.018 initialization; sitting
-    # there means the alignment term never outweighed the identity term.
+    # there means the alignment term produced no usable gradient at all.
     assert s1["history"][-1]["gate"] > 0
 
     disc = DiscrepancyTrainConfig(

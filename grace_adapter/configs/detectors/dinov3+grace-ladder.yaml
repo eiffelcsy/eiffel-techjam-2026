@@ -14,10 +14,6 @@
 # Inference cost over dinov3+grace.yaml is the tap projections and nothing else:
 # `trunk_with_taps` is one forward pass, and the taps are activations that pass
 # already computed and threw away. No second trunk, no extra image decode.
-#
-# k_eval: 1 is correct here only while the checkpoint is deterministic
-# (noise_dim: 0). Pair a stochastic ladder with 8, as dinov3+grace-k8.yaml does
-# and for the reason documented there.
 
 name: dinov3+grace-ladder
 target: grace.detectors.adapted.AdaptedDetector
@@ -26,7 +22,6 @@ args:
   split: grace.splits.dinov3.DINOv3Split
   split_args:
     tap_blocks: [0, 2, 4, 6, 9]
-  checkpoint: ../grace_adapter/checkpoints/grace/dinov3_ladder/ema.pt
+  checkpoint: ../grace_adapter/checkpoints/grace/dinov3_ladder_final/ema.pt
   discrepancy: null
-  k_eval: 1
 device: auto

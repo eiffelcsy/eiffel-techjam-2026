@@ -22,7 +22,7 @@ from grace.cache.spec import (
     CacheSpec, sha_manifest, sha_preprocess, tap_view_name, view_name,
 )
 from grace.cache.writer import build_cache, is_complete
-from grace.config import AdapterConfig, LossConfig, SamplingConfig, TrainConfig
+from grace.config import AdapterConfig, LossConfig, TrainConfig
 from grace.models.adapter import GATE_INIT, GatedResidualAdapter
 from grace.models.factory import build_adapter, load_adapter, save_adapter
 from grace.models.ladder import LadderAdapter, tap_spec_for
@@ -268,6 +268,90 @@ def test_reading_taps_from_a_tapless_cache_is_an_error(tmp_path):
         cache.taps(np.asarray(manifest.index)[:2], 0)
 
 
+def test_a_subset_of_the_cached_taps_can_be_read_without_re_rendering(rendered):
+    """Dropping a tap is a column selection, not a re-render.
+
+    This is what makes "block00 turned out to be inert" a config change rather
+    than another pass over 277k images: the bytes are already on disk, and the
+    run simply stops reading that column.
+    """
+    _, out, _, split, _ = rendered
+    want = ("block00", "block02")                      # drop the middle tap
+    expect = CacheSpec(
+        detector="toy", feature=SPECS["vector"], n=0,
+        taps=want, tap_feature=FeatureSpec(layout="layers", shape=(2, 16)),
+    )
+    full = FeatureCache(out)
+    sub = FeatureCache(out, expect=expect)
+
+    assert full.taps_selected == ("block00", "block01", "block02")
+    assert sub.taps_selected == want
+    assert sub.tap_feature.shape == (2, 16)
+    assert full.tap_feature.shape == (3, 16)
+
+    idx = np.asarray(full.index)[:6]
+    a, b = full.taps(idx, 0), sub.taps(idx, 0)
+    assert b.shape == (6, 2, 16)
+    # The columns must be the ORIGINAL ones, not the first two.
+    assert torch.equal(b[:, 0], a[:, 0])
+    assert torch.equal(b[:, 1], a[:, 2])
+
+
+def test_subset_selection_follows_the_requested_order(rendered):
+    """The adapter's per-tap gates are indexed by position, so a reader that
+    returned cache order rather than requested order would attach every gate to
+    the wrong block -- silently, and with plausible numbers."""
+    _, out, _, _, _ = rendered
+    want = ("block02", "block00")                      # deliberately reversed
+    expect = CacheSpec(
+        detector="toy", feature=SPECS["vector"], n=0,
+        taps=want, tap_feature=FeatureSpec(layout="layers", shape=(2, 16)),
+    )
+    full = FeatureCache(out)
+    sub = FeatureCache(out, expect=expect)
+    assert sub.taps_selected == want
+
+    idx = np.asarray(full.index)[:4]
+    a, b = full.taps(idx, 0), sub.taps(idx, 0)
+    assert torch.equal(b[:, 0], a[:, 2])
+    assert torch.equal(b[:, 1], a[:, 0])
+
+
+def test_requesting_every_cached_tap_is_a_no_op(rendered):
+    _, out, _, split, _ = rendered
+    expect = CacheSpec(
+        detector="toy", feature=SPECS["vector"], n=0,
+        taps=split.taps(), tap_feature=split.tap_spec(),
+    )
+    sub = FeatureCache(out, expect=expect)
+    assert sub._tap_select is None, "identity selection should not index at all"
+    assert sub.tap_feature.shape == split.tap_spec().shape
+
+
+def test_a_tap_the_cache_never_rendered_is_still_refused(rendered):
+    """Subset semantics must not become 'anything goes'. Dropping a tap is
+    free; adding one needs the bytes, and they are not there."""
+    _, out, _, _, _ = rendered
+    expect = CacheSpec(
+        detector="toy", feature=SPECS["vector"], n=0,
+        taps=("block00", "block09"),                   # block09 was never rendered
+        tap_feature=FeatureSpec(layout="layers", shape=(2, 16)),
+    )
+    with pytest.raises(ValueError, match="never rendered"):
+        FeatureCache(out, expect=expect)
+
+
+def test_a_tap_of_the_wrong_width_is_refused(rendered):
+    """Selecting a subset changes how MANY taps are read, never how wide."""
+    _, out, _, _, _ = rendered
+    expect = CacheSpec(
+        detector="toy", feature=SPECS["vector"], n=0,
+        taps=("block00",), tap_feature=FeatureSpec(layout="layers", shape=(1, 32)),
+    )
+    with pytest.raises(ValueError, match="tap width mismatch"):
+        FeatureCache(out, expect=expect)
+
+
 def test_a_ladder_run_refuses_a_cache_rendered_for_other_blocks(rendered):
     """The mismatch that would otherwise train happily on the wrong trunk depth."""
     _, out, _, _, _ = rendered
@@ -280,16 +364,26 @@ def test_a_ladder_run_refuses_a_cache_rendered_for_other_blocks(rendered):
         FeatureCache(out, expect=other)
 
 
-def test_loader_serves_both_tap_views(rendered):
-    """Degraded AND clean. Without the clean ones `identity_loss` would leave
-    the tap pathway unconstrained on exactly the inputs it protects."""
+def test_loader_serves_the_degraded_tap_view(rendered):
+    """Only the degraded taps: nothing in the objective reads the clean ones, so
+    loading them would be a memmap read per batch that no term consumes."""
     _, out, manifest, _, _ = rendered
     cfg = TrainConfig(run_id="t", cache_dir=str(out), batch_size=4, num_workers=0)
     batch = next(iter(build_loader(cfg, FeatureCache(out), manifest, None, 0,
                                    with_taps=True)))
     assert batch["taps_deg"].shape == (4, N_TAPS, 16)
-    assert batch["taps_clean"].shape == (4, N_TAPS, 16)
-    assert not torch.allclose(batch["taps_deg"].float(), batch["taps_clean"].float())
+    assert "taps_clean" not in batch
+
+
+def test_the_cache_still_renders_the_clean_tap_view(rendered):
+    """Rendered even though training does not read it: analysis scripts want the
+    undamaged taps, and re-rendering a cache to get them is the expensive path."""
+    _, out, manifest, _, _ = rendered
+    cache = FeatureCache(out)
+    idx = manifest.index.to_numpy()[:4]
+    clean, deg = cache.clean_taps(idx), cache.taps(idx, 0)
+    assert clean.shape == deg.shape == (4, N_TAPS, 16)
+    assert not torch.allclose(clean.float(), deg.float())
 
 
 # --------------------------------------------------------------------------
@@ -309,8 +403,7 @@ def test_stage_one_trains_a_ladder_and_moves_its_tap_gates(rendered):
         warmup_steps=1, num_workers=0, log_every=1,
         out_dir=str(root / "checkpoints"),
         adapter=AdapterConfig(taps=True, tap_dim=8, bottleneck=16),
-        sampling=SamplingConfig(k_train=1, k_eval=1),
-        loss=LossConfig(lam_sw=0.0, lam_kl=0.0),
+        loss=LossConfig(lam_kl=0.0),
     )
     summary = train_adapter(cfg, split, manifest, schedule)
 
@@ -337,3 +430,15 @@ def _image(manifest, idx):
     from pipeline.data.dataset import load_normalized
 
     return load_normalized(manifest.loc[idx, "path"])
+
+
+def test_gate_init_reaches_the_tap_gate_too():
+    """One config key, both gates. `tap_gate` is the one the non-zero init exists
+    for -- it multiplies `tap_proj`, so a ladder arm sweeping `gate_init` and
+    leaving `tap_gate` at the default would be testing the wrong parameter."""
+    spec, tspec = SPECS["vector"], FeatureSpec(layout="layers", shape=(N_TAPS, 16))
+    lad = build_adapter(spec, AdapterConfig(taps=True, gate_init=-3.0), tspec)
+
+    want = torch.sigmoid(torch.tensor(-3.0))
+    assert torch.allclose(lad.gate(), want, atol=1e-6)
+    assert torch.allclose(lad.tap_gate(), want, atol=1e-6)

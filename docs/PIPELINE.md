@@ -163,7 +163,7 @@ degradation would have partly solved the problem GRACE exists to solve.
 
 | File | What it is |
 |---|---|
-| `adapter.py` | `GatedResidualAdapter` — `y = f + g ⊙ MLP(LN(f))`, + optional noise `z` and severity FiLM. |
+| `adapter.py` | `GatedResidualAdapter` — `y = f + g ⊙ MLP(LN(f))`, + optional severity FiLM. |
 | `severity.py` | `SeverityHead` — degraded features → severity ∈ [0,1]. Target comes from the sampler. |
 | `discrepancy.py` | `DiscrepancyHead` (reads Δ) and `FusedHead` (`logit + β·aux`, β=0 at init). |
 | `factory.py` | The **only** layout branch (`gate_shape_for`), plus `save_adapter` / `load_adapter`. |
@@ -175,8 +175,8 @@ degradation would have partly solved the problem GRACE exists to solve.
 | File | What it is |
 |---|---|
 | `weighting.py` | `head_gradient` (∇_f h) and `decision_weighted_error` (Jacobian-weighted MSE). |
-| `losses.py` | `alignment_loss`, `sliced_wasserstein`, `identity_loss`, `head_kl`, `severity_loss`, `supervised_bce`, `total_loss`. |
-| `diagnostics.py` | `decision_alignment`, `drift`, `drift_asymmetry`, `posterior_spread`, `bootstrap_gap`. |
+| `losses.py` | `alignment_loss`, `head_kl`, `severity_loss`, `supervised_bce`, `total_loss`. |
+| `diagnostics.py` | `decision_alignment`, `drift`, `drift_asymmetry`, `bootstrap_gap`. |
 | `data.py` | `CachedPairDataset` / `LivePairDataset` + `build_loader` — one config flag apart. |
 | `ema.py` | `EMA` — shadow weights, second checkpoint for free. |
 | `tracker.py` | `NullTracker` / `WandbTracker` / `build_tracker` + the shared `--wandb*` CLI flags. Off by default; a null object rather than a conditional, so no code path in `loop.py` only runs on somebody's machine. |
@@ -202,7 +202,7 @@ untracked rather than raising into the training loop.
 | `train_adapter.py` | Stage 1. CLI overrides for sweeps. |
 | `train_discrepancy.py` | Stage 2. `--adapter` override is what makes E4 a shell loop. |
 | `compare.py` | Post-hoc, read-only. Retention against the **baseline's** clean AUC. |
-| `poc.sh` | The whole PoC path in one command; `--smoke` for a minutes-long wiring check. |
+| `run_all.sh` | Every experiment in one command, in dependency order; `--list` prints the 22 steps, `--from N` resumes, `--smoke` is a minutes-long wiring check. |
 
 ## 4. Execution order
 
@@ -224,7 +224,7 @@ cd ../grace_adapter && python scripts/train_probe.py configs/probe/dinov3_ntire.
 # 2-6. As below, with `dinov3` in place of `rine` — plus the two validation
 #      caches (configs/cache/dinov3_val{,_hard}.yaml), which the stage-1 configs
 #      name in `val_cache_dirs` and are not optional. Or all of it at once:
-bash scripts/poc.sh
+bash scripts/run_all.sh
 ```
 
 The general path, for a detector that arrives with its head already trained:
@@ -261,7 +261,7 @@ The experiment arms these support:
 | E0 | drift analysis | `scripts/analyze_drift.py` | does RA-Det's asymmetry hold here? |
 | E1 | identity | `detectors/rine+identity.yaml` | does the split reproduce Day 1 *exactly*? |
 | E2 | A vs B | `train/rine_degraded.yaml` / `rine_clean.yaml` | does the clean teacher buy retention? |
-| E3 | loss ablations | `rine_plain_mse` / `rine_no_sw` / `rine_posterior` | Jacobian vs MSE; ±SW; ±noise |
+| E3 | loss ablation | `rine_plain_mse` | Jacobian weighting vs plain MSE |
 | E4 | erasure trade-off | stage 2 vs every stage-1 checkpoint | does the adapter destroy evidence? |
 | E5 | GRACE-D | `detectors/rine+grace-d.yaml` | does the fused score beat retention 1.0? |
 | E6 | cached vs live | `train/rine_live.yaml` | is the finite epoch set being exploited? |
@@ -338,8 +338,7 @@ class CacheConfig:
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
 ```
 
-`AdapterConfig`, `SamplingConfig`, `LossConfig` and `DiscrepancyConfig` shape the
-modules. Note the two comments that encode coupling between knobs:
+`AdapterConfig`, `LossConfig` and `DiscrepancyConfig` shape the modules:
 
 ```python
 @dataclass
@@ -348,9 +347,6 @@ class AdapterConfig:
     n_blocks: int = 2
     per_channel_gate: bool = True
     dropout: float = 0.0
-    noise_dim: int = 0
-    """0 disables posterior sampling. Only worth turning on alongside `lam_sw`;
-    see grace.models.adapter."""
     severity_film: bool = True
 
 
@@ -360,9 +356,6 @@ class LossConfig:
     eps_iso: float = 0.05           # 1.0 is exactly plain MSE
     w_cos: float = 1.0
     w_err: float = 1.0
-    lam_sw: float = 0.1
-    n_proj: int = 64
-    lam_id: float = 0.5
     lam_kl: float = 0.1             # demoted: subsumed by the Jacobian weighting
     kl_temperature: float = 2.0
     lam_sev: float = 0.1
@@ -900,8 +893,8 @@ depth term is normalised by this rather than by a hardcoded constant."""
 
 Level 0 (clean) staying in the mix at ~15% matters more than it looks: on those
 steps the alignment target *equals* the input and the correct behaviour is to do
-nothing. That implicit identity constraint does more work than the explicit
-`identity_loss` term.
+nothing. That implicit identity constraint is the only thing anchoring the adapter to a
+no-op on undamaged features, which is why the level-0 share is not zeroed out.
 
 The class is a frozen dataclass with three consumers — the writer (renders
 epochs), the reader (verifies the cache matches), and the live-mode dataset
@@ -1560,12 +1553,11 @@ The constructor. Note the zero-init on `fc2` and on `film`:
 
 ```python
     def __init__(self, dim, gate_shape=None, bottleneck=256, n_blocks=2,
-                 dropout=0.0, noise_dim=0, severity_film=False):
+                 dropout=0.0, severity_film=False):
         super().__init__()
         if n_blocks < 1:
             raise ValueError("n_blocks must be >= 1")
         self.dim = dim
-        self.noise_dim = noise_dim
         self.gate_shape = (dim,) if gate_shape is None else tuple(gate_shape)
 
         self.norms = nn.ModuleList(nn.LayerNorm(dim) for _ in range(n_blocks))
@@ -1575,21 +1567,13 @@ The constructor. Note the zero-init on `fc2` and on `film`:
         self.drop = nn.Dropout(dropout)
 
         # Zero-init the *last* projection of each block: the correction is
-        # identically zero at t=0 regardless of gate, noise or severity, so
+        # identically zero at t=0 regardless of gate or severity, so
         # `test_identity_at_init` passes exactly rather than approximately.
         for layer in self.fc2:
             nn.init.zeros_(layer.weight)
             nn.init.zeros_(layer.bias)
 
         self.gate_logit = nn.Parameter(torch.full(self.gate_shape, GATE_INIT))
-
-        # Noise enters the bottleneck, not the residual stream: it perturbs the
-        # proposed correction rather than the feature being corrected.
-        self.noise = (
-            nn.ModuleList(nn.Linear(noise_dim, bottleneck, bias=False) for _ in range(n_blocks))
-            if noise_dim > 0
-            else None
-        )
 
         self.film = nn.Linear(1, 2 * dim) if severity_film else None
         if self.film is not None:
@@ -1620,49 +1604,19 @@ The gate, optionally FiLM-modulated by severity:
 The forward pass — three lines of actual computation per block:
 
 ```python
-    def forward(self, f, z=None, severity=None) -> torch.Tensor:
-        """`z=None` means a deterministic pass -- no noise is added at all.
-
-        Explicit rather than auto-drawn: `identity_loss` and every test want the
-        deterministic branch, and implicit sampling would make them flaky."""
-        if z is not None and not self.stochastic:
-            raise ValueError("adapter was built with noise_dim=0 but was given z")
+    def forward(self, f, severity=None) -> torch.Tensor:
         g = self.gate(severity)
         if severity is not None:
             g = _expand(g, f)
         for i in range(len(self.fc1)):
             h = self.fc1[i](self.norms[i](f))
-            if z is not None:
-                h = h + _expand(self.noise[i](z), h)
             f = f + g * self.fc2[i](self.drop(self.act(h)))
         return f
 ```
 
-And k posterior draws, stacked:
-
-```python
-    def sample(self, f, k, severity=None, generator=None) -> torch.Tensor:
-        """k posterior draws, stacked on a new leading axis -> (k, B, *shape).
-
-        A deterministic adapter returns k identical copies, so callers need no
-        branch; `AdaptedDetector` still forces k=1 there to avoid the waste."""
-        outs = []
-        for _ in range(k):
-            z = self.draw_noise(f.shape[0], device=f.device, dtype=f.dtype, generator=generator)
-            outs.append(self(f, z=z, severity=severity))
-        return torch.stack(outs)
-```
-
-**Distribution matching and posterior sampling are one feature, not two.** Under
-point-wise reconstruction losses alone the optimal stochastic policy is to ignore
-`z` — posterior collapse. Noise earns its keep *only* because the sliced-Wasserstein
-term rewards matching the spread that a conditional mean under-disperses.
-Shipping `noise_dim > 0` with `lam_sw: 0` buys parameters that do nothing, which
-is why `rine_no_sw.yaml` and `rine_posterior.yaml` are run as a pair.
-
 **What to watch.** Log `gate().mean()`. It should climb off 0.018 and plateau
 around 0.1–0.5. Saturating at 1.0 is over-correction; sitting at init means the
-alignment term is too weak against the identity term.
+alignment term never moved the gate at all.
 
 The `(L, D)` gate is also the interpretability output: mean it over `D` and you
 have how much correction each encoder block needs, per degradation.
@@ -1823,7 +1777,6 @@ def build_adapter(spec: FeatureSpec, cfg) -> GatedResidualAdapter:
         bottleneck=cfg.bottleneck,
         n_blocks=cfg.n_blocks,
         dropout=cfg.dropout,
-        noise_dim=cfg.noise_dim,
         severity_film=cfg.severity_film,
     )
 ```
@@ -1921,8 +1874,8 @@ k", per degradation. It is the per-layer gate the RINE `layers` split promised,
 on a detector that needs no `layers` head to produce it.
 
 **Storage is the binding constraint.** Taps are cached as additional views under
-`taps/`, one per feature view — clean included, because `identity_loss` runs the
-adapter on clean features. Five 768-wide taps are 7.5 KB per image per view
+`taps/`, one per feature view — clean included, so both views of a row stay one
+lookup at the same offset. Five 768-wide taps are 7.5 KB per image per view
 against the seam's 1.5 KB, so the PoC tap cache is 38.4 GB against 6.4 GB. Run
 `build_cache.py --dry-run` first; it now prints a tap line.
 
@@ -1974,7 +1927,7 @@ confusion matrix.
 The objective:
 
 ```
-L = L_align + λ_sw·L_SW + λ_id·L_identity + λ_kl·L_headKL + λ_sev·L_severity
+L = L_align + λ_kl·L_headKL + λ_sev·L_severity
 ```
 
 Every term is label-free. Only stage 2's BCE uses image labels.
@@ -2090,51 +2043,6 @@ def alignment_loss(f_adapted, f_clean, j=None, w_cos=1.0, w_err=1.0,
     return w_cos * cos + w_err * err
 ```
 
-**`sliced_wasserstein` — distribution matching.** Point-wise alignment asks each
-corrected feature to sit on its own target and is satisfied by a **conditional
-mean**, which is systematically under-dispersed: the batch ends up in a tighter
-cloud than real clean features form, and the frozen head's operating point was
-calibrated on the wider one.
-
-```python
-def sliced_wasserstein(a, b, n_proj: int = 64, generator=None) -> torch.Tensor:
-    """Sliced Wasserstein rather than MMD or a discriminator: random projections,
-    sort, L2. Six lines, one hyperparameter, and no adversarial stability risk.
-
-    Batch-level statistic, so it needs a real batch (256+ is the default; these
-    are features, not images). Because `a` and `b` hold the *same images*, this
-    is a matched comparison and strictly stronger than the usual unpaired form.
-
-    For grouped layouts the projections are shared but the sort is per group:
-    flattening would blend per-layer statistics that the per-layer gate exists to
-    keep apart."""
-    if a.shape != b.shape:
-        raise ValueError(f"shape mismatch: {tuple(a.shape)} vs {tuple(b.shape)}")
-    d = a.shape[-1]
-    p = torch.randn(d, n_proj, device=a.device, dtype=a.dtype, generator=generator)
-    p = p / p.norm(dim=0, keepdim=True).clamp_min(EPS)
-    pa = (a @ p).sort(dim=0).values
-    pb = (b @ p).sort(dim=0).values
-    return (pa - pb).pow(2).mean()
-```
-
-This is also the term that makes the adapter's noise input worth having — without
-it, `z` is ignored and posterior sampling collapses.
-
-**`identity_loss` — on genuinely clean features, do nothing:**
-
-```python
-def identity_loss(adapter, f_clean, severity=None) -> torch.Tensor:
-    """Costs no extra trunk compute -- it is `adapter(f_clean)` against
-    `f_clean`, and `f_clean` is already in hand from the cache. Deterministic
-    pass on purpose: identity should hold for the mean correction, and drawing
-    noise here would make the term needlessly high-variance.
-
-    Note this is the *explicit* constraint. The implicit one does more work: ~15%
-    of training samples are level-0, where the target simply equals the input."""
-    return F.mse_loss(adapter(f_clean, severity=severity), f_clean)
-```
-
 **`head_kl` — align through the frozen head.** The exact counterpart to the
 Jacobian-weighted term (a finite difference through the real head rather than a
 first-order expansion), demoted to `λ_kl = 0.1` because it only ever observes the
@@ -2163,53 +2071,40 @@ def supervised_bce(logit, labels) -> torch.Tensor:
     return F.binary_cross_entropy_with_logits(logit.squeeze(-1), labels.float())
 ```
 
+**Doing nothing on clean inputs is not a term.** An explicit `L_identity`
+—`adapter(f_clean)` against `f_clean`— was carried through the sweeps and
+dropped: ~15% of training samples are drawn at composition level 0, where the
+target simply *equals* the input, and that implicit constraint is what anchors
+the adapter to a no-op on undamaged features. See `DEFAULT_LEVEL_WEIGHTS` in
+`grace.cache.schedule`; the level-0 share is the knob, not a loss weight.
+
 **`total_loss` — assembly, with per-term logging.** A retention gain from the
-distribution term is a different result than a gain from the alignment term, and
-the aggregate number cannot tell you which happened:
+head-KL term is a different result than a gain from the alignment term, and the
+aggregate number cannot tell you which happened:
 
 ```python
-def total_loss(*, adapter, head, f_adapted, f_clean, j,
-               severity_pred, severity_target, cfg) -> tuple[torch.Tensor, dict]:
-    """`f_adapted` may carry a leading sample axis `(k, B, ...)` from posterior
-    sampling; the point-wise terms are averaged over it and the distributional
-    term is computed on the pooled draws, which is what gives the noise
-    something to do."""
-    sampled = f_adapted.ndim == f_clean.ndim + 1
-    draws = f_adapted if sampled else f_adapted.unsqueeze(0)
-    k = draws.shape[0]
-
-    align = sum(
-        alignment_loss(draws[i], f_clean, j,
-                       w_cos=cfg.w_cos, w_err=cfg.w_err,
-                       eps_iso=cfg.eps_iso, weighting=cfg.weighting)
-        for i in range(k)
-    ) / k
+def total_loss(*, head, f_adapted, f_clean, j,
+               severity_pred, severity_target, cfg,
+               diagnostics: bool = False) -> tuple[torch.Tensor, dict]:
+    """`diagnostics` reports every term regardless of its weight, so a `lam_X: 0`
+    ablation can still be read on the term it ablated. It never changes `loss`."""
+    align = alignment_loss(f_adapted, f_clean, j,
+                           w_cos=cfg.w_cos, w_err=cfg.w_err,
+                           eps_iso=cfg.eps_iso, weighting=cfg.weighting)
 
     terms = {"align": _scalar(align)}
     loss = align
 
-    if cfg.lam_sw > 0:
-        # Pooled over draws against the clean batch tiled to match, so a
-        # collapsed posterior is penalised for under-dispersion.
-        sw = sliced_wasserstein(
-            draws.flatten(0, 1), f_clean.repeat(k, *(1,) * (f_clean.ndim - 1)), cfg.n_proj
-        )
-        loss = loss + cfg.lam_sw * sw
-        terms["sw"] = _scalar(sw)
-
-    if cfg.lam_id > 0:
-        ident = identity_loss(adapter, f_clean, severity_target)
-        loss = loss + cfg.lam_id * ident
-        terms["identity"] = _scalar(ident)
-
-    if cfg.lam_kl > 0:
-        kl = sum(head_kl(head, draws[i], f_clean, cfg.kl_temperature) for i in range(k)) / k
-        loss = loss + cfg.lam_kl * kl
+    if cfg.lam_kl > 0 or diagnostics:
+        kl = head_kl(head, f_adapted, f_clean, cfg.kl_temperature)
+        if cfg.lam_kl > 0:
+            loss = loss + cfg.lam_kl * kl
         terms["head_kl"] = _scalar(kl)
 
-    if cfg.lam_sev > 0 and severity_pred is not None and severity_target is not None:
+    if (cfg.lam_sev > 0 or diagnostics) and severity_pred is not None and severity_target is not None:
         sev = severity_loss(severity_pred, severity_target)
-        loss = loss + cfg.lam_sev * sev
+        if cfg.lam_sev > 0:
+            loss = loss + cfg.lam_sev * sev
         terms["severity"] = _scalar(sev)
 
     terms["total"] = _scalar(loss)
@@ -2219,16 +2114,18 @@ def total_loss(*, adapter, head, f_adapted, f_clean, j,
 Note the `_scalar` helper — `float(t.detach())` — because logging must never hold
 a graph alive.
 
-Also note that each `lam_* > 0` guard means an ablation config genuinely skips
-the computation rather than multiplying it by zero.
+Each term is gated on its own `lam > 0`, so an ablation that zeroes a weight
+genuinely skips the computation rather than multiplying it by zero. Under
+`diagnostics` — set on logging steps only — the term is still computed and
+reported; only its contribution to `loss` stays off, which is what lets a
+`lam_X: 0` run still be read on the quantity it ablated.
 
-### 9.3 `diagnostics.py` — three questions, none of them losses
+### 9.3 `diagnostics.py` — two questions, neither of them a loss
 
 | Function | Question |
 |---|---|
 | `decision_alignment` | Is the correction pointed at the decision, or wasted? |
 | `drift_asymmetry` | Does drift carry forensic signal we are erasing? |
-| `posterior_spread` | Is the posterior actually stochastic? |
 
 They exist so a result can be *explained* rather than just reported, and
 `drift_asymmetry` in particular runs **before any training**, on the cache alone,
@@ -2307,21 +2204,7 @@ def drift_asymmetry(f_deg, f_clean, labels, j=None) -> dict[str, float]:
     return out
 ```
 
-The posterior-collapse tripwire:
-
-```python
-def posterior_spread(logits: torch.Tensor) -> float:
-    """Std of the logit across posterior draws, averaged over the batch.
-
-    Under point-wise reconstruction losses alone the optimal stochastic policy is
-    to ignore `z`, and this reads ~0. That is a reportable negative result about
-    the objective, not a bug to paper over."""
-    if logits.ndim < 2 or logits.shape[0] < 2:
-        return 0.0
-    return float(logits.std(dim=0).mean())
-```
-
-And a bootstrap CI that deliberately matches the harness's convention so the
+A bootstrap CI that deliberately matches the harness's convention so the
 intervals are comparable:
 
 ```python
@@ -2428,12 +2311,13 @@ def build_loader(cfg, cache, manifest, schedule, epoch, preprocess=None,
         num_workers=cfg.num_workers,
         collate_fn=_collate,
         worker_init_fn=lambda w: cache.worker_init(w),
-        drop_last=True,     # the sliced-Wasserstein term is a batch statistic
+        drop_last=True,     # every logged step on the same batch size, so the
+                            # per-term scalars are comparable along the run
     )
 ```
 
-`drop_last=True` is not a rounding convenience — the sliced-Wasserstein term is a
-batch statistic and a short final batch would make it noisier than the rest.
+`drop_last=True` keeps every step on the same batch size, so a short final batch
+cannot make the logged per-term scalars noisier than the rest of the run.
 
 ### 9.5 `ema.py`
 
@@ -2565,14 +2449,13 @@ def train_adapter(cfg, split, manifest, schedule) -> dict:
                 sev_in = sev_pred.detach()
 
             j = head_gradient(split.head, target) if cfg.loss.weighting == "jacobian" else None
-            k = cfg.sampling.k_train if adapter.stochastic else 1
-            f_adapted = adapter.sample(f_deg, k, severity=sev_in)
+            f_adapted = adapter(f_deg, severity=sev_in)
 
             loss, terms = total_loss(
-                adapter=adapter, head=split.head,
+                head=split.head,
                 f_adapted=f_adapted, f_clean=target, j=j,
                 severity_pred=sev_pred, severity_target=sev_target,
-                cfg=cfg.loss,
+                cfg=cfg.loss, diagnostics=logging_step,
             )
             loss.backward()
             torch.nn.utils.clip_grad_norm_(params, cfg.grad_clip)
@@ -2587,8 +2470,8 @@ Points worth reading twice:
 * `assert_frozen()` runs **inside** the loop, every step.
 * `_to_float` casts out of the cache's fp16 before anything touches a loss.
 * `target` is the single line implementing arms A and B. Everything downstream —
-  including the Jacobian evaluation point and `identity_loss` — is taken against
-  `target`, so arm A is a *complete* control, not a partial one.
+  the Jacobian evaluation point included — is taken against `target`, so arm A
+  is a *complete* control, not a partial one.
 * `j` is computed at the **target**, and skipped entirely when
   `weighting: "none"`.
 * `sev_in` alternates between ground truth and the head's own (detached)
@@ -2695,25 +2578,22 @@ def _alignment(cfg, adapter, split, cache, manifest, epochs, severity_head=None)
     loader_cfg = _cache_loader_cfg(cfg)
     for epoch in epochs:
         loader = build_loader(loader_cfg, cache, manifest, None, epoch, shuffle=False)
-        cos, spread, gate = [], [], []
+        cos, gate = [], []
         for batch in loader:
             f_deg = _to_float(batch["f_deg"], device)
             f_clean = _to_float(batch["f_clean"], device)
             sev = batch["severity"].to(device).float()
             if severity_head is not None:
                 sev = severity_head(f_deg)
-            k = cfg.sampling.k_eval if adapter.stochastic else 1
-            draws = adapter.sample(f_deg, k, severity=sev)
+            f_adapted = adapter(f_deg, severity=sev)
             cos.append(
                 torch.nn.functional.cosine_similarity(
-                    draws.mean(0).flatten(1), f_clean.flatten(1), dim=1
+                    f_adapted.flatten(1), f_clean.flatten(1), dim=1
                 ).mean().item()
             )
-            spread.append(D.posterior_spread(torch.stack([split.head(d) for d in draws])))
             gate.append(float(adapter.gate().mean().detach()))
         out[f"epoch_{epoch}"] = {
             "cosine_to_clean": float(np.mean(cos)),
-            "posterior_spread": float(np.mean(spread)),
             "gate": float(np.mean(gate)),
         }
     return out
@@ -2721,7 +2601,6 @@ def _alignment(cfg, adapter, split, cache, manifest, epochs, severity_head=None)
 
 Validation uses **predicted** severity (`severity_head(f_deg)` overrides the
 cached ground truth) — the inference-time condition, not the training-time one.
-`posterior_spread` here is the tripwire: ~0 means the noise was ignored.
 
 ### 9.8 `loop.py` — stage 2
 
@@ -2834,12 +2713,11 @@ checkpoint: .../ema.pt              GRACE, label-free
 ```python
 class AdaptedDetector(FrozenDetector):
     def __init__(self, base, split: str, checkpoint: str | None = None,
-                 discrepancy: str | None = None, k_eval: int = 8, name: str = "grace"):
+                 discrepancy: str | None = None, name: str = "grace"):
         super().__init__()
         detector = build_detector(load_detector_config(base))
         self.split = build_split(detector, split)
         self.name = name
-        self.k_eval = k_eval
 
         spec = self.split.feature_spec
         self.adapter = load_adapter(checkpoint, spec) if checkpoint else None
@@ -2892,7 +2770,7 @@ preprocessing across the zoo would break the baselines being compared against:
         return self.split.preprocess_fn()
 ```
 
-**The forward pass** is the whole method in fifteen lines:
+**The forward pass** is the whole method in a dozen lines:
 
 ```python
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -2902,19 +2780,12 @@ preprocessing across the zoo would break the baselines being compared against:
 
         f = f.float()
         severity = self.severity_head(f) if self.severity_head is not None else None
-        k = self.k_eval if self.adapter.stochastic else 1
 
-        # Average the LOGITS, not the features: E[h(f)] != h(E[f]) for any
-        # nonlinear head, so this is cheap Monte-Carlo posterior averaging rather
-        # than a redundant restatement of one deterministic pass. k adapter
-        # passes cost microseconds against the one trunk pass already spent.
-        draws = self.adapter.sample(f, k, severity=severity)
-        logits = torch.stack([self.split.head(d) for d in draws])
-        logit = logits.mean(0)
+        f_adapted = self.adapter(f, severity=severity)
+        logit = self.split.head(f_adapted)
 
         if self.fused is not None:
-            delta = draws.mean(0) - f
-            logit = self.fused(logit, delta, severity)
+            logit = self.fused(logit, f_adapted - f, severity)
         return logit
 ```
 
@@ -2926,9 +2797,8 @@ downstream compares against a model that was never benchmarked.
 Severity is **predicted** here, never given — there is no `recipes.parquet` at
 evaluation time. That is why stage 1 trains on the prediction half the time.
 
-Note that logits are averaged over draws, but Δ is computed from the **mean
-draw** (`draws.mean(0) - f`), which is the deterministic correction the
-discrepancy head was trained against.
+Δ is `f_adapted - f`, the same correction the discrepancy head was trained
+against -- one adapter pass feeds both the main logit and the fused branch.
 
 ---
 
@@ -3249,9 +3119,7 @@ configs/
 ├── train/
 │   ├── rine_clean.yaml      E2 arm B -- the proposed method
 │   ├── rine_degraded.yaml   E2 arm A -- the control
-│   ├── rine_plain_mse.yaml  E3a -- weighting: none
-│   ├── rine_no_sw.yaml      E3b -- lam_sw: 0.0
-│   ├── rine_posterior.yaml  E3c -- noise_dim: 16
+│   ├── rine_plain_mse.yaml  E3 -- weighting: none
 │   ├── rine_live.yaml       E6 -- source: live
 │   └── rine_discrepancy.yaml  stage 2
 └── detectors/
@@ -3274,7 +3142,7 @@ target_view: clean
 source: cache
 checkpoint_every: 2
 
-loss: {}      # the full v2 objective: Jacobian-weighted error + sliced-Wasserstein
+loss: {}      # the defaults: Jacobian-weighted error + cosine, head_kl, severity
 ```
 
 ```yaml
@@ -3293,34 +3161,18 @@ intermediate adapters E4 needs.
 `tests/test_configs.py::test_arms_differ_only_in_target_view` pins that the two
 files differ in exactly that key.
 
-### 12.2 The ablations are one key each
+### 12.2 The ablation is one key
 
 ```yaml
-# rine_plain_mse.yaml -- E3a
+# rine_plain_mse.yaml -- E3
 loss:
   weighting: none
   lam_kl: 0.5       # v1's weight -- head_kl was the only decision-aware term then
 ```
 
-```yaml
-# rine_no_sw.yaml -- E3b
-loss:
-  lam_sw: 0.0
-```
-
-```yaml
-# rine_posterior.yaml -- E3c
-adapter:
-  noise_dim: 16
-
-sampling:
-  k_train: 2
-  k_eval: 8
-```
-
-E3b and E3c are run **as a pair**: without a distributional term the optimal
-stochastic policy is to ignore the noise entirely, so `rine_no_sw` should collapse
-harder on `posterior_spread` than `rine_posterior` does.
+Every other key is repeated verbatim from `rine_clean.yaml` rather than left to
+the `LossConfig` defaults: an ablation that silently differs in a second key is
+not an ablation.
 
 ### 12.3 Detector configs are in the harness's shape
 
@@ -3335,7 +3187,6 @@ args:
   split: grace.splits.rine.RINESplit
   checkpoint: checkpoints/grace/rine_clean/ema.pt
   discrepancy: null
-  k_eval: 8
 device: auto
 ```
 
@@ -3348,7 +3199,6 @@ args:
   split: grace.splits.rine.RINESplit
   checkpoint: checkpoints/grace/rine_clean/ema.pt
   discrepancy: checkpoints/grace/rine_disc/discrepancy.pt
-  k_eval: 8
 device: auto
 ```
 
@@ -3384,9 +3234,8 @@ None of them needs vendored detector weights.
 
 | File | What it pins |
 |---|---|
-| `test_adapter_identity.py` | Identity at init is **exact**, under every optional input — noise, severity, dropout. Per-layer vs shared gate shapes. MLP shared across the group axis. |
-| `test_losses.py` | `head_gradient` of a linear head **is exactly `w`**; it is per-sample; it does not leak into the caller's graph. `eps_iso=1` is exactly plain MSE. Weighting ignores error orthogonal to the decision direction. SW is zero for identical batches, permutation-invariant, and penalises under-dispersion. |
-| `test_posterior.py` | Deterministic when off; passing `z` to a deterministic adapter raises. **Logit averaging differs from feature averaging** for a nonlinear head and matches for a linear one — the load-bearing claim. `posterior_spread` flags collapse. |
+| `test_adapter_identity.py` | Identity at init is **exact**, under every optional input — severity, dropout. Per-layer vs shared gate shapes. MLP shared across the group axis. |
+| `test_losses.py` | `head_gradient` of a linear head **is exactly `w`**; it is per-sample; it does not leak into the caller's graph. `eps_iso=1` is exactly plain MSE. Weighting ignores error orthogonal to the decision direction. `head_kl` is non-negative and zero when the features match. |
 | `test_schedule.py` | The recipe is **pure**, stable across processes, differs across epochs and images. Level weights respected; L0 produces no degradation; L1 draws exactly one transform. Val epochs are disjoint. Severity is monotone in depth, bounded, zero when clean, and ranks the grid. The fingerprint moves with the grid. **And that the upstream guard change left all eval conditions unaffected.** |
 | `test_cache_alignment.py` | The highest-risk bug. Renders a real cache and re-runs the trunk live on random indices, clean *and* degraded. Clean and degraded share a row; survives subsetting; unknown index raises; stale manifest and changed schedule are rejected; a stochastic preprocess is rejected. |
 | `test_split_consistency.py` | `head(trunk(x)) == detector(x)`. `verify_split` rejects a wrong head, a `None`-returning head, and lists trainable modules in the message. `assert_frozen` catches train mode *and* trainable parameters. |
@@ -3455,7 +3304,7 @@ branch, schedule, cache (writer/reader/spec), EMA, both training stages, the
 two-axis validation, the configs, `AdaptedDetector`, the DINOv3 proof-of-concept
 path, and W&B tracking.
 
-**Runnable end to end today:** the PoC path only (`bash scripts/poc.sh`). It needs
+**Runnable end to end today:** the PoC path only (`bash scripts/run_all.sh`). It needs
 the DINOv3 ViT-S/16 backbone, a licence-gated Hub repo — accept it on the model
 page and `hf auth login`, or point `backbone_id` at a mirror. Nothing else in the
 project can be run against a real detector yet, which is the gap the PoC exists

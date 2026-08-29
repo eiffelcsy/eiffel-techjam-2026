@@ -22,5 +22,4 @@ args:
   split: grace.splits.dinov3.DINOv3Split
   checkpoint: ../grace_adapter/checkpoints/grace/dinov3_clean/ema.pt
   discrepancy: ../grace_adapter/checkpoints/grace/dinov3_disc/discrepancy.pt
-  k_eval: 1
 device: auto

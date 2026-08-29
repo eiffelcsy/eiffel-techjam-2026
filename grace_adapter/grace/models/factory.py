@@ -52,8 +52,8 @@ def build_adapter(
         bottleneck=cfg.bottleneck,
         n_blocks=cfg.n_blocks,
         dropout=cfg.dropout,
-        noise_dim=cfg.noise_dim,
         severity_film=cfg.severity_film,
+        gate_init=cfg.gate_init,
     )
 
 
@@ -61,9 +61,16 @@ def build_severity_head(spec: FeatureSpec, hidden: int = 256) -> SeverityHead:
     return SeverityHead(dim=spec.dim, hidden=hidden)
 
 
-def build_discrepancy_head(spec: FeatureSpec, cfg) -> DiscrepancyHead:
+def build_discrepancy_head(spec: FeatureSpec, cfg, n_taps: int = 0) -> DiscrepancyHead:
+    """`n_taps` comes from the stage-1 adapter, not from `cfg`.
+
+    `cfg.use_taps` is an intent; how many taps there are is a fact about the
+    frozen checkpoint stage 2 was pointed at. Same rule as `build_adapter`'s
+    dispatch on `tap_spec is not None`.
+    """
     return DiscrepancyHead(
-        spec=spec, hidden=cfg.hidden, proj=cfg.proj, use_severity=cfg.use_severity
+        spec=spec, hidden=cfg.hidden, proj=cfg.proj,
+        use_severity=cfg.use_severity, n_taps=n_taps,
     )
 
 

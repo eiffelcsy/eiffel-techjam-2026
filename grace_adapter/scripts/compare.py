@@ -36,6 +36,16 @@ def parse_args():
     p.add_argument("--baseline", required=True, help="harness result JSON for the base detector")
     p.add_argument("--adapted", required=True, help="harness result JSON for the adapted one")
     p.add_argument("--out", help="write the comparison as JSON")
+    p.add_argument(
+        "--assert-identity", action="store_true",
+        help="E1: exit non-zero unless every retention delta is 0 (the null adapter)",
+    )
+    p.add_argument(
+        "--tol", type=float, default=0.0,
+        help="tolerance for --assert-identity. Default 0: the identity is exact, "
+             "because every adapter block's final projection is zero-initialised, "
+             "so an untrained adapter returns its input bit for bit",
+    )
     return p.parse_args()
 
 
@@ -110,6 +120,26 @@ def main():
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.out).write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    # E1 is a GATE, not a report: if the null adapter does not reproduce the
+    # baseline, the trunk/head split is wrong and every adapted number afterwards
+    # is measured against a model nobody benchmarked. Failing loudly here is what
+    # stops a pipeline from spending hours producing that.
+    if args.assert_identity:
+        bad = [r for r in rows if abs(r["delta"]) > args.tol]
+        if bad:
+            print()
+            for r in bad:
+                print(
+                    f"  {r['level']}: baseline {r['auc_baseline']:.6f} -> "
+                    f"adapted {r['auc_adapted']:.6f}  (delta {r['delta']:+.6f})"
+                )
+            raise SystemExit(
+                f"IDENTITY CHECK FAILED: {len(bad)} of {len(rows)} levels differ by "
+                f"more than {args.tol}. The split does not reproduce the base "
+                f"detector, so nothing downstream is a measurement. Stop here."
+            )
+        print(f"identity check PASSED: all {len(rows)} levels agree to {args.tol}")
 
 
 if __name__ == "__main__":

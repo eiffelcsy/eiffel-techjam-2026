@@ -1,0 +1,80 @@
+# Is the gate learning, or is it just being decayed open?
+#
+# Its control is dinov3_clean.yaml, the reference arm. `decay_gate` defaults to
+# `true` and `gate_init` to -4.0, so the reference IS the decay-on, init-(-4)
+# arm; there is no separate `dinov3_sweep_gate_-4.yaml` and adding one would
+# only create a second name for the same run.
+#
+# Identical to the reference except `decay_gate: false`, which exempts
+# `gate_logit` from weight decay and leaves every other parameter's regularization
+# untouched. That exemption is the whole arm -- a global `weight_decay: 0.0`
+# would also change the MLP and confound the reading.
+#
+#   python scripts/train_adapter.py configs/train/dinov3_gate_nodecay.yaml
+#
+# The measurement this follows from
+# ---------------------------------
+# On the reference arm (decay on, init -4) the gate went 0.0180 -> 0.0209
+# over 13,008 steps. Simulating decoupled decay ALONE against that run's logged
+# LR schedule predicts logit -3.749; the run finished at -3.847. It ended below
+# the decay-only trajectory, so decay accounts for more than all of the upward
+# drift and the objective's net pull on the gate is DOWNWARD. The gate-init
+# sweep (dinov3_sweep_gate_-3) is the corroboration: a 2.6x higher start moved
+# the logit LESS (+0.046 vs +0.153), because a larger gate is pushed back harder.
+#
+# What this arm decides
+# ---------------------
+# Read `gate` in `history`. Decay is the only upward force identified so far, so:
+#   * gate FALLS below 0.018 => confirmed. The objective wants the correction
+#     smaller than its init, every "gate climbing" reading in this project's runs
+#     to date was the optimizer, and the honest fix is to ask why the alignment
+#     term does not want a correction -- not to re-tune the init.
+#   * gate rises anyway => the loss does drive it and decay was merely adding to
+#     it. That restores `gate` as a health signal and makes gate_init worth
+#     revisiting.
+#   * gate pinned at 0.018 to five decimals => the gradient reaching gate_logit
+#     is negligible against Adam's epsilon, which is a different bug and lives in
+#     the alignment term's weighting, not here.
+#
+# Retention is NOT the readout. Whatever the gate does, it is doing it in the
+# third decimal place of a correction whose effect on held-out AUC was already
+# inside the 0.0081 standard error.
+
+run_id: dinov3_gate_nodecay
+
+detector: ../eval_pipeline/configs/detectors/dinov3-ntire.yaml
+split: grace.splits.dinov3.DINOv3Split
+dataset: ../eval_pipeline/configs/datasets/ntire_train.yaml
+
+val_datasets:
+  - ../eval_pipeline/configs/datasets/ntire_val.yaml
+  - ../eval_pipeline/configs/datasets/ntire_val_hard.yaml
+val_cache_dirs:
+  - cache_val/dinov3-ntire
+  - cache_val_hard/dinov3-ntire
+
+cache_dir: cache/dinov3-ntire
+epochs: 12
+seed: 0
+target_view: clean
+source: cache
+checkpoint_every: 2
+val_every: 4
+
+batch_size: 256
+warmup_steps: 10
+decay_gate: false   # THE swept key
+
+adapter:
+  bottleneck: 128
+  n_blocks: 3
+
+loss:
+  w_err: 4.0
+  w_cos: 0.25
+  eps_iso: 0.01
+
+wandb:
+  enabled: false
+  project: grace-adapter
+  group: e_gate_init

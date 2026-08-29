@@ -18,7 +18,7 @@ from grace.cache.spec import CacheSpec, sha_manifest, sha_preprocess
 from grace.cache.writer import build_cache
 from grace.config import (
     AdapterConfig, DiscrepancyConfig, DiscrepancyTrainConfig, LossConfig,
-    SamplingConfig, TrainConfig,
+    TrainConfig,
 )
 from grace.cache.reader import FeatureCache
 from grace.models.factory import build_adapter, load_adapter
@@ -35,8 +35,8 @@ def workspace(tmp_path_factory):
     root = tmp_path_factory.mktemp("train")
     manifest = write_images(root / "images", N_IMAGES)
     spec = SPECS["vector"]
-    # A nonlinear head on purpose: it is what makes posterior sampling and the
-    # Jacobian weighting non-trivial, and a linear one would hide bugs in both.
+    # A nonlinear head on purpose: it is what makes the Jacobian weighting and
+    # head_kl non-trivial, and a linear one would hide bugs in both.
     split = ToySplit(spec, head=MLPHead(spec))
     schedule = EpochSchedule(grid=load_grid(GRID_FILE), seed=0)
 
@@ -60,7 +60,6 @@ def _train_cfg(root, cache_dir, **kw):
         epochs=2, batch_size=8, warmup_steps=1, num_workers=0,
         out_dir=str(root / "ckpt"),
         adapter=AdapterConfig(bottleneck=8, n_blocks=1, **kw.pop("adapter", {})),
-        sampling=SamplingConfig(k_train=2, k_eval=2),
         loss=LossConfig(**kw.pop("loss", {})),
         **kw,
     )
@@ -126,14 +125,6 @@ def test_both_weightings_train(workspace, weighting):
     assert train_adapter(cfg, split, manifest, schedule)["steps"] > 0
 
 
-def test_stochastic_adapter_trains_and_reports_spread(workspace):
-    root, manifest, split, schedule, cache_dir = workspace
-    cfg = _train_cfg(root, cache_dir, run_id="noisy", adapter={"noise_dim": 4})
-    summary = train_adapter(cfg, split, manifest, schedule)
-    held = summary["validation"]["held_out_degradations"][f"epoch_{min(val_epochs(1))}"]
-    assert "posterior_spread" in held
-
-
 def test_val_every_records_a_row_per_validated_epoch(workspace):
     """The mid-run curve. `val_history` is additive: `validation` still holds
     the finished adapter's numbers, so nothing downstream has to ask which
@@ -159,13 +150,13 @@ def test_val_every_off_by_default(workspace):
 
 
 def test_val_every_does_not_perturb_training(workspace):
-    """A stochastic adapter draws from the global generator, so an unforked
-    mid-run validation would shift every subsequent training draw. Two runs at
-    the same seed differing only in `val_every` must end bit-identical."""
+    """Every DataLoader draws a base seed from the global generator, so an
+    unforked mid-run validation would shift the training loader's own stream.
+    Two runs at the same seed differing only in `val_every` must end
+    bit-identical."""
     root, manifest, split, schedule, cache_dir = workspace
     for run_id, every in (("rng_off", 0), ("rng_on", 1)):
-        cfg = _train_cfg(root, cache_dir, run_id=run_id,
-                         adapter={"noise_dim": 4}, val_every=every)
+        cfg = _train_cfg(root, cache_dir, run_id=run_id, val_every=every)
         train_adapter(cfg, split, manifest, schedule)
 
     spec = split.feature_spec
@@ -279,3 +270,34 @@ def test_stage_two_trains_against_a_frozen_adapter(workspace):
     after = load_adapter(checkpoint, split.feature_spec).state_dict()
     for key in before:
         assert torch.equal(before[key], after[key]), key
+
+
+def test_decay_gate_false_exempts_only_the_gate_logits():
+    """The exemption has to be exactly the gate, or the arm is not attributable.
+
+    `decay_gate: false` is read against a control that differs in nothing else,
+    so every other parameter must stay in the decayed group -- including the
+    severity head, which is optimized alongside the adapter.
+    """
+    from grace.models.factory import build_severity_head
+    from grace.train.loop import _param_groups
+    from tests.fixtures import SPECS
+
+    spec = SPECS["vector"]
+    adapter = build_adapter(spec, AdapterConfig())
+    sev = build_severity_head(spec)
+    n_params = len(list(adapter.parameters())) + len(list(sev.parameters()))
+
+    on = _param_groups(adapter, sev, TrainConfig(run_id="t", cache_dir="x"))
+    assert len(on) == 1 and len(on[0]["params"]) == n_params
+    assert "weight_decay" not in on[0]
+
+    off = _param_groups(
+        adapter, sev, TrainConfig(run_id="t", cache_dir="x", decay_gate=False)
+    )
+    decayed, exempt = off
+    assert exempt["weight_decay"] == 0.0
+    assert [id(p) for p in exempt["params"]] == [id(adapter.gate_logit)]
+    assert len(decayed["params"]) == n_params - 1
+    assert "weight_decay" not in decayed
+

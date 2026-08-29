@@ -61,7 +61,7 @@ num_workers: 4
 # Do NOT fix this by casting the noise to float32. `rng.normal(0, s, shape)` and
 # `rng.standard_normal(shape, dtype=float32) * s` consume the bit stream
 # differently, so the degradations would stop matching every cache already
-# rendered -- including the one dinov3_clean_final was trained and reported on.
+# rendered -- including the one dinov3_clean.yaml, the reference arm, uses.
 # Chunking the float64 draw by row blocks preserves the stream exactly and is
 # the safe optimisation if this ever needs to be faster.
 #

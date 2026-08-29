@@ -118,7 +118,7 @@ mitigations, all built in:
 ## 3. The objective
 
 ```
-L = L_align + λ_sw·L_SW + λ_id·L_identity + λ_kl·L_headKL + λ_sev·L_severity
+L = L_align + λ_kl·L_headKL + λ_sev·L_severity
 ```
 
 Every term is label-free. Only stage 2's BCE uses image labels.
@@ -145,23 +145,11 @@ The diagnostic that motivates this empirically is `cos(Δ, j)`, logged every 50
 steps. If a plain-MSE run sits near 0, the adapter is spending nearly all its
 capacity on directions the head cannot see.
 
-**Distribution matching and posterior sampling are one feature.** Point-wise
-alignment is satisfied by a conditional mean, which is systematically
-under-dispersed: the corrected batch forms a tighter cloud than real clean
-features do, and the frozen head's operating point was calibrated on the wider
-one. Sliced-Wasserstein fixes that — random projections, sort, L2; one
-hyperparameter, no adversarial stability risk, and a *matched* comparison since
-both batches hold the same images. Posterior sampling gives the adapter a noise
-input `z`, draws k corrections, and averages **logits, not features** —
-`E[h(f)] ≠ h(E[f])` for any nonlinear head.
-
-> Under point-wise reconstruction losses alone the optimal stochastic policy is
-> to ignore `z` — posterior collapse. Noise earns its keep *only* because the SW
-> term rewards matching the spread a conditional mean under-disperses. Shipping
-> `noise_dim > 0` with `lam_sw: 0` buys parameters that do nothing, which is why
-> `*_no_sw.yaml` and `*_posterior.yaml` run as a pair. `posterior_spread` in the
-> validation block is the tripwire; ~0 is a reportable negative result about the
-> objective, not a bug.
+**Doing nothing on clean inputs is a property of the data, not a term.** ~15% of
+training samples are drawn at composition level 0, where the target simply
+equals the input, and that implicit constraint is what anchors the adapter to a
+no-op on undamaged features. See `DEFAULT_LEVEL_WEIGHTS` in
+`grace.cache.schedule`; the level-0 share is not a knob to zero out.
 
 **Severity is free and does not cost the label-free claim.** Transform grids are
 ordered mild → severe, so a step's severity is its parameter's normalised rank
@@ -186,14 +174,14 @@ The `(L, D)` gate is also the interpretability output: mean it over `D` and you
 have how much correction each encoder block needs, per degradation.
 
 **Identity at initialization, exactly.** The last projection of every block is
-zero-initialised, so the adapter returns its input bit-for-bit whatever the gate,
-the noise, or the severity conditioning happen to be — and the same trick makes
+zero-initialised, so the adapter returns its input bit-for-bit whatever the gate
+or the severity conditioning happen to be — and the same trick makes
 `β = 0` mean GRACE-D *is* GRACE at init. Without this, a clean-AUC change is
 unattributable.
 
 Log `gate().mean()`. It should climb off 0.018 and plateau around 0.1–0.5.
-Saturating at 1.0 is over-correction; sitting at init means the alignment term is
-too weak against the identity term.
+Saturating at 1.0 is over-correction; sitting at init means the alignment term
+never moved the gate at all.
 
 ---
 
@@ -217,7 +205,7 @@ grace/
 │   ├── writer.py      offline render: clean view + one view per epoch
 │   └── reader.py      memmap random access, per-worker, by manifest index
 ├── models/
-│   ├── adapter.py     GatedResidualAdapter (+ noise, + severity FiLM)
+│   ├── adapter.py     GatedResidualAdapter (+ severity FiLM)
 │   ├── severity.py    SeverityHead — target is free from recipes.parquet
 │   ├── discrepancy.py DiscrepancyHead + FusedHead                          ← §1
 │   ├── factory.py     the only layout branch, three lines
@@ -225,8 +213,8 @@ grace/
 │   └── prompts.py     FUTURE — blueprint only
 ├── train/
 │   ├── weighting.py   head_gradient, decision_weighted_error               ← §3
-│   ├── losses.py      alignment, sliced-Wasserstein, identity, KL, severity
-│   ├── diagnostics.py cos(Δ,j), drift asymmetry, posterior spread
+│   ├── losses.py      alignment, head KL, severity
+│   ├── diagnostics.py cos(Δ,j), drift asymmetry
 │   ├── data.py        CachedPairDataset | LivePairDataset — one config flag
 │   ├── ema.py         EMA shadow weights; every run ships raw + ema.pt
 │   ├── tracker.py     W&B as a null object — off by default, never fatal   ← §8
@@ -281,7 +269,7 @@ full sweep is 14 passes per val set, and the epochs of an image cache are
 fourteen reads of one axis rather than fourteen different questions.
 
 **Each row carries alignment *and* detection metrics.** Alignment:
-`cosine_to_clean`, `gate`, `posterior_spread`. Detection, through the frozen
+`cosine_to_clean`, `gate`. Detection, through the frozen
 head, for three views — `degraded` (the input, what the detector scores without
 GRACE), `adapted` (the adapter's output) and `clean` (the ceiling): `auc_*`,
 `acc_*`, `f1_*`, plus `retention` = `(auc_adapted - 0.5) / (auc_clean - 0.5)`.
@@ -331,7 +319,7 @@ finalized. "E0 first" means *before anything is trained*.
 | E0 | drift analysis | `scripts/analyze_drift.py` | does RA-Det's asymmetry hold here? |
 | E1 | identity | `detectors/*+identity.yaml` | does the split reproduce the baseline *exactly*? |
 | E2 | A vs B | `train/*_degraded.yaml` / `*_clean.yaml` | does the clean teacher buy retention? |
-| E3 | loss ablations | `*_plain_mse` / `*_no_sw` / `*_posterior` | Jacobian vs MSE; ±SW; ±noise |
+| E3 | loss ablation | `*_plain_mse` | Jacobian weighting vs plain MSE |
 | **E4** | **erasure trade-off** | stage 2 vs every stage-1 checkpoint | **does the adapter destroy evidence?** |
 | E5 | GRACE-D | `detectors/*+grace-d.yaml` | does the fused score beat retention 1.0? |
 | E6 | cached vs live | `train/*_live.yaml` | is the finite epoch set being exploited? |
@@ -423,7 +411,7 @@ would be. Report it that way.
 |---|---|---|
 | E1 identity | yes, trivially | the seam is a construction, not a reconstruction |
 | E2 arm A vs arm B | **yes** | the clean-teacher ablation needs no particular layout |
-| E3 loss ablations | **yes** | all four terms operate on the last axis |
+| E3 loss ablation | **yes** | every term operates on the last axis |
 | E4 erasure trade-off | partially | Δ is one norm here, not a per-block profile |
 | E5 GRACE-D | weakly | the auxiliary head's weakest input |
 | E6 cached vs live | yes | `source: live` is layout-agnostic |
@@ -476,17 +464,26 @@ weights the cached features never saw.
 ### 7.2 Running it
 
 ```bash
-bash scripts/poc.sh              # the whole path
-bash scripts/poc.sh --smoke      # 2 epochs, 2 cache views -- minutes, proves wiring
-WANDB=1 bash scripts/poc.sh      # every stage tracked under one group
+bash scripts/run_all.sh                # every experiment, in order
+bash scripts/run_all.sh --list         # print the 22 steps and exit
+bash scripts/run_all.sh --smoke        # 2 epochs, 2 cache views -- proves wiring
+bash scripts/run_all.sh --from 8       # resume at step 8
+bash scripts/run_all.sh --skip-slow    # everything except E6, the live control
+WANDB=1 bash scripts/run_all.sh        # every stage tracked under one group
 ```
 
-Eight steps, each idempotent and each annotated in the script itself: four
-manifests → stage 0 → the WildFake baseline → the train cache and the two
-validation caches → E0 → both stage-1 arms → stage 2 → score all three arms
-through the harness. Run them by hand from `poc.sh` if you want to stop between
-stages; it is the executable version of §6's sequence with the PoC's configs
-filled in, and it prints what to read, in order, when it finishes.
+Twenty-two steps, each idempotent and each annotated in the script itself. The
+spine is: four manifests → both stage-0 heads → the WildFake baseline → the crop
+baseline (D1) → **the identity gate** → the three caches → the drift geometry
+(E0) → the reference arm at five seeds → stage 2 and the β sweep → the harness
+comparison → the three one-key ablations → the hyperparameter sweeps → the
+erasure curve → the ladder → the live control. `--from N` and `--only N` run a
+slice of it; `--list` prints the numbering.
+
+Every stage-1 ablation in that list is `configs/train/dinov3_clean.yaml`, the
+**reference arm**, with exactly one key changed, and the detector configs load
+that run's `ema.pt`. Change the reference and every ablation moves with it —
+which is the point, and the reason there is only one of it.
 
 Two things about that sequence are load-bearing:
 
@@ -574,19 +571,26 @@ history is "how much does the correction lean on block k", per degradation, whic
 is the per-layer gate the RINE `layers` split promised without needing a `layers`
 head.
 
-**Storage is what it costs.** Taps are cached as additional views, clean included
-(`identity_loss` runs the adapter on clean features). 7.5 KB per image per view
+**Storage is what it costs.** Taps are cached as additional views, clean
+included, so both views of a row stay one lookup. 7.5 KB per image per view
 against the seam's 1.5 KB — the PoC tap cache is 38.4 GB against 6.4 GB. Run
 `build_cache.py --dry-run` first.
 
 ```
 python scripts/build_cache.py   configs/cache/dinov3_taps.yaml --dry-run
 python scripts/build_cache.py   configs/cache/dinov3_taps.yaml
-python scripts/train_adapter.py configs/train/dinov3_ladder.yaml
+python scripts/build_cache.py   configs/cache/dinov3_val_taps.yaml
+python scripts/build_cache.py   configs/cache/dinov3_val_hard_taps.yaml
+python scripts/train_adapter.py configs/train/dinov3_ladder_final.yaml
 ```
 
-`configs/train/dinov3_ladder.yaml` is `dinov3_clean_v1.4.yaml` with the taps
-turned on and nothing else changed, so the comparison is controlled.
+`configs/train/dinov3_ladder_final.yaml` is `dinov3_clean.yaml` — the reference
+arm — with the taps turned on, the tap cache in `cache_dir`, and nothing else
+changed, so the comparison is controlled. It is the **only** ladder config in the
+tree, deliberately: the previous round also carried a second one at stale loss
+weights, and every ladder checkpoint that got trained was a 4-epoch run being
+read against a 12-epoch plain arm. `epochs` and `seed` here are copied from the
+reference and must stay copied from it.
 
 ### `models/prompts.py` — still blueprint
 
@@ -611,7 +615,8 @@ figure.
 diagnostics, discrepancy branch, schedule, cache (writer/reader/spec, tap views
 included), EMA, both training stages, the two-axis validation, the configs,
 `AdaptedDetector`, the DINOv3 proof-of-concept path and optional W&B tracking.
-**312 tests pass**, including a real end-to-end render, a two-stage training
+**293 tests pass here** (319 with `eval_pipeline`'s 26), including a real
+end-to-end render, a two-stage training
 smoke run, and the full PoC path — stage 0 → cache → stage 1 → stage 2 →
 identity check — against a small locally-constructed DINOv3 that needs neither
 network nor licence.
@@ -619,10 +624,22 @@ network nor licence.
 **Run so far.** Stage 0 is done on the full NTIRE train split (277,643 images):
 the selected head is epoch 36, at **0.9596 AUC on `ntire_val`** and **0.8467 on
 `ntire_val_hard`** (mean 0.9032) — see
-`checkpoints/probe/dinov3_ntire/head.summary.json`. Both validation caches
-(`cache_val/`, `cache_val_hard/`, 15 views each) are rendered. The train cache is
-still rendering. No adapter has been trained yet, and no harness results exist
-yet — so every retention number in this README is a target, not a measurement.
+`checkpoints/probe/dinov3_ntire/head.summary.json`. All six caches are rendered
+(train / val / val_hard, each pooled and tapped, 27 GB).
+
+**No adapters are on disk.** The experiment set is being run again from a clean
+tree by `scripts/run_all.sh`, against a single reference arm
+(`configs/train/dinov3_clean.yaml`) that every ablation is one key away from. **No
+harness results exist yet** — `eval_pipeline/results/` is empty — so every
+retention number in this README is still a target, not a measurement.
+
+**The previous round's findings are in
+[`../docs/RESULTS.md`](../docs/RESULTS.md), kept as priors.** Three of them
+contradict this document as written: the gate's climb is weight decay (§10 below
+reads it as learning), `cos_decision` is anti-correlated with the outcome, and
+stage 1 does *not* erase forensic evidence — it concentrates it. `docs/RESULTS.md`
+§0 also records what changed in the config set between the rounds and what each
+arm is predicted to find.
 
 **Known gaps.**
 
@@ -636,7 +653,7 @@ yet — so every retention number in this README is a target, not a measurement.
   pending their clones.
 
 That last gap is the reason §7 exists. The experiments that decide whether the
-*objective* works — E2's clean-teacher ablation and E3's loss ablations — need no
+*objective* works — E2's clean-teacher ablation and E3's loss ablation — need no
 particular detector; the ones that need a published detector are now the only
 thing waiting on a clone.
 

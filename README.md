@@ -88,7 +88,7 @@ what makes the erasure question (E4) testable at all.
 
 3. **Identity at initialization, exactly.** The last projection of every adapter
    block is zero-initialised, so an untrained adapter returns its input
-   bit-for-bit whatever the gate, the noise or the severity conditioning happen
+   bit-for-bit whatever the gate or the severity conditioning happen
    to be — and `beta = 0` makes GRACE-D *identical* to GRACE at init. Without
    this, any change in clean AUC would be unattributable.
 
@@ -131,12 +131,13 @@ grace_adapter/     the method
     probe/           stage 0: fit the PoC detector's own head
   configs/           probe/ cache/ train/ detectors/
   scripts/           train_probe . build_cache . analyze_drift . train_adapter .
-                     train_discrepancy . compare . poc.sh
+                     train_discrepancy . compare . sweep_beta . seed_stats .
+                     run_all.sh — every experiment in one command
 
 data/              materialized datasets (gitignored) — at the REPO ROOT, because
                    both packages read it and a config's `../data/...` must resolve
                    the same from either working directory
-docs/              DATASETS.md . PIPELINE.md . EXPERIMENTS.md
+docs/              DATASETS.md . PIPELINE.md . EXPERIMENTS.md . RESULTS.md
 ```
 
 Detectors and datasets are defined in **exactly one place**
@@ -252,16 +253,28 @@ building a benchmark quietly missing most of its images:
 
 ```bash
 cd grace_adapter
-bash scripts/poc.sh              # P0 -> P1 -> P2 -> P3 -> E0 -> E2 -> E5 -> E1
-bash scripts/poc.sh --smoke      # 2 epochs, 2 cache views — minutes, proves wiring
-WANDB=1 bash scripts/poc.sh      # every stage tracked under one group
+bash scripts/run_all.sh                # every experiment, in order
+bash scripts/run_all.sh --list         # print the 22 steps and exit
+bash scripts/run_all.sh --smoke        # 2 epochs, 2 cache views -- proves wiring
+bash scripts/run_all.sh --from 8       # resume at step 8
+bash scripts/run_all.sh --skip-slow    # everything except E6, the live control
+WANDB=1 bash scripts/run_all.sh        # every stage tracked under one group
 ```
 
-Eight steps, every one idempotent: existing manifests are skipped, the cache
-resumes at shard granularity, and re-running a training stage overwrites its own
-run directory and nothing else. It prints what to read, in order, when it
-finishes. [scripts/poc.sh](grace_adapter/scripts/poc.sh) is the executable
-version of section 4.2 with the PoC configs filled in.
+Twenty-two steps covering **every** experiment — D1, E0 through E9, the seed
+floor, and both prerequisites — and every one of them idempotent: existing
+manifests are skipped rather than rebuilt, the cache resumes at view granularity,
+a training run is skipped if its `summary.json` exists, and a harness run is
+skipped if its result JSON exists. An interrupted run is resumed by re-running
+the same command.
+
+The order is the argument, not a convenience: the first seven steps train nothing
+GRACE touches, and each of them can end the project before it costs anything —
+no collapse (P2), a content shortcut (D1), a wrong seam (E1), or a ceiling of
+zero (E0). Step 5 is a **hard stop**: `compare.py --assert-identity` exits
+non-zero unless the null adapter reproduces the baseline exactly.
+[scripts/run_all.sh](grace_adapter/scripts/run_all.sh) prints what to read, in
+order, when it finishes.
 
 ### 4.2 Stage by stage
 
@@ -349,7 +362,7 @@ verbatim rather than inherited, and
 | **E0** | drift asymmetry | does RA-Det's asymmetry hold on this data? | minutes, no GPU |
 | **E1** | identity adapter | does the split reproduce the baseline *exactly*? | one eval |
 | **E2** | clean teacher | is the clean teacher the mechanism, or self-distillation? | 2 x minutes |
-| **E3** | loss ablations | Jacobian vs MSE; +/-SW; +/-noise | 3 x minutes |
+| **E3** | loss ablation | Jacobian weighting vs plain MSE | minutes |
 | **E4** | **erasure trade-off** | **does restoring features destroy forensic evidence?** | 6 x seconds |
 | **E5** | GRACE-D | does the fused score beat retention 1.0? | one eval |
 | **E6** | cached vs live | is the finite epoch set being exploited? | hours |
@@ -362,11 +375,15 @@ D1 --> P1 stage 0 --> P2 baseline --> P3 caches --> E0
                                           \--> E6
 ```
 
-**D1 and E1 are gates.** If the baseline does not collapse under degradation
-there is no damage to repair; if the identity adapter does not reproduce the
+**D1, E1 and S0 are gates.** If the baseline does not collapse under degradation
+there is no damage to repair. If the identity adapter does not reproduce the
 baseline to the last decimal, the trunk/head split is wrong and every later
-comparison is against a model nobody benchmarked. `poc.sh` covers the spine
-(P0–P3, E0, E1, E2, E5); D1, E3, E4 and E6 are deliberate extra arms run by hand.
+comparison is against a model nobody benchmarked — which is why E1 now has its
+own run config, scored right after the baseline rather than at the end, and why
+it stops `run_all.sh` outright when it fails. And every ablation verdict is
+quoted in seed-sd, so the five-seed floor (S0) has to exist before E2, E3, E8 or
+E9 can be read at all. `run_all.sh` covers all of it — there are no arms left to
+run by hand.
 
 ### 4.5 Tests
 
@@ -392,7 +409,8 @@ degraded. Cache/manifest row misalignment is the highest-risk bug in the project
 diagnostics, the discrepancy branch, the degradation schedule, the cache
 (writer/reader/spec), EMA, both training stages, two-axis validation, the
 configs, `AdaptedDetector`, the DINOv3 proof-of-concept path, and optional W&B
-tracking. 258 tests pass across the two packages.
+tracking, the ladder and its tap caches. **319 tests pass** across the two
+packages (293 `grace_adapter`, 26 `eval_pipeline`).
 
 **Measured.** Stage 0 is complete on the full NTIRE train split (277,643 images),
 for both preprocessing arms. Selection is on held-out **images**, by the
@@ -405,15 +423,28 @@ selectable.
 | [`dinov3_ntire`](grace_adapter/checkpoints/probe/dinov3_ntire/head.summary.json) | 224 resize | 36 | **0.9596** | **0.8467** | 0.9032 |
 | [`dinov3_ntire_crop`](grace_adapter/checkpoints/probe/dinov3_ntire_crop/head.summary.json) | 224 centre crop at native res | 38 | 0.9431 | 0.7930 | 0.8680 |
 
-Both validation caches are fully rendered (15 views each). The train cache is
-still rendering — the clean view is complete, 6 of 12 training epochs are in
-flight, 2.6 GB of ~6.3 GB on disk.
+All six caches are fully rendered — train, val and val_hard, each in a pooled and
+a tapped variant, 27 GB total.
 
-**Not yet measured.** No adapter has been trained and **no harness results exist
-yet**, so no retention number in this repository is a measurement. Every
-retention figure in the docs is a target and is written as one. The immediate
-path is: finish the train cache -> the WildFake baseline (D1 read against the
-crop arm) -> E0 -> stage 1 arms A/B -> stage 2 -> score all three arms.
+**Adapters: none on disk.** The experiment set is being run again from a clean
+tree — one reference arm, one script, every arm covered. A previous round trained
+37 stage-1 and 8 stage-2 runs and produced verdicts for E0, E2, E3, E4, E8 and
+E9; its best arm closed **87% ± 5%** of the degradation gap on `ntire_val_hard`,
+though that gap is only 1.56 AUC points wide, so the result lived in the third
+decimal place. Those numbers are kept in `docs/RESULTS.md` as **priors**, not as
+records.
+
+**Still not measured: any retention number.** `eval_pipeline/results/` is empty.
+Round 1 never produced one because three of the four DINOv3 detector configs
+pointed at run ids that did not exist — all three are repointed now, and every
+checkpoint path in `configs/` names a run some step of `run_all.sh` produces.
+Every retention figure in this README below is still a *target*, not a
+measurement.
+
+**The plan, the priors and the pre-registered predictions are in
+[`docs/RESULTS.md`](docs/RESULTS.md) §0; the argument the experiments make is
+[`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) §0.** The path is one command:
+`bash scripts/run_all.sh` from `grace_adapter/`.
 
 ---
 
@@ -424,7 +455,7 @@ crop arm) -> E0 -> stage 1 arms A/B -> stage 2 -> score all three arms.
 The honest summary of this repository today is that the *instrument* is finished
 and the *experiment* is mid-flight. Stage 0 is done, the caches are most of the
 way rendered, and every stage downstream of them is minutes or seconds of
-compute — but the load-bearing arms (E2's clean teacher, E3's loss ablations)
+compute — but the load-bearing arms (E2's clean teacher, E3's loss ablation)
 have not run, so the two claims in section 1 remain claims. That ordering was
 deliberate — the harness had to be trustworthy before any number from it meant
 anything — but it means the deliverable is a reproducible path rather than a
@@ -516,10 +547,9 @@ other yet.
   E0's bootstrap CI on the drift asymmetry is the only interval in the project.
   Every headline retention number should carry one before it is quoted.
 - **A calibration story.** The frozen head's operating point was calibrated on a
-  wider feature cloud than a conditional-mean restorer produces. The
-  sliced-Wasserstein term addresses the dispersion, but nothing in the project
-  yet reports what happens to the *threshold* — and FPR/FNR at a clean-fixed
-  threshold is what a deployment actually cares about.
+  wider feature cloud than a conditional-mean restorer produces. Nothing in the
+  project yet reports what happens to the *threshold* under that mismatch — and
+  FPR/FNR at a clean-fixed threshold is what a deployment actually cares about.
 
 ---
 

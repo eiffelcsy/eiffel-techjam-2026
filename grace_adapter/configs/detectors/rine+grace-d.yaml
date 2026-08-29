@@ -18,5 +18,4 @@ args:
   split: grace.splits.rine.RINESplit
   checkpoint: checkpoints/grace/rine_clean/ema.pt
   discrepancy: checkpoints/grace/rine_disc/discrepancy.pt
-  k_eval: 8
 device: auto

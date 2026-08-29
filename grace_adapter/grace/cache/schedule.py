@@ -27,7 +27,8 @@ Two draws per (image, epoch), in this order:
 
 Level 0 (clean) stays in the mix at ~15%: on those steps the alignment target
 equals the input and the correct behaviour is to do nothing. That implicit
-identity constraint does more work than the explicit `identity_loss` term.
+identity constraint is the only thing anchoring the adapter to a no-op on clean
+inputs, which is why the level-0 share is not dropped to zero.
 
 Requires the one-line generalisation of `Condition.sample_recipe`'s guard from
 `if self.level < 2` to `if not self.grid` -- see README section 11. Without it,

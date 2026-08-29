@@ -7,6 +7,7 @@ plus the two numbers that are analytic rather than empirical (clean AUC and L0
 retention), which is where a polarity flip or a broken pairing would show up.
 """
 
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -280,6 +281,132 @@ def test_csv_metadata_source_selects_by_path_and_labels_by_column(tmp_path):
     (root / "real" / "val2017" / "b.jpg").unlink()
     with pytest.raises(ValueError, match="no real images"):
         list(source(on_missing="skip").rows(tmp_path / "unused"))
+
+
+def _stratified_table(tmp_path):
+    """A miniature WildFake: two real corpora, two generators, two held out.
+
+    Group sizes are chosen so every proportional share is a whole number, so a
+    rounding change shows up as a test failure rather than as a plausible
+    off-by-one.
+    """
+    import csv
+
+    from PIL import Image
+
+    root = tmp_path / "images"
+    rows = []                                      # (path, IsFake, Architecture)
+    for i in range(12):
+        rows.append((f"./Real/big/{i}.jpg", "0", "bigreal"))
+    for i in range(4):
+        rows.append((f"./Real/small/{i}.jpg", "0", "smallreal"))
+    for i in range(19):
+        rows.append((f"./Gen/A/{i}.jpg", "1", "A"))
+    # A CJK filename, as Stable Diffusion's lora/ tree carries: the tables are
+    # UTF-8 and the Windows locale codec cannot decode them.
+    rows.append(("./Gen/A/拷贝.jpg", "1", "A"))
+    for i in range(4):
+        rows.append((f"./Gen/B/{i}.jpg", "1", "B"))
+    # The held-out strata -- the evaluation set's own, never to be sampled.
+    for i in range(5):
+        rows.append((f"./Gen/HELD/{i}.jpg", "1", "heldgen"))
+    for i in range(5):
+        rows.append((f"./Real/held/{i}.jpg", "0", "heldreal"))
+
+    for rel, _, _ in rows:
+        path = root / rel.removeprefix("./")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (8, 8)).save(path, "JPEG")
+
+    table = tmp_path / "metadata.csv"
+    with table.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["Image_path", "IsFake", "Architecture"])
+        w.writerows(rows)
+    return table, root, rows
+
+
+def test_stratified_source_samples_every_group_in_proportion(tmp_path):
+    """`limit` takes a contiguous block; this takes a spread of known shape.
+
+    The pools are 12:4 real and 20:4 fake, so at n_total=10 with a 0.4 real
+    fraction the only correct answer is 3+1 real and 5+1 fake.
+    """
+    from pipeline.data.sources import StratifiedCsvSource
+
+    table, root, rows = _stratified_table(tmp_path)
+
+    def source(**kw):
+        kw.setdefault("exclude_groups", ["heldgen", "heldreal"])
+        return StratifiedCsvSource(
+            csv_paths=str(table), root=str(root),
+            path_column="Image_path", label_column="IsFake",
+            fake_values=["1"], real_values=["0"],
+            group_column="Architecture", generator_column="Architecture",
+            n_total=10, real_fraction=0.4, split="train", **kw,
+        )
+
+    got = list(source().rows(tmp_path / "unused"))
+    assert len(got) == 10
+    by_group = Counter(r["generator"] for r in got)
+    assert by_group == Counter({"A": 5, "B": 1, "REAL": 4})
+    assert Counter(r["label"] for r in got) == Counter({0: 4, 1: 6})
+
+    # The held-out strata are absent, which is the property the whole class
+    # exists to guarantee.
+    assert not any("HELD" in r["path"] or "held" in Path(r["path"]).parts[-2]
+                   for r in got)
+
+    # Real corpora split 3:1 the way their pools do.
+    real_dirs = Counter(Path(r["path"]).parts[-2] for r in got if r["label"] == 0)
+    assert real_dirs == Counter({"big": 3, "small": 1})
+
+    # Table order is preserved -- the manifest index seeds every degradation.
+    order = [r.removeprefix("./") for r, _, _ in rows]
+    assert [str(Path(r["path"]).relative_to(root)).replace("\\", "/") for r in got] \
+        == sorted((str(Path(r["path"]).relative_to(root)).replace("\\", "/") for r in got),
+                  key=order.index)
+
+    # Deterministic across runs, and actually responsive to the seed.
+    assert [r["path"] for r in source().rows(tmp_path / "u")] == [r["path"] for r in got]
+    assert [r["path"] for r in source(seed=7).rows(tmp_path / "u")] != [r["path"] for r in got]
+
+    # Referenced in place, never re-encoded, like every CSV-backed source.
+    assert not (tmp_path / "unused").exists()
+
+
+def test_stratified_source_refuses_an_unmatched_exclusion(tmp_path):
+    """The leakage guard's own failure mode.
+
+    A misspelt held-out group does not raise anywhere downstream -- it just
+    quietly trains on the benchmark's data -- so it has to raise here.
+    """
+    from pipeline.data.sources import StratifiedCsvSource
+
+    table, root, _ = _stratified_table(tmp_path)
+
+    def source(exclude):
+        return StratifiedCsvSource(
+            csv_paths=str(table), root=str(root),
+            path_column="Image_path", label_column="IsFake",
+            fake_values=["1"], real_values=["0"],
+            group_column="Architecture", n_total=10,
+            exclude_groups=exclude,
+        )
+
+    with pytest.raises(ValueError, match="matched no row"):
+        list(source(["heldgen", "heldreal", "HeldGen"]).rows(tmp_path / "u"))
+
+    # Excluding a whole class is refused too, rather than yielding a manifest
+    # with nothing to score against.
+    with pytest.raises(ValueError, match="no real rows"):
+        list(source(["bigreal", "smallreal", "heldreal"]).rows(tmp_path / "u"))
+
+    # A file the table names but disk lacks stays loud: silently dropping it
+    # would re-weight every remaining stratum.
+    (root / "Gen" / "A" / "0.jpg").unlink()
+    with pytest.raises(FileNotFoundError, match="not on disk"):
+        list(source(["heldgen", "heldreal"]).rows(tmp_path / "u"))
 
 
 VENDORED = ("pipeline.detectors.bfree.", "pipeline.detectors.gapl.", "pipeline.detectors.rine.")

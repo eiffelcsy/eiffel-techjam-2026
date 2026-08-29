@@ -23,4 +23,4 @@ target_view: clean
 source: cache
 checkpoint_every: 2
 
-loss: {}      # the full v2 objective: Jacobian-weighted error + sliced-Wasserstein
+loss: {}      # the defaults: Jacobian-weighted error + cosine, head_kl, severity
