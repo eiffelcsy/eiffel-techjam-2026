@@ -1,7 +1,7 @@
 """Stage 0: fit the classifier the rest of the pipeline holds frozen.
 
 GRACE never trains a detector -- that is the claim. But the PoC detector
-(`pipeline.detectors.dinov3.DINOv3MLPDetector`) is a frozen DINOv3 trunk plus a
+(`eval.detectors.dinov3.DINOv3MLPDetector`) is a frozen DINOv3 trunk plus a
 head that has to come from somewhere, and "somewhere" is here: one linear probe
 on clean features, run once, before anything else in this package executes.
 

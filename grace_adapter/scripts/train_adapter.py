@@ -18,10 +18,11 @@ from grace.config import load_train_config
 from grace.splits import build_split
 from grace.train.tracker import add_wandb_args, apply_wandb_args
 from grace.train.loop import train_adapter
-from pipeline.config import load_dataset_config, load_detector_config
-from pipeline.data.manifest import load_manifest
-from pipeline.degrade.conditions import load_grid
-from pipeline.detectors import build_detector
+from load_data.config import load_dataset_config
+from eval.config import load_detector_config
+from load_data.manifest import load_manifest
+from preprocessing.degrade.conditions import load_grid
+from eval.detectors import build_detector
 
 
 def parse_args():

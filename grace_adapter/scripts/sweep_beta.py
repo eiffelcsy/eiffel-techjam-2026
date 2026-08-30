@@ -43,10 +43,11 @@ from grace.models.factory import build_discrepancy_head, load_adapter
 from grace.splits import build_split
 from grace.train.loop import _cache_loader_cfg, _expect_spec, _load_val_sets, _to_float
 from grace.train.data import build_loader
-from pipeline.config import load_dataset_config, load_detector_config
-from pipeline.data.manifest import load_manifest
-from pipeline.detectors import build_detector
-from pipeline.eval.metrics import retention, roc_auc
+from load_data.config import load_dataset_config
+from eval.config import load_detector_config
+from load_data.manifest import load_manifest
+from eval.detectors import build_detector
+from eval.metrics import retention, roc_auc
 
 
 def parse_args():

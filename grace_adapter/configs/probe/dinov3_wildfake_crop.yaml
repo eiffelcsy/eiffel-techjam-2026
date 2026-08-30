@@ -14,10 +14,10 @@
 
 run_id: dinov3_wildfake_crop
 
-detector: ../eval_pipeline/configs/detectors/dinov3-wildfake-crop.yaml
-dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml       # split: train, 100,000
+detector: eval/configs/detectors/dinov3-wildfake-crop.yaml
+dataset: load_data/configs/datasets/wildfake_train.yaml       # split: train, 100,000
 val_dataset:
-  - ../eval_pipeline/configs/datasets/wildfake_train_val.yaml        # 20,000, balanced
+  - load_data/configs/datasets/wildfake_train_val.yaml        # 20,000, balanced
 
 split: grace.splits.dinov3.DINOv3Split
 out: ""             # "" = take it from the detector config's head_checkpoint

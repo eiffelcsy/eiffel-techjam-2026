@@ -31,7 +31,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from pipeline.degrade.crop import fixed_crop, fixed_resample
+from preprocessing.degrade.crop import fixed_crop, fixed_resample
 from pipeline.freq.dct import (
     DEFAULT_GRID, DEFAULT_PATCH, extract_freq, freq_fingerprint,
 )

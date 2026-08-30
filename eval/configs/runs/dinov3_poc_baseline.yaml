@@ -1,0 +1,37 @@
+# The PoC baseline: the unadapted detector's retention curve on the TEST set.
+#
+# Not E0 -- that is scripts/analyze_drift.py, which reads the rendered cache.
+# This is the denominator every GRACE arm is compared against.
+#
+# This is the number every GRACE run is compared against, so it comes out of this
+# file and nothing else re-derives it. Run it before training an adapter -- if
+# retention does not collapse here, there is no gap for GRACE to close and the
+# PoC has answered its own question early. That check is worth doing FIRST: it
+# costs ~300k forwards against the ~4.2M the stage-1 cache costs.
+#
+#   python scripts/run_eval.py --config eval/configs/runs/dinov3_poc_baseline.yaml
+#
+# WHY THE BENCHMARK AND NOT THE VALIDATION SPLIT. wildfake_train_val is a
+# selection set in this project: stage 0 picks the head's epoch on it and stage 1
+# validates on it at image level. Reporting retention there would be optimistic,
+# and it is drawn from the same strata as training besides, so it cannot speak to
+# generalization across generators at all.
+#
+# wildfake_coco_dalle3 is the held-out test set -- 4998 COCO val2017 real / 8843
+# DALL-E 3 Advanced generated. Both halves are excluded from wildfake_train by
+# `exclude_groups`, so the head has seen neither this generator nor this real
+# corpus.
+#
+# CLASS BALANCE is 4998 : 8843 (1 : 1.77). Left unbalanced: AUC is insensitive
+# to it and the retention curve is AUC-based. Set `max_images: 4998` to score it
+# balanced if you want accuracy figures to be comparable across classes.
+
+run_id: dinov3_poc_baseline
+
+detector: eval/configs/detectors/dinov3-wildfake.yaml
+
+datasets:
+  - load_data/configs/datasets/wildfake_coco_dalle3.yaml
+
+max_images: null   # per class; null = all 13,841 rows
+degrade: {}        # the standard sweep: all four levels, all eleven transforms

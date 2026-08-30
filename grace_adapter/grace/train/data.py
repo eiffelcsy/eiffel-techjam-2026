@@ -21,7 +21,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from grace.cache.reader import FeatureCache
 from grace.cache.schedule import EpochSchedule
-from pipeline.data.dataset import load_normalized
+from preprocessing.dataset import load_normalized
 
 
 class _WorkerInit:
@@ -33,7 +33,7 @@ class _WorkerInit:
     dies with `Can't get local object 'build_loader.<locals>.<lambda>'` on the
     first batch, after the model is loaded and the run has started.
 
-    Same reasoning as `pipeline.detectors.hf._ProcessorPreprocess`: anything
+    Same reasoning as `eval.detectors.hf._ProcessorPreprocess`: anything
     crossing into a worker is module-level and holds only what it needs.
     """
 

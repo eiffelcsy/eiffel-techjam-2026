@@ -36,8 +36,8 @@ from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
 from grace.train.tracker import build_tracker, flatten_config
-from pipeline.data.dataset import AIGCDataset, collate
-from pipeline.detectors.dinov3 import ProbeHead
+from preprocessing.dataset import AIGCDataset, collate
+from eval.detectors.dinov3 import ProbeHead
 from common.seeding import seed_everything
 
 
@@ -56,7 +56,7 @@ def extract_features(split, manifest, batch_size=32, num_workers=4, device=None,
     The trunk runs once and the head trains over the result for `cfg.epochs`, so
     the window here is per-image and cannot vary per epoch. That is the same
     constraint the cache's single clean view imposes -- see
-    `pipeline.degrade.crop.SAMPLE_EPOCH`.
+    `preprocessing.degrade.crop.SAMPLE_EPOCH`.
     """
     split.assert_frozen()
     device = device or next(split.parameters()).device

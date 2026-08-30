@@ -13,7 +13,7 @@ a local high-frequency phenomenon at native pixel scale, so whatever the resize
 destroyed is not in that tensor and no module downstream of it can recover the
 information -- not at any capacity, not in principle. The DCT branch therefore
 reads the PIL image, in the worker, beside the preprocessing. `aux_fn()` is what
-carries it there; `pipeline.data.dataset.Inputs` is what carries it back.
+carries it there; `preprocessing.dataset.Inputs` is what carries it back.
 
 THE TWO BRANCHES MUST SEE ONE WINDOW. This is the invariant the whole method
 rests on, and it is the one that is easy to break silently, because the two
@@ -51,10 +51,10 @@ from grace.config import EnricherConfig, FreqConfig
 from grace.models.factory import build_enricher, load_adapter, load_enricher
 from grace.models.severity import SeverityHead
 from grace.splits import build_split
-from pipeline.config import load_detector_config
-from pipeline.detectors import build_detector
-from pipeline.detectors.base import FrozenDetector
-from pipeline.detectors.dinov3 import VIEWS
+from eval.config import load_detector_config
+from eval.detectors import build_detector
+from eval.detectors.base import FrozenDetector
+from eval.detectors.dinov3 import VIEWS
 from pipeline.freq.view import FreqExtract
 
 
@@ -197,7 +197,7 @@ class FusedDetector(FrozenDetector):
             raise TypeError(
                 f"{type(self).__name__} needs (image, frequency) inputs but got a "
                 f"bare {type(x).__name__}. The dataset builds them from "
-                f"`detector.aux_fn()` -- see pipeline.data.dataset.Inputs."
+                f"`detector.aux_fn()` -- see preprocessing.dataset.Inputs."
             )
         f, taps = self.split.trunk_with_taps(x.x)
         f = f.float()

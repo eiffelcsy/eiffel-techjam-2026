@@ -51,9 +51,9 @@ from grace.train.ema import EMA
 from grace.train.losses import supervised_bce, total_loss
 from grace.train.tracker import build_tracker, flatten, flatten_config
 from grace.train.weighting import head_gradient
-from pipeline.config import load_dataset_config
-from pipeline.data.manifest import load_manifest
-from pipeline.eval.metrics import (
+from load_data.config import load_dataset_config
+from load_data.manifest import load_manifest
+from eval.metrics import (
     error_breakdown, retention, roc_auc, threshold_from_clean,
 )
 from common.seeding import seed_everything
@@ -489,7 +489,7 @@ def _detection(y: np.ndarray, logits: dict) -> dict:
     """AUC, accuracy, F1 and retention per view -- through the eval harness's own
     metric functions, not a second implementation of them.
 
-    `pipeline.eval.metrics` is imported rather than reproduced so an in-loop
+    `eval.metrics` is imported rather than reproduced so an in-loop
     number and a reported one cannot drift apart. That includes its threshold
     rule: the operating point is picked on the CLEAN view (max F1) and applied
     unchanged to the degraded and adapted views. A fixed threshold is what

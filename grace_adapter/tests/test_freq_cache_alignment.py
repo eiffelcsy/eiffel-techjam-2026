@@ -25,13 +25,13 @@ from grace.cache.spec import (
 )
 from grace.cache.writer import build_cache
 from grace.config import FreqConfig
-from pipeline.data.dataset import load_normalized
-from pipeline.degrade.conditions import load_grid
+from preprocessing.dataset import load_normalized
+from preprocessing.degrade.conditions import load_grid
 from pipeline.freq.dct import extract_freq
 from tests.fixtures import SPECS, ToySplit, write_images
 
 N_IMAGES = 24
-GRID_FILE = "../eval_pipeline/configs/degradations.yaml"
+GRID_FILE = "preprocessing/configs/degradations.yaml"
 
 # A 2x2 block over a 3x3 grid: 36 coefficients per cell, 9 cells. Tiny, so the
 # render is fast, and structurally identical to the shipped 8x8 / 14x14 -- what

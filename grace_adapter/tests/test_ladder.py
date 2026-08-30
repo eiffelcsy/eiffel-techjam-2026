@@ -30,12 +30,12 @@ from grace.splits.base import FeatureSpec
 from grace.splits.verify import verify_taps
 from grace.train.data import build_loader
 from grace.train.loop import train_adapter
-from pipeline.degrade.conditions import load_grid
+from preprocessing.degrade.conditions import load_grid
 from tests.fixtures import SPECS, MLPHead, ToySplit, features, write_images
 
 N_IMAGES = 24
 N_TAPS = 3
-GRID_FILE = "../eval_pipeline/configs/degradations.yaml"
+GRID_FILE = "preprocessing/configs/degradations.yaml"
 
 
 @pytest.fixture(scope="module")
@@ -427,7 +427,7 @@ def test_stage_one_trains_a_ladder_and_moves_its_tap_gates(rendered):
 
 
 def _image(manifest, idx):
-    from pipeline.data.dataset import load_normalized
+    from preprocessing.dataset import load_normalized
 
     return load_normalized(manifest.loc[idx, "path"])
 

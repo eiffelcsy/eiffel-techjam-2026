@@ -32,10 +32,10 @@ from PIL import Image
 from grace.config import EnricherConfig, FreqConfig
 from grace.models.factory import build_enricher
 from grace.splits.base import FeatureSpec
-from pipeline.data.dataset import AIGCDataset, Inputs, collate
-from pipeline.degrade.crop import fixed_crop, fixed_resample
-from pipeline.detectors.base import FrozenDetector
-from pipeline.detectors.hf import _CropResizePreprocess, _ResamplePreprocess
+from preprocessing.dataset import AIGCDataset, Inputs, collate
+from preprocessing.degrade.crop import fixed_crop, fixed_resample
+from eval.detectors.base import FrozenDetector
+from eval.detectors.hf import _CropResizePreprocess, _ResamplePreprocess
 from pipeline.freq.view import FreqExtract
 from tests.fixtures import ToyPreprocess, write_images
 

@@ -14,9 +14,9 @@
 # measuring a protocol shift, not generalization -- which is what
 # tests/test_configs.py::test_every_crop_config_agrees_on_the_range enforces.
 
-detector: ../eval_pipeline/configs/detectors/dinov3-wildfake-multiscale.yaml
+detector: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
 split: grace.splits.dinov3.DINOv3Split
-dataset: ../eval_pipeline/configs/datasets/wildfake_train_val.yaml
+dataset: load_data/configs/datasets/wildfake_train_val.yaml
 
 out_dir: cache_ms_val/
 n_epochs: 12

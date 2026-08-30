@@ -37,10 +37,10 @@ from grace.config import (                                           # noqa: E40
 from grace.probe import train_probe                                  # noqa: E402
 from grace.splits.dinov3 import DINOv3Split                          # noqa: E402
 from grace.train.loop import train_adapter, train_discrepancy        # noqa: E402
-from pipeline.degrade.conditions import load_grid                    # noqa: E402
+from preprocessing.degrade.conditions import load_grid                    # noqa: E402
 from tests.fixtures import write_images                              # noqa: E402
 
-GRID_FILE = "../eval_pipeline/configs/degradations.yaml"
+GRID_FILE = "preprocessing/configs/degradations.yaml"
 N_IMAGES = 24
 HIDDEN, PATCH, IMAGE = 32, 16, 32
 
@@ -69,7 +69,7 @@ def detector_factory(tiny_backbone, monkeypatch):
     own `__init__` -- and therefore its pooling, its width arithmetic and its
     checkpoint validation -- inside the test.
     """
-    import pipeline.detectors.dinov3 as mod
+    import eval.detectors.dinov3 as mod
 
     model, processor = tiny_backbone
 
@@ -253,7 +253,7 @@ def test_cache_holds_the_declared_vector_features(poc_run):
 def test_cached_clean_features_match_a_live_trunk_pass(poc_run):
     """The highest-risk bug in the project: it trains, it converges, it means
     nothing. Re-run the trunk on real images and compare row for row."""
-    from pipeline.data.dataset import load_normalized
+    from preprocessing.dataset import load_normalized
 
     _, manifest, split, _, cache_dir = poc_run
     cache = FeatureCache(cache_dir)

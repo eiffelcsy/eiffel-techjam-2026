@@ -26,7 +26,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
-from pipeline.detectors.base import FrozenDetector
+from eval.detectors.base import FrozenDetector
 
 LAYOUTS = ("vector", "tokens", "layers")
 """What the trunk emits, per image, ignoring the batch dimension.

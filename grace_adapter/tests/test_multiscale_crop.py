@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from pipeline.degrade.crop import (
+from preprocessing.degrade.crop import (
     CropDraw, crop_fingerprint, fixed_crop, fixed_resample, multiscale_crop,
 )
 

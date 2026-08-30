@@ -1,6 +1,6 @@
 """E0-freq: does the DCT spectrum separate real from generated, ABOVE the floor?
 
-    python scripts/analyze_freq.py --dataset ../eval_pipeline/configs/datasets/wildfake_train_val.yaml
+    python scripts/analyze_freq.py --dataset load_data/configs/datasets/wildfake_train_val.yaml
 
 DECISION 0. If band energies do not separate the classes by more than spectral
 rolloff alone does, the frequency branch's mechanism has failed and no amount of
@@ -50,12 +50,12 @@ from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
 from grace.config import load_probe_config
-from pipeline.config import load_dataset_config
-from pipeline.data.dataset import load_normalized
-from pipeline.data.manifest import load_manifest, sample_eval_subset
-from pipeline.degrade.conditions import build_conditions, load_grid
-from pipeline.degrade.crop import SAMPLE_EPOCH, multiscale_crop
-from pipeline.eval.metrics import roc_auc
+from load_data.config import load_dataset_config
+from preprocessing.dataset import load_normalized
+from load_data.manifest import load_manifest, sample_eval_subset
+from preprocessing.degrade.conditions import build_conditions, load_grid
+from preprocessing.degrade.crop import SAMPLE_EPOCH, multiscale_crop
+from eval.metrics import roc_auc
 from pipeline.freq.dct import DEFAULT_GRID, DEFAULT_PATCH, band_masks, extract_freq
 
 DEFAULT_BANDS = 8
@@ -163,7 +163,7 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
         "--dataset",
-        default="../eval_pipeline/configs/datasets/wildfake_train_val.yaml",
+        default="load_data/configs/datasets/wildfake_train_val.yaml",
         help="NEVER the reported benchmark -- see the module docstring",
     )
     p.add_argument(
@@ -201,7 +201,7 @@ def main():
     manifest = sample_eval_subset(
         load_manifest(dataset_cfg.manifest, dataset_cfg.split), args.limit, seed=0
     )
-    grid = load_grid("../eval_pipeline/configs/degradations.yaml")
+    grid = load_grid("preprocessing/configs/degradations.yaml")
     # Clean plus the 19 single-transform grid points. No composed levels: the
     # signature table asks what ONE transform does to the spectrum, and a mixture
     # of two answers no question at all.

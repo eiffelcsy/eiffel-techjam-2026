@@ -30,9 +30,9 @@
 # on an image that is already decoded, degraded and cropped, while the GPU is
 # busy with the trunk.
 
-detector: ../eval_pipeline/configs/detectors/dinov3-wildfake-multiscale.yaml
+detector: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
 split: grace.splits.dinov3.DINOv3Split
-dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml
+dataset: load_data/configs/datasets/wildfake_train.yaml
 
 out_dir: cache_freq/
 n_epochs: 5

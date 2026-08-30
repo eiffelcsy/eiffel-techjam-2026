@@ -17,8 +17,8 @@
 
 run_id: dinov3_wildfake
 
-detector: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
-dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml       # split: train, 100,000
+detector: eval/configs/detectors/dinov3-wildfake.yaml
+dataset: load_data/configs/datasets/wildfake_train.yaml       # split: train, 100,000
 
 # Selection on the held-out validation split of the same manifest -- 20,000
 # images, balanced 10k/10k, disjoint from `train` by construction and carrying
@@ -36,7 +36,7 @@ dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml       # split: tr
 # replacement -- `generator_column` records each fake's architecture, so a head
 # that collapses on one family is visible there rather than in the scalar.
 val_dataset:
-  - ../eval_pipeline/configs/datasets/wildfake_train_val.yaml
+  - load_data/configs/datasets/wildfake_train_val.yaml
 
 split: grace.splits.dinov3.DINOv3Split
 out: ""             # "" = take it from the detector config's head_checkpoint

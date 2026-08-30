@@ -23,11 +23,11 @@ from grace.config import (
 from grace.cache.reader import FeatureCache
 from grace.models.factory import build_adapter, load_adapter
 from grace.train.loop import train_adapter, train_discrepancy, validate
-from pipeline.degrade.conditions import load_grid
+from preprocessing.degrade.conditions import load_grid
 from tests.fixtures import SPECS, MLPHead, ToySplit, write_images
 
 N_IMAGES = 32
-GRID_FILE = "../eval_pipeline/configs/degradations.yaml"
+GRID_FILE = "preprocessing/configs/degradations.yaml"
 
 
 @pytest.fixture(scope="module")
@@ -228,7 +228,7 @@ def test_accuracy_uses_one_threshold_across_views(workspace):
     out = validate(cfg, adapter, split, cache, manifest)
     row = out["held_out_degradations"][f"epoch_{min(val_epochs(1))}"]
 
-    from pipeline.eval.metrics import threshold_from_clean
+    from eval.metrics import threshold_from_clean
     from grace.train.data import build_loader
 
     scores, labels = [], []

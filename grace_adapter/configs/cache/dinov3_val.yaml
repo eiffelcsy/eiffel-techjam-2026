@@ -29,9 +29,9 @@
 # validation split, so `val_datasets` and `val_cache_dirs` are single-entry
 # lists everywhere and cache_val_hard/ is gone.
 
-detector: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
+detector: eval/configs/detectors/dinov3-wildfake.yaml
 split: grace.splits.dinov3.DINOv3Split
-dataset: ../eval_pipeline/configs/datasets/wildfake_train_val.yaml
+dataset: load_data/configs/datasets/wildfake_train_val.yaml
 
 out_dir: cache_val/
 n_epochs: 12

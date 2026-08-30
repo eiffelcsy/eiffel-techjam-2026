@@ -16,9 +16,9 @@
 # rendered epoch once, so an extra one buys a slightly tighter number and costs a
 # full render of 10,000 images.
 
-detector: ../eval_pipeline/configs/detectors/dinov3-wildfake-multiscale.yaml
+detector: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
 split: grace.splits.dinov3.DINOv3Split
-dataset: ../eval_pipeline/configs/datasets/wildfake_train_val.yaml
+dataset: load_data/configs/datasets/wildfake_train_val.yaml
 
 out_dir: cache_freq_val/
 n_epochs: 2

@@ -31,11 +31,11 @@ from grace.cache.reader import FeatureCache
 from grace.cache.schedule import EpochSchedule
 from grace.cache.spec import CacheSpec, sha_manifest, sha_preprocess
 from grace.cache.writer import build_cache
-from pipeline.degrade.conditions import load_grid
+from preprocessing.degrade.conditions import load_grid
 from tests.fixtures import SPECS, ToySplit, features, write_images
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "analyze_drift.py"
-GRID_FILE = "../eval_pipeline/configs/degradations.yaml"
+GRID_FILE = "preprocessing/configs/degradations.yaml"
 
 
 def _module():
@@ -103,7 +103,7 @@ def clean_only_cache(tmp_path):
 def test_no_cache_at_all_fails_before_anything_else(tmp_path):
     with pytest.raises((FileNotFoundError, OSError)):
         _run(["--cache", str(tmp_path / "never-rendered"),
-              "--dataset", "../eval_pipeline/configs/datasets/wildfake_train.yaml"])
+              "--dataset", "load_data/configs/datasets/wildfake_train.yaml"])
 
 
 def test_clean_view_without_a_degraded_epoch_exits_with_the_reason(clean_only_cache, tmp_path):
@@ -125,17 +125,17 @@ def test_the_split_is_built_once_not_once_per_batch(clean_only_cache, tmp_path, 
     depends only on the frozen head. Cheap to get wrong, invisible except as
     "why is E0 slow", and this counts the calls.
     """
-    import pipeline.config
-    import pipeline.detectors
+    import eval.config
+    import eval.detectors
 
     root, manifest = _rendered_cache(tmp_path)
     spec = SPECS["vector"]
     split = ToySplit(spec)
 
     calls = []
-    monkeypatch.setattr(pipeline.config, "load_detector_config", lambda e: {"stub": True})
+    monkeypatch.setattr(eval.config, "load_detector_config", lambda e: {"stub": True})
     monkeypatch.setattr(
-        pipeline.detectors, "build_detector",
+        eval.detectors, "build_detector",
         lambda cfg: (calls.append(1), split.detector)[1],
     )
     monkeypatch.setattr("grace.splits.build_split", lambda d, t, **kw: split)

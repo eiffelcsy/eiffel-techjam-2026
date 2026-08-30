@@ -29,10 +29,10 @@ from grace.cache.schedule import EpochSchedule
 from grace.cache.spec import CacheSpec, sha_manifest, sha_preprocess
 from grace.cache.writer import build_cache
 from grace.train.data import _WorkerInit, build_loader
-from pipeline.degrade.conditions import load_grid
+from preprocessing.degrade.conditions import load_grid
 from tests.fixtures import SPECS, ToySplit, write_images
 
-GRID_FILE = "../eval_pipeline/configs/degradations.yaml"
+GRID_FILE = "preprocessing/configs/degradations.yaml"
 N_IMAGES = 16
 EPOCH = 0
 

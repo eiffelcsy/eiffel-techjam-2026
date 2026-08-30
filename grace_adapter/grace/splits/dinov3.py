@@ -8,7 +8,7 @@ detector, and it was a bad way to find out whether GRACE works at all: a
 retention number from a wrongly composed head is a comparison against a model
 that was never benchmarked, and there is no way to tell that from the curve.
 
-`pipeline.detectors.dinov3.DINOv3MLPDetector` is built with the seam already in
+`eval.detectors.dinov3.DINOv3MLPDetector` is built with the seam already in
 it, so this class delegates rather than reconstructs:
 
     trunk -> detector.trunk    frozen DINOv3 ViT-S/16, pooled -> (B, D)
@@ -74,7 +74,7 @@ Three things that table settles, all of them against the obvious guess:
     monotonically to the end -- and past block 6 the curves run near-parallel.
   * **Not CLS alone.** CLS at every block loses to cls+patchmean at five. The
     pooling here mirrors the seam's (`detector.pool_tokens`), which is both the
-    forensically right axis -- see POOLS in `pipeline.detectors.dinov3`, the
+    forensically right axis -- see POOLS in `eval.detectors.dinov3`, the
     traces are local -- and what makes a tap at the last block reduce to the seam
     exactly.
   * **The seam is nearly blind to this.** 0.376 against 0.896 is the ladder's

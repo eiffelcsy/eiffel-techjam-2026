@@ -223,7 +223,7 @@ else appearing here is a config pointed at a class the harness cannot build."""
 def test_detector_configs_are_in_the_harness_shape(path):
     """These are read by eval_pipeline, not by grace, so they must match its
     DetectorConfig rather than anything defined here."""
-    from pipeline.config import load_detector_config
+    from eval.config import load_detector_config
 
     cfg = load_detector_config(path)
     assert cfg.target in GRACE_DETECTORS
@@ -306,24 +306,21 @@ def test_defaults_yaml_is_documentation_only():
 
 
 # ----------------------------------------------------- cross-file references --
-# Configs reference the harness's own detector and dataset files by relative
+# Configs reference the eval stage's own detector and dataset files by relative
 # path, which is what stops GRACE from redefining either and drifting from what
-# was benchmarked. It also means a rename in eval_pipeline breaks a config here
-# silently, at the top of a run rather than at import time.
+# was benchmarked. It also means a rename under load_data/ or eval/ breaks a
+# config here silently, at the top of a run rather than at import time.
 #
-# Paths resolve against the CWD the reading tool runs in, and that differs by
-# config kind: grace's own scripts run from grace_adapter/, while run_eval.py
-# runs from eval_pipeline/. Both roots are checked below.
+# Every script in the project is now run from the repo root, so every path
+# resolves from there -- unlike the two-CWD split this test used to check.
 
-HERE = CONFIGS.parent
-HARNESS = HERE.parent / "eval_pipeline"
+ROOT = CONFIGS.parent.parent
 
 
 @pytest.mark.parametrize(
     "path", _paths("probe") + _paths("cache") + _paths("train"), ids=lambda p: p.name
 )
 def test_referenced_detectors_and_datasets_exist(path):
-    """Resolved from grace_adapter/, where build_cache.py and train_*.py run."""
     raw = yaml.safe_load(path.read_text())
     for key in ("detector", "dataset", "val_dataset"):
         value = raw.get(key)
@@ -332,18 +329,17 @@ def test_referenced_detectors_and_datasets_exist(path):
         # `val_dataset` takes one path or several. One today: the held-out
         # `validation` split of the training manifest.
         for ref in [value] if isinstance(value, str) else value:
-            assert (HERE / ref).resolve().is_file(), f"{path.name}: {key} -> {ref}"
+            assert (ROOT / ref).resolve().is_file(), f"{path.name}: {key} -> {ref}"
     for key in ("val_datasets", "val_cache_dirs"):
         for ref in raw.get(key) or []:
             if key == "val_datasets":
-                assert (HERE / ref).resolve().is_file(), f"{path.name}: {key} -> {ref}"
+                assert (ROOT / ref).resolve().is_file(), f"{path.name}: {key} -> {ref}"
 
 
 @pytest.mark.parametrize("path", _paths("detectors"), ids=lambda p: p.name)
 def test_adapted_detectors_reference_a_real_base(path):
-    """Resolved from eval_pipeline/, where run_eval.py reads these."""
     base = yaml.safe_load(path.read_text())["args"]["base"]
-    assert (HARNESS / base).resolve().is_file(), f"{path.name}: base -> {base}"
+    assert (ROOT / base).resolve().is_file(), f"{path.name}: base -> {base}"
 
 
 @pytest.mark.parametrize(
@@ -373,38 +369,24 @@ def test_negative_val_every_is_rejected_at_load(tmp_path):
         load_train_config(path)
 
 
-DATASET_CONFIGS = sorted((HARNESS / "configs" / "datasets").glob("*.yaml"))
+DATASET_CONFIGS = sorted((ROOT / "load_data" / "configs" / "datasets").glob("*.yaml"))
 
 
 @pytest.mark.parametrize("path", DATASET_CONFIGS, ids=lambda p: p.name)
-def test_manifest_paths_resolve_the_same_from_either_package(path):
-    """A dataset config is read from TWO working directories, and must mean the
-    same thing in both.
+def test_manifest_paths_resolve_under_repo_root_data(path):
+    """Every script in the project runs with the CWD at the repo root now, so a
+    dataset config's `manifest:` must resolve from there and land under the
+    shared `data/` directory -- not a package-relative path that only worked
+    for whichever script happened to `cd` into its own package first.
 
-    `run_eval.py` runs with the CWD at `eval_pipeline/`; `build_cache.py`,
-    `train_probe.py` and `train_adapter.py` run with the CWD at `grace_adapter/`.
-    Config paths resolve against the CWD, so a bare `data/ntire/train/...` names
-    `eval_pipeline/data/...` for one caller and `grace_adapter/data/...` for the
-    other -- it works for whoever built it and raises `FileNotFoundError` for
-    everyone else. That is exactly the shape of bug this catches.
-
-    `data/` therefore lives at the repo root and configs say `../data/...`, which
-    is the same directory from either sibling. Existence is deliberately NOT
-    asserted: manifests are gitignored, materialized by `build_manifest.py`, and
-    absent on a fresh clone. Agreement is the invariant, not presence.
+    Existence is deliberately NOT asserted: manifests are gitignored,
+    materialized by `build_manifest.py`, and absent on a fresh clone.
     """
     manifest = yaml.safe_load(path.read_text())["manifest"]
-    from_harness = (HARNESS / manifest).resolve()
-    from_grace = (HERE / manifest).resolve()
-    assert from_harness == from_grace, (
-        f"{path.name}: manifest {manifest!r} resolves to\n"
-        f"  {from_harness}   (CWD=eval_pipeline, run_eval.py)\n"
-        f"  {from_grace}   (CWD=grace_adapter, train_*.py / build_cache.py)\n"
-        f"Use a repo-root-relative '../data/...' so both agree."
-    )
-    assert from_harness.parent.parent == HERE.parent / "data", (
+    resolved = (ROOT / manifest).resolve()
+    assert resolved.parent.parent == ROOT / "data", (
         f"{path.name}: manifests belong under the repo-root data/ directory, "
-        f"got {from_harness}"
+        f"got {resolved}"
     )
 
 

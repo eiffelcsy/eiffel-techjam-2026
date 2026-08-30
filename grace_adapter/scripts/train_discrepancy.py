@@ -21,9 +21,10 @@ from grace.config import load_discrepancy_config
 from grace.splits import build_split
 from grace.train.tracker import add_wandb_args, apply_wandb_args
 from grace.train.loop import train_discrepancy
-from pipeline.config import load_dataset_config, load_detector_config
-from pipeline.data.manifest import load_manifest
-from pipeline.detectors import build_detector
+from load_data.config import load_dataset_config
+from eval.config import load_detector_config
+from load_data.manifest import load_manifest
+from eval.detectors import build_detector
 
 
 def parse_args():

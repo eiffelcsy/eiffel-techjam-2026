@@ -1,10 +1,22 @@
-"""Small IO helpers: json read/write, path listing."""
+"""Small IO helpers: json read/write, yaml read, path listing."""
 
 import json
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+
+
+def read_yaml(path: str | Path) -> Any:
+    with Path(path).open() as f:
+        return yaml.safe_load(f)
+
+
+def resolve_ref(entry: str | Path | dict) -> dict:
+    """A config reference is either a path to a spec file or the same mapping inline."""
+    return read_yaml(entry) if isinstance(entry, (str, Path)) else entry
 
 
 def write_json(obj: Any, path: str | Path) -> None:

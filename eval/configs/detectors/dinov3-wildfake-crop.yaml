@@ -1,0 +1,57 @@
+# dinov3-wildfake, fed crops instead of a whole-image resize.
+#
+# A SEPARATE detector, not an edit to dinov3-wildfake.yaml, for the reason
+# train_probe.py's docstring gives about augmentation arms: the resize probe is
+# a baseline that has already been measured, and the two heads are not
+# interchangeable -- `_assert_head_matches` refuses to load one into the other,
+# because the trunk sees a different image scale in each mode.
+#
+# Why this exists
+# ---------------
+# On SID_Set -- two datasets ago, before NTIRE and before WildFake -- the resize
+# probe hit 0.9999 val AUC and was not doing forensics:
+#
+#   condition                          AUC   retention
+#   clean                           0.9999        100%
+#   jpeg/quality=30                 0.9997        100%
+#   gaussian_blur/sigma=2.0         0.9999        100%
+#   resize/scale=0.25               0.9999        100%
+#   L3 (3-5 composed)               0.9988        100%
+#   downscale to 32x32 and back     0.9852          --
+#
+# Nothing that reads generation traces survives a 32x32 round trip, and nothing
+# that reads them holds 100% retention through blur sigma=2.0. That head had
+# learned content -- "prompt-generated imagery" vs "photograph" -- which
+# separated SID_Set almost perfectly and is invariant to every degradation in
+# the grid. A detector that never collapses cannot demonstrate a repair, so
+# GRACE's retention curve on that baseline was going to be a flat line at 100%.
+#
+# THOSE NUMBERS ARE HISTORY. They are from SID_Set, were never reproduced on
+# NTIRE, and have not been reproduced on WildFake either. The mechanism is a
+# property of the preprocessing rather than of any one dataset, which is why the
+# flag is still worth having -- but the table above is not a measurement of the
+# current training set, and D1 is the experiment that would make it one.
+#
+# WildFake raises the stakes on that question rather than settling it. Its real
+# half is 36.9% single-subject corpora (faces, churches, animal faces) while the
+# benchmark's reals are COCO, so a head reading content has a second thing to
+# read here that NTIRE did not offer. See the CAVEAT in wildfake_train.yaml.
+#
+# The cause is upstream of the head: `size: {224, 224}` with
+# `default_to_square: true` downsamples a 1024px source ~4.6x before the trunk
+# runs, so the traces are gone by the time anything can fit them. See
+# INPUT_MODES in pipeline/detectors/dinov3.py.
+#
+# Everything else is deliberately identical to dinov3-wildfake.yaml, so the two
+# are a controlled comparison on one variable.
+
+name: dinov3-wildfake-crop
+target: eval.detectors.dinov3.DINOv3MLPDetector
+args:
+  backbone_id: facebook/dinov3-vits16-pretrain-lvd1689m
+  head_checkpoint: checkpoints/probe/dinov3_wildfake_crop/head.pt
+  pool: cls+patchmean
+  input_mode: crop
+  hidden: 512
+  n_layers: 2
+device: auto

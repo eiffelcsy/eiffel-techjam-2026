@@ -37,12 +37,12 @@
 
 run_id: dinov3_plain_mse
 
-detector: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
+detector: eval/configs/detectors/dinov3-wildfake.yaml
 split: grace.splits.dinov3.DINOv3Split
-dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml
+dataset: load_data/configs/datasets/wildfake_train.yaml
 
 val_datasets:
-  - ../eval_pipeline/configs/datasets/wildfake_train_val.yaml
+  - load_data/configs/datasets/wildfake_train_val.yaml
 val_cache_dirs:
   - cache_val/dinov3-wildfake
 

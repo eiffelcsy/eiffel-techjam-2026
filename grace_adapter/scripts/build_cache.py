@@ -25,10 +25,11 @@ from grace.cache.spec import CacheSpec, sha_detector, sha_manifest, sha_preproce
 from grace.cache.writer import build_cache
 from grace.config import load_cache_config
 from grace.splits import build_split
-from pipeline.config import load_dataset_config, load_detector_config
-from pipeline.data.manifest import load_manifest, sample_eval_subset
-from pipeline.degrade.conditions import load_grid
-from pipeline.detectors import build_detector, resolve_device
+from load_data.config import load_dataset_config
+from eval.config import load_detector_config
+from load_data.manifest import load_manifest, sample_eval_subset
+from preprocessing.degrade.conditions import load_grid
+from eval.detectors import build_detector, resolve_device
 
 
 def parse_args():

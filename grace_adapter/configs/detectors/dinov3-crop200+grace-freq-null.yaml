@@ -20,7 +20,7 @@
 name: dinov3-crop200+grace-freq-null
 target: grace.detectors.fused.FusedDetector
 args:
-  base: ../eval_pipeline/configs/detectors/dinov3-wildfake-crop200.yaml
+  base: eval/configs/detectors/dinov3-wildfake-crop200.yaml
   split: grace.splits.dinov3.DINOv3Split
   checkpoint: ../grace_adapter/checkpoints/grace/dinov3_multiscale/ema.pt
   enricher: null                                                          # THE swept key

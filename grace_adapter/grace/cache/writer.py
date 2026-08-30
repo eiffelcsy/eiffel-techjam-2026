@@ -98,7 +98,7 @@ from grace.cache.spec import (
     DONE_FILE, INDEX_FILE, CacheSpec, freq_view_name, tap_view_name, view_name,
 )
 from grace.splits.base import SplitDetector
-from pipeline.data.dataset import load_normalized
+from preprocessing.dataset import load_normalized
 
 RECIPE_FILE = "recipes.parquet"
 PROGRESS_FILE = ".progress"
@@ -314,7 +314,7 @@ class MultiViewDataset(Dataset):
             # was measured at; the crop is a view selection applied afterwards.
             view = image if epoch is None else self.schedule.apply(image, index, epoch)[0]
             # The same window for the clean view and every degraded epoch --
-            # `pipeline.degrade.crop.SAMPLE_EPOCH` explains why the pairing
+            # `preprocessing.degrade.crop.SAMPLE_EPOCH` explains why the pairing
             # stage 1 trains on requires it.
             if self.crop is not None:
                 view = self.crop(view, index)
@@ -358,7 +358,7 @@ def build_cache(
     finished cache renders only the new ones.
 
     `crop` is an optional `(image, index) -> image` applied after the degradation
-    recipe and before preprocessing -- see `pipeline.degrade.crop.SampleCrop`.
+    recipe and before preprocessing -- see `preprocessing.degrade.crop.SampleCrop`.
     Its identity belongs in `spec.crop_sha`, so features rendered under one
     window protocol can never be read as if they were another's.
 

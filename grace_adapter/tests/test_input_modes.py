@@ -17,10 +17,10 @@ import torch
 from PIL import Image
 
 from grace.cache.spec import sha_preprocess
-from pipeline.detectors.dinov3 import (
+from eval.detectors.dinov3 import (
     HEAD_COMPATIBILITY, INPUT_MODES, VIEWS, _assert_head_matches, _build_preprocess,
 )
-from pipeline.detectors.hf import (
+from eval.detectors.hf import (
     _CropPreprocess, _CropResizePreprocess, _ProcessorPreprocess, _ResamplePreprocess,
 )
 

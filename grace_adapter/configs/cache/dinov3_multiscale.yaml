@@ -19,9 +19,9 @@
 # whole-image clean ones has learned a mapping between pixels nothing downstream
 # will ever show it again.
 
-detector: ../eval_pipeline/configs/detectors/dinov3-wildfake-multiscale.yaml
+detector: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
 split: grace.splits.dinov3.DINOv3Split
-dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml
+dataset: load_data/configs/datasets/wildfake_train.yaml
 
 out_dir: cache_ms/
 n_epochs: 12

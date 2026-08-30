@@ -34,9 +34,9 @@ from grace.models.discrepancy import FusedHead
 from grace.models.factory import build_discrepancy_head, load_adapter
 from grace.models.severity import SeverityHead
 from grace.splits import build_split
-from pipeline.config import load_detector_config
-from pipeline.detectors import build_detector
-from pipeline.detectors.base import FrozenDetector
+from eval.config import load_detector_config
+from eval.detectors import build_detector
+from eval.detectors.base import FrozenDetector
 
 
 class AdaptedDetector(FrozenDetector):

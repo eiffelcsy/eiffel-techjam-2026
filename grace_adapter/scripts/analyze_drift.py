@@ -1,7 +1,7 @@
 """Test RA-Det's premise on this data, before anything is TRAINED on it.
 
     python scripts/build_cache.py configs/cache/dinov3.yaml      # PREREQUISITE
-    python scripts/analyze_drift.py --cache cache/dinov3-wildfake --dataset ../eval_pipeline/configs/datasets/wildfake_train.yaml
+    python scripts/analyze_drift.py --cache cache/dinov3-wildfake --dataset load_data/configs/datasets/wildfake_train.yaml
 
 **Needs a rendered cache**, including at least one finalized degraded view: the
 whole analysis is a comparison of `clean` against `epoch=NNN`, so there is
@@ -43,8 +43,9 @@ from tqdm import tqdm
 
 from grace.cache.reader import FeatureCache
 from grace.train import diagnostics as D
-from pipeline.config import load_dataset_config, load_detector_config
-from pipeline.data.manifest import load_manifest
+from load_data.config import load_dataset_config
+from eval.config import load_detector_config
+from load_data.manifest import load_manifest
 
 
 def parse_args():
@@ -70,7 +71,7 @@ def load_split(args):
     if not (args.detector and args.split):
         return None
     from grace.splits import build_split
-    from pipeline.detectors import build_detector
+    from eval.detectors import build_detector
 
     return build_split(build_detector(load_detector_config(args.detector)), args.split)
 

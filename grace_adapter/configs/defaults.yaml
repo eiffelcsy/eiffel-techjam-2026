@@ -39,10 +39,10 @@
 # solve, and every retention number downstream would measure the augmentation.
 
 run_id: dinov3_wildfake
-detector: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
-dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml        # split: train
+detector: eval/configs/detectors/dinov3-wildfake.yaml
+dataset: load_data/configs/datasets/wildfake_train.yaml        # split: train
 val_dataset:                # one path, or several -- selection is the unweighted
-  - ../eval_pipeline/configs/datasets/wildfake_train_val.yaml
+  - load_data/configs/datasets/wildfake_train_val.yaml
                             # mean of their AUCs. One entry now: it is the
                             # held-out `validation` split of the SAME manifest,
                             # disjoint from `train` by construction. NOT the
@@ -90,7 +90,7 @@ wandb:                      # off by default. summary.json next to the checkpoin
 # ------------------------------------------------------------------ cache ----
 # configs/cache/<name>.yaml
 
-detector: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
+detector: eval/configs/detectors/dinov3-wildfake.yaml
 split: grace.splits.dinov3.DINOv3Split # dotted path to the SplitDetector
 split_args: {}              # keyword arguments for the split. The ladder's tap
                             # set is the one that matters today:
@@ -98,7 +98,7 @@ split_args: {}              # keyword arguments for the split. The ladder's tap
                             # Present on cache, train and discrepancy configs,
                             # and it must be the SAME in all three -- the cache
                             # records what it rendered and refuses a mismatch.
-dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml
+dataset: load_data/configs/datasets/wildfake_train.yaml
 
 out_dir: cache/
 n_epochs: 12                # degraded views to render. Each is one full trunk
@@ -115,7 +115,7 @@ max_images: null            # per class; null = all
 device: auto
 
 schedule:
-  grid_file: ../eval_pipeline/configs/degradations.yaml
+  grid_file: preprocessing/configs/degradations.yaml
   transforms: null          # null = all eleven; a list holds some out for the
                             # unseen-transform generalization experiment
   level_weights:            # composition level mix. L0 is clean: those steps are
@@ -134,9 +134,9 @@ schedule:
 run_id: dinov3_clean
 cache_dir: cache/dinov3-wildfake
 
-detector: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
+detector: eval/configs/detectors/dinov3-wildfake.yaml
 split: grace.splits.dinov3.DINOv3Split
-dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml
+dataset: load_data/configs/datasets/wildfake_train.yaml
 # The detector is loaded even in `source: cache` mode: the frozen head is what
 # head_kl and the Jacobian weighting differentiate through, so the model is
 # needed whether or not the trunk ever runs.
@@ -243,9 +243,9 @@ run_id: dinov3_disc
 cache_dir: cache/dinov3-wildfake
 adapter_checkpoint: checkpoints/grace/dinov3_clean/ema.pt
 
-detector: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
+detector: eval/configs/detectors/dinov3-wildfake.yaml
 split: grace.splits.dinov3.DINOv3Split
-dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml
+dataset: load_data/configs/datasets/wildfake_train.yaml
 
 epochs: 4
 batch_size: 256
@@ -388,7 +388,7 @@ enricher:
 name: dinov3+grace
 target: grace.detectors.adapted.AdaptedDetector
 args:
-  base: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
+  base: eval/configs/detectors/dinov3-wildfake.yaml
   split: grace.splits.dinov3.DINOv3Split
   checkpoint: checkpoints/grace/dinov3_clean/ema.pt  # null = identity, i.e. the
                                                      # untouched base detector

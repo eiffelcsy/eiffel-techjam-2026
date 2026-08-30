@@ -25,11 +25,11 @@ from grace.config import (
 )
 from grace.models.factory import load_enricher
 from grace.train.loop import train_adapter, train_enrich
-from pipeline.degrade.conditions import load_grid
+from preprocessing.degrade.conditions import load_grid
 from tests.fixtures import SPECS, MLPHead, ToySplit, write_images
 
 N_IMAGES = 32
-GRID_FILE = "../eval_pipeline/configs/degradations.yaml"
+GRID_FILE = "preprocessing/configs/degradations.yaml"
 FREQ = FreqConfig(enabled=True, patch=2, grid=3)   # (9, 12): tiny, same structure
 
 

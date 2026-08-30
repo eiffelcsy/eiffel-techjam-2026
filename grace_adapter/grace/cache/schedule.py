@@ -40,8 +40,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from pipeline.degrade.conditions import LEVELS, Condition, Recipe
-from pipeline.degrade.ops import TRANSFORMS
+from preprocessing.degrade.conditions import LEVELS, Condition, Recipe
+from preprocessing.degrade.ops import TRANSFORMS
 from common.seeding import stable_seed
 
 DEFAULT_LEVEL_WEIGHTS = {0: 0.15, 1: 0.35, 2: 0.30, 3: 0.20}
@@ -126,7 +126,7 @@ class EpochSchedule:
     def severity_for(self, index: int, epoch: int) -> float:
         """Corruption severity in [0, 1], exact and free.
 
-        Grids are ordered mild -> severe (`pipeline.degrade.ops`), so a step's
+        Grids are ordered mild -> severe (`preprocessing.degrade.ops`), so a step's
         severity is its parameter's normalised rank within its own grid. Combined
         with composition depth, weighted equally:
 

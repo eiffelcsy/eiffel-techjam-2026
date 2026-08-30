@@ -1,8 +1,8 @@
 """Compare an adapted detector against its baseline on a shared denominator.
 
     python scripts/compare.py \
-        --baseline ../eval_pipeline/results/dinov3_poc_baseline__dinov3-wildfake__wildfake-coco-dalle3.json \
-        --adapted  ../eval_pipeline/results/dinov3_poc_grace__dinov3+grace__wildfake-coco-dalle3.json
+        --baseline results/dinov3_poc_baseline__dinov3-wildfake__wildfake-coco-dalle3.json \
+        --adapted  results/dinov3_poc_grace__dinov3+grace__wildfake-coco-dalle3.json
 
 The harness normalizes retention by *each detector's own* clean AUC, which is the
 right convention for describing one detector and the wrong one for comparing two.

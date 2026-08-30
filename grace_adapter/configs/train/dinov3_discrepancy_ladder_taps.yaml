@@ -35,9 +35,9 @@ run_id: disc_ladder_taps
 cache_dir: cache_taps/dinov3-wildfake
 adapter_checkpoint: checkpoints/grace/dinov3_ladder_final/ema.pt
 
-detector: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
+detector: eval/configs/detectors/dinov3-wildfake.yaml
 split: grace.splits.dinov3.DINOv3Split
-dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml
+dataset: load_data/configs/datasets/wildfake_train.yaml
 
 # MUST match what the adapter was trained against. `load_adapter` refuses a
 # ladder whose tap set differs from the split's, so a stale value here fails at
@@ -46,7 +46,7 @@ split_args:
   tap_blocks: [0, 2, 4, 6, 9]
 
 val_datasets:
-  - ../eval_pipeline/configs/datasets/wildfake_train_val.yaml
+  - load_data/configs/datasets/wildfake_train_val.yaml
 val_cache_dirs:
   - cache_val_taps/dinov3-wildfake
 

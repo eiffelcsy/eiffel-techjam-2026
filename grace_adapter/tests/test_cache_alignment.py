@@ -25,11 +25,11 @@ from grace.cache.spec import (
     view_name,
 )
 from grace.cache.writer import build_cache
-from pipeline.degrade.conditions import load_grid
+from preprocessing.degrade.conditions import load_grid
 from tests.fixtures import SPECS, ToySplit, write_images
 
 N_IMAGES = 24
-GRID_FILE = "../eval_pipeline/configs/degradations.yaml"
+GRID_FILE = "preprocessing/configs/degradations.yaml"
 
 
 @pytest.fixture(scope="module")

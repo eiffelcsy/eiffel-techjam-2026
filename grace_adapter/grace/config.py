@@ -1,4 +1,4 @@
-"""YAML <-> dataclass config, mirroring `pipeline.config`.
+"""YAML <-> dataclass config, mirroring `load_data.config` / `eval.config`.
 
 Three kinds of config, one directory each:
 
@@ -24,7 +24,7 @@ import yaml
 
 from grace.cache.schedule import DEFAULT_LEVEL_WEIGHTS
 from grace.splits.base import FeatureSpec
-from pipeline.degrade.crop import POLICIES, SampleCrop
+from preprocessing.degrade.crop import POLICIES, SampleCrop
 from pipeline.freq.view import FreqExtract
 
 
@@ -183,7 +183,7 @@ class ScheduleConfig:
     (`transforms:`) rather than an accident.
     """
 
-    grid_file: str = "../eval_pipeline/configs/degradations.yaml"
+    grid_file: str = "preprocessing/configs/degradations.yaml"
     transforms: list[str] | None = None
     level_weights: dict[int, float] = field(
         default_factory=lambda: dict(DEFAULT_LEVEL_WEIGHTS)

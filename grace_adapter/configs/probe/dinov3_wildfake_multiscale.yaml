@@ -24,11 +24,11 @@
 
 run_id: dinov3_wildfake_multiscale
 
-detector: ../eval_pipeline/configs/detectors/dinov3-wildfake-multiscale.yaml
-dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml       # split: train, 50,000
+detector: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
+dataset: load_data/configs/datasets/wildfake_train.yaml       # split: train, 50,000
 
 val_dataset:
-  - ../eval_pipeline/configs/datasets/wildfake_train_val.yaml        # 10,000, balanced 5k/5k
+  - load_data/configs/datasets/wildfake_train_val.yaml        # 10,000, balanced 5k/5k
 
 split: grace.splits.dinov3.DINOv3Split
 out: ""             # "" = take it from the detector config's head_checkpoint

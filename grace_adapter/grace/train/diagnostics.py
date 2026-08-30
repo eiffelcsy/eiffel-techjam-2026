@@ -108,7 +108,7 @@ def drift_asymmetry(
 def bootstrap_gap(values: np.ndarray, labels: np.ndarray, n: int = 1000, seed: int = 0):
     """Percentile CI on the fake-minus-real gap in `values`.
 
-    Resamples images, matching `pipeline.eval.metrics.bootstrap_ci`'s convention
+    Resamples images, matching `eval.metrics.bootstrap_ci`'s convention
     so the intervals here are comparable with the harness's.
     """
     rng = np.random.default_rng(seed)

@@ -9,9 +9,9 @@ import numpy as np
 import pytest
 
 from grace.cache.schedule import VAL_EPOCH_OFFSET, EpochSchedule, val_epochs
-from pipeline.degrade.conditions import Condition, load_grid
+from preprocessing.degrade.conditions import Condition, load_grid
 
-GRID_FILE = "../eval_pipeline/configs/degradations.yaml"
+GRID_FILE = "preprocessing/configs/degradations.yaml"
 
 
 @pytest.fixture(scope="module")
@@ -80,7 +80,7 @@ def test_level_one_draws_exactly_one_transform(schedule):
 def test_eval_conditions_are_unaffected_by_that_change():
     """The harness's own L0/L1 conditions carry fixed `steps` and no `grid`, so
     they must still return exactly what they were given."""
-    from pipeline.degrade.conditions import Step
+    from preprocessing.degrade.conditions import Step
 
     step = Step("jpeg", 30)
     assert Condition(id="clean", level=0).sample_recipe(9).steps == ()
@@ -121,14 +121,14 @@ def test_severity_is_bounded(schedule):
 
 
 def test_clean_severity_is_zero(schedule, grid):
-    from pipeline.degrade.conditions import Recipe
+    from preprocessing.degrade.conditions import Recipe
 
     assert schedule.severity_of(Recipe(())) == 0.0
 
 
 def test_severity_ranks_the_grid(grid):
     """Grids are ordered mild -> severe, so quality=30 must outrank quality=90."""
-    from pipeline.degrade.conditions import Recipe, Step
+    from preprocessing.degrade.conditions import Recipe, Step
 
     schedule = EpochSchedule(grid=grid, seed=0)
     mild = schedule.severity_of(Recipe((Step("jpeg", 90),)))

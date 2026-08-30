@@ -1,0 +1,127 @@
+# WildFake, COCO val2017 + DALL-E 3 "Advanced" -- the primary evaluation benchmark.
+#
+#   real  COCO val2017          4998 images   ./Real/coco/coco2017/val2017/
+#   fake  DALL-E 3 "Advanced"   8843 images   ./Diffusion_based/DALLE/Advanced/DALLE3/
+#
+# BOTH of WildFake's official splits, merged -- see the note below.
+#
+# WildFake (Hong et al., AAAI 2025, arXiv:2402.11843) is hosted on ModelScope
+# rather than the Hub, as ~110 GB of zips plus metadata tables, so
+# `HFImageDatasetSource` does not apply -- see the download recipe below.
+#
+#   modelscope.cn/datasets/hy2628982280/WildFake
+#
+# WHY BOTH SPLITS. `split: test` below is this dataset's role in OUR experiment,
+# not a copy of WildFake's own bookkeeping. A train/test boundary internal to
+# WildFake constrains nothing here, and honouring it would discard 80% of the
+# benchmark for no methodological gain: WildFake's test split is a uniform 20%
+# sample, so the 1000 : 1769 this config used to name was exactly that slice of
+# the full 4998 : 8843, at the same class ratio.
+#
+# WHAT KEEPS THIS HELD OUT, now that training also comes from WildFake. It is no
+# longer "we never fit on this corpus" -- load_data/configs/datasets/wildfake_train.yaml
+# draws 120,000 images from it. The guarantee is `exclude_groups` there: `DALLE`
+# and `coco` are dropped from BOTH metadata tables, so no row of either class
+# below can reach the training manifest whichever table it came from. That is a
+# stronger property than the split boundary would have given, and it is why
+# reading both tables here is still sound.
+#
+# The exclusions are deliberately wider than this file: all of DALL-E, not just
+# the Advanced tier, and all 163,846 COCO images, not just val2017. See the
+# leakage guard section of wildfake_train.yaml.
+#
+# Both tables are read because a single-class source cannot be built --
+# `CsvMetadataSource` runs `_check_split` over its own rows and raises if either
+# class is empty, so the per-generator tables in `label_csv_files/` (real_coco
+# is 100% real, dalle3 100% fake) cannot be used one-per-source. Each split
+# table carries both path prefixes instead, so both children stay balanced.
+# The splits are disjoint -- 1000+3998 and 1769+7074 match the per-generator
+# tables exactly -- and ConcatSource raises on any path it sees twice.
+#
+# WHY THESE TWO SUBSETS. WildFake's `IsAdvanced` flag separates each generator
+# family's current models from its older ones, and the DALL-E family's Advanced
+# tier is DALL-E 3 while its Typical tier is DALL-E 2. Scoring the Advanced tier
+# asks the question worth asking -- does the detector hold on a generator better
+# than the ones it was fit on -- where DALL-E 2's visible artifacts would flatter
+# it. COCO val2017 is the matching real half: photographic, multi-object, no face
+# or church monoculture. It stays val2017 rather than all of coco2017 because
+# train2017 (118,202) and test2017 (40,646) would swamp the fakes 18.5 : 1 and
+# make the retention curve a measurement of the real class.
+# Both subsets are 100% .jpg, so there is no container-format shortcut for a
+# detector to find instead of the signal.
+#
+# CLASS BALANCE is 4998 : 8843 (1 : 1.77), which AUC and the retention curve
+# tolerate. Set `max_images: 4998` in the run config to score it balanced -- that
+# is a scope decision for a run, not a property of the dataset, so it does not
+# live here.
+#
+# ------------------------------------------------------------------ download --
+# The metadata tables are small; the images are not. Only two archives are
+# needed, and `on_missing: error` below will name the first path that does not
+# resolve if the layout comes out differently.
+#
+#   pip install modelscope
+#   modelscope download --dataset hy2628982280/WildFake \
+#       split_train_test/csv_file/total_split/test_metadata.csv \
+#       split_train_test/csv_file/total_split/train_metadata.csv \
+#       Images/Real/coco.zip \
+#       Images/Diffusion_based/DALLE.zip \
+#       --local_dir data/wildfake
+#
+# On Windows, set PYTHONIOENCODING=utf-8 first -- the downloader prints a "->"
+# through the console codepage and dies on the encode otherwise.
+#
+# Unpack both under `data/wildfake_test/images/` so that the tables' paths hang
+# off it -- they name `./Real/coco/...` and `./Diffusion_based/DALLE/...`,
+# so those two directories must be immediate children of `root`:
+#
+#   data/wildfake_test/images/Real/coco/coco2017/val2017/*.jpg
+#   data/wildfake_test/images/Diffusion_based/DALLE/Advanced/DALLE3/*/*.jpg
+#
+# DALLE.zip is ~25 GB and holds DALL-E 2 as well; only the Advanced/ half is
+# read. coco.zip is ~2.4 GB and holds train2017 and test2017 as well; only
+# val2017 is read. Images are referenced in place, so no second copy is written
+# -- and no re-encode, which on a JPEG benchmark would resample away the very
+# artifacts under test.
+#
+#   python scripts/build_manifest.py --config load_data/configs/datasets/wildfake_coco_dalle3.yaml
+#
+# Expect: 13841 rows (4998 real / 8843 generated).
+
+name: wildfake-coco-dalle3
+manifest: data/wildfake_test/manifest.parquet
+split: test
+
+source:
+  target: load_data.sources.ConcatSource
+  args:
+    sources:
+      # Test table first, so the 2769 rows this config used to build keep their
+      # original indices at the head of the manifest -- the old manifest is a
+      # prefix of this one, and the index is what seeds each degradation.
+      - target: load_data.sources.CsvMetadataSource
+        args: &wildfake
+          csv_path: data/wildfake_test/split_train_test/csv_file/total_split/test_metadata.csv
+          root: data/wildfake_test/images
+          path_column: Image_path
+          label_column: IsFake        # WildFake's own polarity: 1 = generated, 0 = real
+          fake_values: ["1"]
+          real_values: ["0"]
+
+          # The subset selector. WildFake's columns cannot express it: every COCO
+          # image carries Architecture=coco whichever 2017 directory it came from,
+          # so only the path separates val2017 from train2017/test2017. The DALL-E
+          # prefix likewise pins the Advanced (v3) tier and excludes Typical (v2).
+          path_prefix:
+            - Real/coco/coco2017/val2017/
+            - Diffusion_based/DALLE/Advanced/DALLE3/
+
+          generator: DALLE3
+          split: test                 # recorded per row; matches the outer `split`
+          limit: null                 # per class; both subsets in full
+          on_missing: error           # a partly-unpacked archive must fail loudly
+
+      - target: load_data.sources.CsvMetadataSource
+        args:
+          <<: *wildfake
+          csv_path: data/wildfake_test/split_train_test/csv_file/total_split/train_metadata.csv

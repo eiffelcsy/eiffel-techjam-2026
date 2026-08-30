@@ -13,7 +13,7 @@
 name: dinov3+grace
 target: grace.detectors.adapted.AdaptedDetector
 args:
-  base: ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml
+  base: eval/configs/detectors/dinov3-wildfake.yaml
   split: grace.splits.dinov3.DINOv3Split
   checkpoint: ../grace_adapter/checkpoints/grace/dinov3_clean/ema.pt
   discrepancy: null

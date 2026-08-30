@@ -22,12 +22,12 @@ from grace.cache.schedule import EpochSchedule
 from grace.cache.spec import CacheSpec, sha_manifest, sha_preprocess
 from grace.cache.writer import MultiViewDataset, build_cache
 from grace.config import CropConfig
-from pipeline.degrade.conditions import load_grid
-from pipeline.degrade.crop import SampleCrop
+from preprocessing.degrade.conditions import load_grid
+from preprocessing.degrade.crop import SampleCrop
 from tests.fixtures import SPECS, ToySplit
 
 N_IMAGES = 12
-GRID_FILE = "../eval_pipeline/configs/degradations.yaml"
+GRID_FILE = "preprocessing/configs/degradations.yaml"
 S_MIN, S_MAX = 32, 64
 
 
@@ -114,7 +114,7 @@ def test_every_view_of_an_image_is_the_same_window(tmp_path):
 
 def test_different_images_get_different_windows(tmp_path):
     """The multi-scale diversity is across the corpus, since it cannot be across
-    epochs -- see `pipeline.degrade.crop.SAMPLE_EPOCH`."""
+    epochs -- see `preprocessing.degrade.crop.SAMPLE_EPOCH`."""
     manifest = write_images(tmp_path / "images", 24)
     schedule = EpochSchedule(grid=load_grid(GRID_FILE), seed=0)
     spy = SpyCrop(S_MIN, S_MAX, 0, "uniform")
