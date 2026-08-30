@@ -41,7 +41,8 @@ from grace.cache.spec import CacheSpec
 from grace.cache.schedule import val_epochs
 from grace.models.discrepancy import FusedHead
 from grace.models.factory import (
-    build_adapter, build_discrepancy_head, build_severity_head, load_adapter, save_adapter,
+    build_adapter, build_discrepancy_head, build_enricher, build_severity_head,
+    load_adapter, save_adapter, save_enricher,
 )
 from grace.models.ladder import tap_spec_for
 from grace.train import diagnostics as D
@@ -746,4 +747,263 @@ def _score_discrepancy(fused, adapter, split, cache, manifest, epochs, cfg, devi
             "auc_aux": float(roc_auc_score(y, np.concatenate(aux))),
             "auc_fused": float(roc_auc_score(y, np.concatenate(fuse))),
         }
+    return out
+
+
+# =============================================================================
+# Stage 2, the frequency branch. A sibling of `train_discrepancy`, not a
+# replacement: both freeze the same adapter and both use labels, and they differ
+# in what they read. GRACE-D reads the drift the adapter computed; this reads the
+# image again, in a basis the trunk's resize threw away.
+# =============================================================================
+
+
+def train_enrich(cfg, split, manifest) -> dict:
+    """Stage 2 for the frequency branch. Supervised; the adapter stays frozen.
+
+    Reads per step, all from one cache: `f_deg`, `freq_deg`, `label`,
+    `severity`. `f_clean` is not read -- there is no restoration target here.
+    The objective is
+
+        BCE(head(fused), label)  +  lam_anchor * ||fused - f_corrected||
+
+    and the anchor is the term that keeps this an ENRICHMENT rather than a
+    supervised re-fit of the seam. Without it nothing stops the enricher walking
+    the features to wherever the frozen head happens to separate this corpus,
+    which is a content classifier that starts from the adapter's output. E15 is
+    the arm with `lam_anchor: 0`, and it is meant to be read as what the anchor
+    costs and what it buys.
+
+    THE IDENTITY IS MEASURED, NOT ASSUMED. Validation runs once before the first
+    optimizer step, and at that point every expert's output projection is still
+    zero, so `fused` equals `f_corrected` bit for bit and `auc_fused` must equal
+    `auc_corrected` -- the `+grace` arm -- exactly. It is recorded as
+    `validation.step_0`, and it is the cheapest possible check that the module is
+    wired where it claims to be.
+
+    E14 ships as `finetune_head`. Frozen is the default and the one whose
+    provenance is worth something; the fine-tuned arm exists because round 1
+    measured `parallel_fraction = 0.0298`, and if that holds here a frozen head
+    can only read this whole cross-attention module as a scalar logit shift.
+    """
+    seed_everything(cfg.seed)
+    device = next(split.parameters()).device
+    spec = split.feature_spec
+
+    # The checkpoint decides whether this is a ladder, exactly as the discrepancy
+    # stage does: this stage never rebuilds the adapter, it enriches the one
+    # stage 1 shipped.
+    tap_spec = split.tap_spec()
+    adapter = load_adapter(cfg.adapter_checkpoint, spec, tap_spec).to(device).eval()
+    adapter.requires_grad_(False)
+    severity_head = _load_severity_head(cfg.adapter_checkpoint, adapter, spec, device)
+
+    freq_spec = cfg.freq.feature()
+    expect = _expect_spec(
+        split, tap_spec if adapter.reads_taps else None, cfg.crop.fingerprint()
+    )
+    cache = FeatureCache(cfg.cache_dir, expect=expect)
+    cache.spec.assert_freq_available(freq_spec, cfg.freq.fingerprint())
+    val_sets = _load_val_sets(cfg, spec, expect)
+    for _, val_cache, _ in val_sets:
+        val_cache.spec.assert_freq_available(freq_spec, cfg.freq.fingerprint())
+
+    enricher = build_enricher(
+        spec, freq_spec, cfg.enricher, patch=cfg.freq.patch, channels=cfg.freq.channels
+    ).to(device)
+
+    # The head is the detector's own, and by default it is not touched. When it
+    # is, a COPY is trained: `split.head` stays the frozen reference every other
+    # arm is scored with, so the fine-tuned arm cannot quietly change what the
+    # baseline means.
+    head = _enrich_head(split, cfg, device)
+    groups = [{"params": list(enricher.parameters()), "lr": cfg.lr}]
+    if head is not None:
+        groups.append({"params": list(head.parameters()), "lr": cfg.head_lr})
+    opt = torch.optim.AdamW(groups, lr=cfg.lr, weight_decay=cfg.weight_decay)
+
+    def logit_of(f):
+        return (head if head is not None else split.head)(f)
+
+    tracker = build_tracker(
+        cfg.wandb, run_id=cfg.run_id, job_type="stage2-enrich",
+        config={**flatten_config(cfg), "detector_name": split.name,
+                "feature_layout": spec.layout, "feature_dim": spec.dim,
+                "freq_shape": list(freq_spec.shape)},
+    )
+
+    train_epochs = [e for e in cache.epochs() if e < min(val_epochs(1))][: cfg.epochs]
+    held = [e for e in cache.epochs() if e >= min(val_epochs(1))]
+    loader_cfg = _cache_loader_cfg(cfg)
+
+    # Before any step, with the enricher still exactly the identity. Everything
+    # after this is read as a delta from it.
+    validation = {
+        "step_0": _score_enrich(
+            enricher, adapter, severity_head, logit_of, cache, manifest,
+            held or train_epochs, cfg, device,
+        )
+    }
+
+    step = 0
+    for epoch in train_epochs:
+        loader = build_loader(
+            loader_cfg, cache, manifest, None, epoch,
+            with_taps=adapter.reads_taps, with_freq=True,
+        )
+        for batch in tqdm(loader, desc=f"enrich epoch {epoch}", leave=False):
+            split.assert_frozen()
+            f_deg = _to_float(batch["f_deg"], device)
+            freq = _to_float(batch["freq_deg"], device)
+            sev = batch["severity"].to(device).float()
+            taps = _to_float(batch["taps_deg"], device) if adapter.reads_taps else None
+            with torch.no_grad():
+                # Stage 1's PREDICTED severity, not the recipe's recorded one: at
+                # evaluation time no recipe is known, so conditioning on the
+                # recorded scalar here and on a prediction there would train and
+                # score two different models. `sev` survives only as a diagnostic.
+                pred_sev = severity_head(f_deg) if severity_head is not None else None
+                f_corrected = adapter(f_deg, severity=pred_sev, taps=taps)
+            labels = batch["label"].to(device)
+
+            fused = enricher(f_corrected, freq, pred_sev)
+            bce = supervised_bce(logit_of(fused), labels)
+            # Mean over the batch of the per-sample L2, so the term does not
+            # scale with batch size and `lam_anchor` means the same thing at 64
+            # and at 256.
+            anchor = (fused - f_corrected).norm(dim=-1).mean()
+            loss = bce + cfg.lam_anchor * anchor
+            loss.backward()
+            opt.step()
+            opt.zero_grad(set_to_none=True)
+
+            if step % cfg.log_every == 0:
+                gates = enricher.gates().detach()
+                tracker.log(
+                    {"train/bce": float(bce.detach()),
+                     "train/anchor": float(anchor.detach()),
+                     "train/loss": float(loss.detach()),
+                     "train/severity_recipe": float(sev.mean()),
+                     "train/epoch": epoch,
+                     **{f"train/gate_band{b}": float(gates[b].mean())
+                        for b in range(enricher.n_bands)}},
+                    step=step,
+                )
+            step += 1
+
+    out_dir = Path(cfg.out_dir) / cfg.run_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    save_enricher(
+        out_dir / "enricher.pt", enricher, spec, freq_spec, cfg.enricher, cfg.freq,
+        extra={
+            "adapter_checkpoint": cfg.adapter_checkpoint,
+            # The fine-tuned head travels WITH the enricher it was fitted
+            # alongside. The two are only meaningful together, and a detector
+            # config naming one without the other would score a head against
+            # features it never saw -- the exact failure `_assert_head_matches`
+            # exists to stop, one stage later.
+            "head_state_dict": None if head is None else head.state_dict(),
+            "finetune_head": head is not None,
+        },
+    )
+
+    validation["held_out_degradations"] = _score_enrich(
+        enricher, adapter, severity_head, logit_of, cache, manifest,
+        held or train_epochs, cfg, device,
+    )
+    for name, val_cache, val_manifest in val_sets:
+        validation[f"held_out_images/{name}"] = _score_enrich(
+            enricher, adapter, severity_head, logit_of, val_cache, val_manifest,
+            list(val_cache.epochs()), cfg, device,
+        )
+
+    summary = {
+        "run_id": cfg.run_id,
+        "adapter_checkpoint": cfg.adapter_checkpoint,
+        "finetune_head": head is not None,
+        "gates": [float(g.mean()) for g in enricher.gates().detach()],
+        "validation": validation,
+    }
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    tracker.summary({k: summary[k] for k in ("validation", "gates", "finetune_head")})
+    tracker.finish()
+    return summary
+
+
+def _enrich_head(split, cfg, device):
+    """A trainable COPY of the detector's head, or None for the frozen arm.
+
+    `deepcopy` rather than rebuild-and-load: the head's geometry lives in the
+    detector config and in its checkpoint, and restating it here would be a third
+    place for the three to disagree. The copy is put into train mode -- the
+    original is frozen and in eval, so dropout in the source head would otherwise
+    stay silently off.
+    """
+    if not cfg.finetune_head:
+        return None
+    import copy
+
+    head = copy.deepcopy(split.head_module()).to(device)
+    head.requires_grad_(True)
+    head.train()
+    return head
+
+
+def _load_severity_head(checkpoint: str, adapter, spec, device):
+    """Stage 1's severity head, if the checkpoint carries one.
+
+    Same rule `grace.detectors.adapted` follows: without it the FiLM path has no
+    input and conditioning silently reverts to the unconditioned gate -- so an
+    adapter trained with FiLM must be scored beside the head it was trained with,
+    at every later stage.
+    """
+    if adapter.film is None:
+        return None
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    if "severity_state_dict" not in payload:
+        return None
+    head = build_severity_head(spec).to(device)
+    head.load_state_dict(payload["severity_state_dict"])
+    return head.eval().requires_grad_(False)
+
+
+@torch.no_grad()
+def _score_enrich(enricher, adapter, severity_head, logit_of, cache, manifest,
+                  epochs, cfg, device) -> dict:
+    """Corrected / fused AUC per epoch, plus how far the fusion moved.
+
+    `auc_corrected` is the `+grace` arm computed on the same rows in the same
+    pass, so the comparison is paired rather than read across two runs -- and at
+    step 0 the two columns must agree to the last decimal, which is E10 measured
+    instead of asserted.
+    """
+    was_training = enricher.training
+    enricher.eval()
+    loader_cfg = _cache_loader_cfg(cfg)
+    out = {}
+    for epoch in epochs:
+        base, fuse, drift, labels = [], [], [], []
+        for batch in build_loader(
+            loader_cfg, cache, manifest, None, epoch, shuffle=False,
+            with_taps=adapter.reads_taps, with_freq=True,
+        ):
+            f_deg = _to_float(batch["f_deg"], device)
+            freq = _to_float(batch["freq_deg"], device)
+            taps = _to_float(batch["taps_deg"], device) if adapter.reads_taps else None
+            sev = severity_head(f_deg) if severity_head is not None else None
+            f_corrected = adapter(f_deg, severity=sev, taps=taps)
+            fused = enricher(f_corrected, freq, sev)
+            base.append(logit_of(f_corrected).cpu().numpy())
+            fuse.append(logit_of(fused).cpu().numpy())
+            drift.append((fused - f_corrected).norm(dim=-1).cpu().numpy())
+            labels.append(batch["label"].numpy())
+        y = np.concatenate(labels)
+        if len(np.unique(y)) < 2:
+            continue
+        out[f"epoch_{epoch}"] = {
+            "auc_corrected": float(roc_auc_score(y, np.concatenate(base))),
+            "auc_fused": float(roc_auc_score(y, np.concatenate(fuse))),
+            "enrichment_norm": float(np.concatenate(drift).mean()),
+        }
+    enricher.train(was_training)
     return out

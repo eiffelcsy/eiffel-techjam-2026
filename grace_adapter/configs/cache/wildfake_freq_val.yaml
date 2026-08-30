@@ -1,0 +1,45 @@
+# The frequency cache for the held-out IMAGES. Stage-2 validation reads this.
+#
+#   python scripts/build_cache.py configs/cache/wildfake_freq_val.yaml
+#
+# configs/cache/wildfake_freq.yaml with the dataset and out_dir swapped, and the
+# same reason as every other val pair here: `build_cache.py` names its root after
+# the DETECTOR alone, so two datasets under one out_dir collide.
+#
+# Stage 2 needs this and not just the training cache's val-numbered epochs. Those
+# hold out DEGRADATIONS over images the adapter trained on; this holds out the
+# images. The enricher is trained supervised, so the second question is the one
+# that can go wrong quietly -- a module that has learned this corpus's content
+# looks excellent on unseen corruptions of seen pictures.
+#
+# Fewer views than the training cache, and that is fine: validation scores every
+# rendered epoch once, so an extra one buys a slightly tighter number and costs a
+# full render of 10,000 images.
+
+detector: ../eval_pipeline/configs/detectors/dinov3-wildfake-multiscale.yaml
+split: grace.splits.dinov3.DINOv3Split
+dataset: ../eval_pipeline/configs/datasets/wildfake_train_val.yaml
+
+out_dir: cache_freq_val/
+n_epochs: 2
+n_val_epochs: 1
+batch_size: 8
+trunk_batch_size: 128
+num_workers: 8
+
+schedule: {}
+
+freq:
+  enabled: true
+  patch: 8
+  grid: 14
+  channels: 3
+  radial: true
+  norm: log1p
+
+crop:
+  enabled: true
+  s_min: 128
+  policy: uniform
+  seed: 0
+  s_max: 256          # from results/audit_sizes__wildfake-train.json

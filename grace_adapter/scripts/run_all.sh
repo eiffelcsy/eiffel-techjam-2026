@@ -30,6 +30,23 @@
 # `hf auth login`. Or point `backbone_id` in
 # ../eval_pipeline/configs/detectors/dinov3-wildfake.yaml at a mirror you have.
 #
+# THIS IS THE WHOLE-IMAGE PIPELINE. It renders cache/, trains dinov3_clean, and
+# every ablation in it is that run with one key changed. The MULTI-SCALE CROP era
+# is a separate chain with its own reference arm, its own caches and its own
+# noise floor:
+#
+#   scripts/after_fetch.sh   wait for the corpus, build the manifest, audit the
+#                            crop range                       <- the range GATE
+#   scripts/after_audit.sh   E-shortcut, refit stage 0 on crops, the 32x32 round
+#                            trip, P2' on both eval arms      <- two HARD STOPS
+#   scripts/after_freq.sh    E0-freq, the crop-era caches, stage 1 and 2, the
+#                            headline run, E10                <- two HARD STOPS
+#
+# They are deliberately not steps here. Mixing the two would invite reading a
+# retention number from one protocol against a ceiling from the other;
+# `CacheSpec.crop_sha` refuses that at the file level, and keeping the drivers
+# apart keeps it out of the command line too.
+#
 # WHAT THE ORDER IS FOR. Read docs/EXPERIMENTS.md section 0. Briefly: steps 3-7
 # establish that there is a gap, that the instrument is exact, and what the
 # ceiling on any repair is -- all before a single adapter is trained. Steps 8-11
@@ -58,7 +75,11 @@ elif [[ -x ../.venv/Scripts/python.exe ]]; then PYTHON=../.venv/Scripts/python.e
 elif [[ -x ../.venv/bin/python ]];        then PYTHON=../.venv/bin/python
 else PYTHON=python
 fi
-PY_ABS=$("$PYTHON" -c "import sys; print(sys.executable)")
+# `tr -d '\r'`: Python on Windows writes \r\n, `$(...)` strips only the trailing
+# \n, and the surviving carriage return makes every echoed command containing
+# this path overwrite its own first line. Harmless under Git Bash, visible the
+# moment someone invokes this from PowerShell.
+PY_ABS=$("$PYTHON" -c "import sys; print(sys.executable)" | tr -d '\r')
 
 # ---------------------------------------------------------------------- args --
 SMOKE=(); CACHE_EPOCHS=(); FROM=0; ONLY=""; FORCE=0; LIST=0; SKIP_SLOW=0

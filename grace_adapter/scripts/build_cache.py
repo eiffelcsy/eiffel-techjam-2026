@@ -80,6 +80,11 @@ def main():
         # says nothing about taps renders exactly what it always did.
         taps=split.taps(),
         tap_feature=split.tap_spec(),
+        # Likewise None unless `freq.enabled`. Set and cleared together with
+        # `freq_sha` -- `build_cache` refuses a spec that claims a view no
+        # extractor is going to write.
+        freq_feature=cfg.freq.feature(),
+        freq_sha=cfg.freq.fingerprint(),
     )
 
     root = f"{cfg.out_dir.rstrip('/')}/{detector_cfg.name}"
@@ -95,6 +100,14 @@ def main():
             f"({spec.tap_feature.bytes_per_image() / 1024:.1f} KB/image/view, "
             f"{spec.tap_feature.bytes_per_image() / spec.feature.bytes_per_image():.1f}x "
             f"the features)"
+        )
+    if spec.freq_feature is not None:
+        print(
+            f"freq       {spec.freq_feature.shape} {spec.freq_feature.dtype} "
+            f"({spec.freq_feature.bytes_per_image() / 1024:.1f} KB/image/view, "
+            f"{spec.freq_feature.bytes_per_image() / spec.feature.bytes_per_image():.1f}x "
+            f"the features) -- {cfg.freq.patch}x{cfg.freq.patch} blocks, "
+            f"{cfg.freq.grid}x{cfg.freq.grid} cells"
         )
     print(f"images     {spec.n}")
     print(
@@ -112,7 +125,7 @@ def main():
         split, manifest, root, spec, schedule, epochs,
         batch_size=cfg.batch_size, trunk_batch_size=cfg.trunk_batch_size,
         num_workers=cfg.num_workers, device=resolve_device(cfg.device),
-        crop=cfg.crop.build(),
+        crop=cfg.crop.build(), freq=cfg.freq.build(),
     )
     print(f"done: {root}")
 

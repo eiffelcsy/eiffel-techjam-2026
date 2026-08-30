@@ -1,0 +1,37 @@
+# EVALUATION ARM (b): the whole image resampled to 512x512.
+#
+# Identical to dinov3-wildfake-crop200.yaml but for `input_mode`, and loading the
+# same head. Materially this is the original `resize` protocol made explicit, so
+# it doubles as a continuity arm against the pre-multiscale baselines.
+#
+# Like arm (a), every image ends up with identical dimensions, so the dimension
+# shortcut is 0.5 by construction here too.
+#
+# READ IT AS A ROBUSTNESS CHECK, NOT AS A COMPARISON. Two things stop this from
+# being like-for-like against arm (a):
+#
+#   * It is OUT OF DISTRIBUTION. A multi-scale-trained model never sees a whole
+#     image, and a fixed 200px window IS a special case of the training draw
+#     while a 512 whole-image squash is not. A drop here is a generalisation
+#     result, not evidence that arm (a)'s view is better.
+#
+#   * The spectral floor sits very high. This upsamples WildFake's 200x200 reals
+#     2.56x while downsampling the fakes 2x, so the reals carry near-zero energy
+#     above 200-Nyquist by construction. Any frequency signal measured here is
+#     mostly resampling history.
+#
+# If it ever needs rescuing, the zero-cost variant is to band-limit the fakes to
+# 200-equivalent before upsampling both to 512: the two classes then have
+# identical spectral support, and a detector that stays strong is reading
+# content -- which is itself the diagnostic.
+
+name: dinov3-wildfake-r512
+target: pipeline.detectors.dinov3.DINOv3MLPDetector
+args:
+  backbone_id: facebook/dinov3-vits16-pretrain-lvd1689m
+  head_checkpoint: ../grace_adapter/checkpoints/probe/dinov3_wildfake_multiscale/head.pt
+  pool: cls+patchmean
+  input_mode: resample512   # THE swept key
+  hidden: 512
+  n_layers: 2
+device: auto

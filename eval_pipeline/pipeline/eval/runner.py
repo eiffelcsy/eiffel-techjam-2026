@@ -178,9 +178,14 @@ def evaluate_detector(detector, manifest, conditions, device="auto",
     # preprocess_fn(), never detector.preprocess: the dataset is forked into
     # DataLoader workers, and a bound method would drag the model with it.
     preprocess = detector.preprocess_fn()
+    # None for every detector but the fused one, and None keeps this loop on the
+    # path it has always run -- see `FrozenDetector.aux_fn`.
+    aux = detector.aux_fn()
 
     def run(condition):
-        dataset = AIGCDataset(manifest, preprocess=preprocess, condition=condition)
+        dataset = AIGCDataset(
+            manifest, preprocess=preprocess, condition=condition, aux=aux
+        )
         return score_dataset(dataset=dataset, detector=detector,
                              batch_size=batch_size,
                              num_workers=num_workers, device=device)

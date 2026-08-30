@@ -45,6 +45,7 @@ minutes of I/O rather than an hour of JPEG decode.
 
 import argparse
 import json
+import sys
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -121,6 +122,9 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--epochs", type=int, default=4, help="draws averaged per image")
     p.add_argument("--out", default=None, help="write the report as JSON")
+    p.add_argument("--max-unreadable", type=int, default=0,
+                   help="tolerate this many unreadable images (they are "
+                        "excluded from the audit, and reported)")
     args = p.parse_args()
 
     cfg = load_dataset_config(args.config)
@@ -131,11 +135,29 @@ def main():
 
     sizes = collect(df["path"].tolist(), args.workers)
     missing = [p for p, s in zip(df["path"], sizes) if s is None]
-    if missing:
-        raise SystemExit(
-            f"{len(missing)} images could not be read, the first being {missing[0]!r}. "
-            "Rebuild the manifest (scripts/build_manifest.py) before auditing."
+    if len(missing) > args.max_unreadable:
+        # EXIT 2, not 1. A caller has to be able to tell "this corpus cannot
+        # supply a safe crop range" (a finding about the data's shape) from
+        # "some files are broken" (a problem with the download). Both used to
+        # exit 1, and after_fetch.sh duly reported a corrupt PNG as proof that
+        # the crop range leaked -- a confident, specific, wrong diagnosis.
+        print(file=sys.stderr)
+        print(
+            f"{len(missing)} of {len(df)} images could not be read, the "
+            f"first being {missing[0]!r}.",
+            file=sys.stderr,
         )
+        print(
+            f"Re-extract them, or pass --max-unreadable {len(missing)} to "
+            f"audit the rest and decide what to do about them separately.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    if missing:
+        print(f"  WARNING: skipping {len(missing)} unreadable image(s), "
+              f"first {missing[0]!r}")
+        keep = [s is not None for s in sizes]
+        df, sizes = df[keep], [s for s in sizes if s is not None]
 
     wh = np.array(sizes, dtype=np.int64)
     short = wh.min(axis=1)

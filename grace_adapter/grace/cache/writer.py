@@ -15,11 +15,21 @@ thing that supports random access and multi-worker reads.
     |   |-- recipes.parquet     index, level, recipe label, transforms, severity
     |   `-- .done
     |-- epoch=001/ ...
-    `-- taps/                   ONLY when the split emits taps
+    |-- taps/                   ONLY when the split emits taps
+    |   |-- clean/
+    |   |   |-- feats_00000.npy (rows_in_shard, K, tap_dim) float16
+    |   |   `-- .done
+    |   `-- epoch=000/ ...
+    `-- freq/                   ONLY when a freq extractor was passed
         |-- clean/
-        |   |-- feats_00000.npy (rows_in_shard, K, tap_dim) float16
+        |   |-- feats_00000.npy (rows_in_shard, n_cells, n_coeffs) float16
         |   `-- .done
         `-- epoch=000/ ...
+
+Taps and freq are the same mechanism under two names -- a side channel with its
+own `FeatureSpec`, written by the same `ShardWriter` into a nested directory --
+which is why adding the second one touched three lines per file rather than
+duplicating the pathway.
 
 `index.npy` is written once and shared: every view holds the same images in the
 same manifest order, so row `r` means the same image in every view. That is what
@@ -84,7 +94,9 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 from grace.cache.schedule import EpochSchedule
-from grace.cache.spec import DONE_FILE, INDEX_FILE, CacheSpec, tap_view_name, view_name
+from grace.cache.spec import (
+    DONE_FILE, INDEX_FILE, CacheSpec, freq_view_name, tap_view_name, view_name,
+)
 from grace.splits.base import SplitDetector
 from pipeline.data.dataset import load_normalized
 
@@ -191,14 +203,16 @@ def is_complete(view_dir: str | Path) -> bool:
 def view_is_complete(root: Path, epoch, spec: CacheSpec) -> bool:
     """A view counts as rendered only when every part of it is.
 
-    With taps, one epoch is two directories. Testing the feature view alone
-    would skip an epoch whose taps were never finished -- and the ladder would
-    then train against whatever a half-written tap shard happens to hold, which
-    is zeros, silently.
+    With taps and a frequency view, one epoch is three directories. Testing the
+    feature view alone would skip an epoch whose side channels were never
+    finished -- and the ladder, or the enricher, would then train against
+    whatever a half-written shard happens to hold, which is zeros, silently.
     """
     if not is_complete(root / view_name(epoch)):
         return False
-    return not spec.taps or is_complete(root / tap_view_name(epoch))
+    if spec.taps and not is_complete(root / tap_view_name(epoch)):
+        return False
+    return spec.freq_feature is None or is_complete(root / freq_view_name(epoch))
 
 
 class _Progress:
@@ -264,7 +278,8 @@ class MultiViewDataset(Dataset):
     once.
     """
 
-    def __init__(self, manifest, schedule: EpochSchedule, epochs, preprocess, crop=None):
+    def __init__(self, manifest, schedule: EpochSchedule, epochs, preprocess, crop=None,
+                 freq=None):
         self.paths = manifest["path"].tolist()
         # The manifest index, not the row position: it is the stable image
         # identity that seeds degradations, so it must survive subsetting.
@@ -273,6 +288,18 @@ class MultiViewDataset(Dataset):
         self.epochs = list(epochs)
         self.preprocess = preprocess
         self.crop = crop
+        self.freq = freq
+        """Optional `pipeline.freq.view.FreqExtract`, run on the SAME cropped
+        degraded image the 224 preprocess sees -- not on the source, and not on
+        the preprocessed tensor.
+
+        Not on the source, because the two branches must read one window or the
+        enricher is attending over a different picture than it is correcting.
+        Not on the tensor, because preprocessing has already squashed it to 224
+        and normalized it, which destroys the native pixel scale the DCT exists
+        to read. So this runs here, in the worker, between the two -- which is
+        also where it is free: the image is decoded and degraded already.
+        """
 
     def __len__(self) -> int:
         return len(self.paths)
@@ -280,7 +307,7 @@ class MultiViewDataset(Dataset):
     def __getitem__(self, i: int):
         index = int(self.index[i])
         image = load_normalized(self.paths[i])
-        views = []
+        views, freqs = [], []
         for epoch in self.epochs:
             # Degrade, then crop. The recipe keeps acting at native resolution,
             # so the parameter grid keeps the calibration every earlier number
@@ -292,13 +319,20 @@ class MultiViewDataset(Dataset):
             if self.crop is not None:
                 view = self.crop(view, index)
             views.append(self.preprocess(view))
-        return torch.stack(views), index
+            if self.freq is not None:
+                freqs.append(self.freq(view))
+        # An empty (V, 0) stand-in rather than None when the frequency view is
+        # off: the item shape is then the same in both cases, so `collate_views`
+        # and `_render` need no branch and a cache rendered without frequency
+        # walks exactly the code path it always did.
+        stacked = torch.stack(freqs) if freqs else torch.empty(len(self.epochs), 0)
+        return torch.stack(views), stacked, index
 
 
 def collate_views(batch):
-    """(B, V, *input_shape) and the manifest indices, in order."""
-    views, indices = zip(*batch)
-    return torch.stack(views), list(indices)
+    """(B, V, *input_shape), (B, V, *freq_shape) and the manifest indices."""
+    views, freqs, indices = zip(*batch)
+    return torch.stack(views), torch.stack(freqs), list(indices)
 
 
 @torch.no_grad()
@@ -314,6 +348,7 @@ def build_cache(
     num_workers: int = 8,
     device=None,
     crop=None,
+    freq=None,
 ) -> CacheSpec:
     """Render the clean view plus every requested epoch, in a single pass.
 
@@ -326,7 +361,19 @@ def build_cache(
     recipe and before preprocessing -- see `pipeline.degrade.crop.SampleCrop`.
     Its identity belongs in `spec.crop_sha`, so features rendered under one
     window protocol can never be read as if they were another's.
+
+    `freq` is an optional `pipeline.freq.view.FreqExtract`, rendered as a third
+    view family alongside the features and the taps. Pass it whenever
+    `spec.freq_feature` is set; the two are reconciled below rather than trusted
+    to agree, because a spec claiming a frequency view over a directory with none
+    is a cache whose reader fails only when the enricher first asks for it.
     """
+    if (freq is not None) != (spec.freq_feature is not None):
+        raise ValueError(
+            f"freq extractor {'given' if freq is not None else 'missing'} but "
+            f"spec.freq_feature is {'set' if spec.freq_feature else 'None'}. The "
+            f"spec is what a reader trusts, so the two must agree at render time."
+        )
     split.assert_frozen()
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
@@ -338,6 +385,8 @@ def build_cache(
         rendering = [view_name(e) for e in pending]
         if spec.taps:
             rendering += [tap_view_name(e) for e in pending]
+        if spec.freq_feature is not None:
+            rendering += [freq_view_name(e) for e in pending]
         progress = _Progress(root, rendering, spec.shard_size)
         start_row = min(progress.resume_row(), spec.n)
         if start_row:
@@ -350,7 +399,7 @@ def build_cache(
             split, manifest, root, spec, schedule, pending,
             progress=progress, start_row=start_row, batch_size=batch_size,
             trunk_batch_size=trunk_batch_size, num_workers=num_workers, device=device,
-            crop=crop,
+            crop=crop, freq=freq,
         )
         progress.clear()
 
@@ -366,7 +415,7 @@ def build_cache(
 def _render(
     split, manifest, root: Path, spec: CacheSpec, schedule, pending,
     progress: _Progress, start_row: int, batch_size: int, trunk_batch_size: int,
-    num_workers: int, device, crop=None,
+    num_workers: int, device, crop=None, freq=None,
 ) -> None:
     """The single pass: decode each image once, render every pending view of it."""
     writers = [
@@ -385,11 +434,25 @@ def _render(
         for epoch in pending
     ] if spec.taps else []
 
+    # The frequency view rides along for the same reason the taps do, with one
+    # difference worth stating: it costs no GPU at all. The DCT runs in the
+    # worker on an image that is already decoded, degraded and cropped, so
+    # rendering it separately would buy a second full decode pass for arithmetic
+    # this pass performs anyway while the trunk is busy.
+    freq_writers = [
+        ShardWriter(
+            root / freq_view_name(epoch), spec, start_row=start_row,
+            feature=spec.freq_feature,
+        )
+        for epoch in pending
+    ] if spec.freq_feature is not None else []
+
     # Slicing the manifest rather than the Dataset keeps row N of the cache at
     # manifest position N: the writers start at `start_row` and the loader must
     # hand them exactly the rows from there on, in order.
     dataset = MultiViewDataset(
-        manifest.iloc[start_row:], schedule, pending, split.preprocess_fn(), crop=crop
+        manifest.iloc[start_row:], schedule, pending, split.preprocess_fn(),
+        crop=crop, freq=freq,
     )
     loader = DataLoader(
         dataset,
@@ -407,7 +470,7 @@ def _render(
     # interrupted render silently restarting from zero, hours in.
     recorded = start_row // spec.shard_size
     bar = tqdm(loader, desc=f"{root.name} x{len(writers)} views", total=len(loader))
-    for views, _ in bar:
+    for views, freqs, _ in bar:
         images, n_views = views.shape[0], views.shape[1]
         # Flatten so the trunk sees `trunk_batch_size` samples regardless of how
         # few images a batch carries -- `batch_size` is small here because an
@@ -432,10 +495,14 @@ def _render(
             writer.write(features[:, view].to(spec.feature.torch_dtype).cpu().numpy())
         for view, writer in enumerate(tap_writers):
             writer.write(taps[:, view].to(spec.tap_feature.torch_dtype).cpu().numpy())
+        # Straight from the workers -- the trunk never sees these, so unlike the
+        # features and the taps they never left the CPU.
+        for view, writer in enumerate(freq_writers):
+            writer.write(freqs[:, view].to(spec.freq_feature.torch_dtype).numpy())
 
         rows += images
         if rows // spec.shard_size > recorded:
-            for writer in (*writers, *tap_writers):
+            for writer in (*writers, *tap_writers, *freq_writers):
                 writer.flush()
             # `record` floors to whole shards, so a batch that straddles a
             # boundary checkpoints only the shards behind it; the few rows past
@@ -444,7 +511,7 @@ def _render(
             recorded = rows // spec.shard_size
         bar.set_postfix(rows=rows, refresh=False)
 
-    for writer in (*writers, *tap_writers):
+    for writer in (*writers, *tap_writers, *freq_writers):
         writer.finalize()
 
 

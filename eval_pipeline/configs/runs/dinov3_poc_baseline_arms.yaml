@@ -1,0 +1,41 @@
+# P2': the unadapted detector's retention curve, on BOTH evaluation arms.
+#
+#   python scripts/run_eval.py --config configs/runs/dinov3_poc_baseline_arms.yaml
+#
+# This is the project's first real measurement and the denominator every GRACE
+# arm is compared against. It replaces dinov3_poc_baseline.yaml, whose single
+# `resize` arm scored a benchmark on which `max(w, h)` alone reaches AUC 1.0000 --
+# so its retention curve would have described a resolution readout rather than a
+# detector.
+#
+# Both arms are scored in one run so the two columns come from one condition
+# lattice: `run_eval` builds the 26 conditions once and every detector sees
+# byte-identical degraded images, which is what makes arm (a) and arm (b)
+# comparable to each other at all.
+#
+# HOW TO READ THE TWO COLUMNS. They are not a fair fight and are not meant to be:
+#
+#   crop200   in distribution for a multi-scale-trained head, dimension shortcut
+#             0.5 by construction. THE informative arm.
+#   r512      out of distribution (training never squashes a whole image) and
+#             spectrally confounded (reals upsampled 2.56x, fakes downsampled 2x).
+#             A robustness check.
+#
+# WHAT THIS RUN DECIDES. If retention does not collapse on arm (a), GRACE has
+# nothing to repair and the frequency branch has nothing to enrich -- and that is
+# the finding, reported before anything is trained. Read it next to the
+# E-shortcut baseline, which must sit at chance on both arms: if the shortcut is
+# at chance AND retention does not move, the detector is separating on content
+# that degradation does not touch, and no adapter fixes that.
+
+run_id: dinov3_poc_baseline_arms
+
+detectors:
+  - configs/detectors/dinov3-wildfake-crop200.yaml
+  - configs/detectors/dinov3-wildfake-r512.yaml
+
+datasets:
+  - configs/datasets/wildfake_coco_dalle3.yaml
+
+max_images: null   # per class; null = all 13,841 rows
+degrade: {}        # the standard sweep: all four levels, all eleven transforms

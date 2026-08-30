@@ -7,12 +7,40 @@ before anything else touches it, and sources write a single on-disk format, so
 no container statistic is left correlated with the label.
 """
 
+from typing import NamedTuple
+
 import numpy as np
 import torch
 from PIL import Image, PngImagePlugin
 from torch.utils.data import Dataset
 
 from pipeline.utils.io import list_images
+
+
+class Inputs(NamedTuple):
+    """A model input that is more than one tensor. The exception, not the rule.
+
+    Almost every detector in this harness takes a preprocessed image and nothing
+    else, and that path is unchanged: with no auxiliary extractor the dataset
+    yields a bare tensor, `collate` stacks it, and `detector.score(batch.to(
+    device))` sees exactly what it always saw, byte for byte.
+
+    This exists for one detector shape -- a second branch that must read the
+    image in a basis preprocessing destroys. `grace.detectors.fused.FusedDetector`
+    runs a patch-DCT over the same window at NATIVE pixel scale; by the time the
+    224 tensor exists that information is gone, and it cannot be recovered from
+    the tensor at any cost. So the second read happens in the worker, beside the
+    first, and travels with it.
+
+    `.to()` is the whole interface the runner needs, because the runner's one
+    line is `detector.score(batch.to(device))`.
+    """
+
+    x: torch.Tensor
+    aux: torch.Tensor
+
+    def to(self, *args, **kwargs) -> "Inputs":
+        return Inputs(self.x.to(*args, **kwargs), self.aux.to(*args, **kwargs))
 
 # PIL caps how far it will inflate a PNG's ancillary chunks (1MB by default) as
 # a zlib-bomb guard, and raises on anything larger -- an ICC profile fatter than
@@ -60,7 +88,7 @@ class AIGCDataset(Dataset):
     """
 
     def __init__(self, manifest, preprocess=None, condition=None, seed: int = 0,
-                 crop=None):
+                 crop=None, aux=None):
         self.paths = manifest["path"].tolist()
         self.labels = manifest["label"].tolist()
         self.generators = manifest["generator"].tolist()
@@ -80,6 +108,16 @@ class AIGCDataset(Dataset):
         be identical across all 26 conditions: the retention denominator compares
         one image clean against itself degraded, and a per-condition window would
         quietly make that a comparison between two different pictures.
+        """
+        self.aux = aux
+        """Optional `(image) -> tensor`, run on the same degraded image the
+        preprocessing sees, from `detector.aux_fn()`.
+
+        None for every detector in this harness but the fused one -- see
+        `Inputs`. It runs HERE, in the worker, rather than in the model, because
+        what it reads (native pixel scale) does not survive preprocessing, and
+        because eight workers doing DCTs while the GPU runs the trunk is free
+        where a serial pass in the parent is not.
         """
 
     def __len__(self) -> int:
@@ -106,7 +144,13 @@ class AIGCDataset(Dataset):
             # which transforms co-occurred, independent of their parameters.
             "transforms": transforms,
         }
-        return self.preprocess(img), meta
+        if self.aux is None:
+            return self.preprocess(img), meta
+        # Both branches read `img` -- the same degraded pixels, before the
+        # 224 squash. That the two see one window is the invariant the whole
+        # frequency branch rests on, and it is enforced by there being one
+        # variable here rather than by anything asserting it.
+        return Inputs(self.preprocess(img), self.aux(img)), meta
 
 
 class ImageFolderDataset(Dataset):
@@ -131,6 +175,18 @@ def collate(batch):
 
     The default collate would transpose the meta dicts into dicts of batched
     columns; the runner wants them per image.
+
+    An `Inputs` item stacks both of its tensors and stays an `Inputs`. The
+    auxiliary tensor is fixed-shape by construction -- `extract_freq` emits
+    `(196, 192)` whatever the window size -- so it stacks with no special
+    handling, which is a property of the extractor rather than luck.
     """
     tensors, metas = zip(*batch)
-    return torch.stack(tensors), list(metas)
+    if isinstance(tensors[0], Inputs):
+        stacked = Inputs(
+            torch.stack([t.x for t in tensors]),
+            torch.stack([t.aux for t in tensors]),
+        )
+    else:
+        stacked = torch.stack(tensors)
+    return stacked, list(metas)

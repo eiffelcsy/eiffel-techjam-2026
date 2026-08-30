@@ -1,0 +1,31 @@
+# The TRAINING view: multi-scale crops at native pixel scale.
+#
+# Identical to dinov3-wildfake.yaml but for `input_mode`, which is the swept key.
+# It does not change the transform this detector applies -- `multiscale` resolves
+# to the same processor squash `resize` does -- because by the time preprocessing
+# runs the window has already been chosen, upstream, in the dataset, where it can
+# be seeded on the image index. See pipeline.degrade.crop.
+#
+# What it changes is the head's RECORDED provenance. `train_probe.py` stamps
+# `input_mode` into the checkpoint, and `_assert_head_matches` reads it back to
+# decide which views the head may be scored under. Without a distinct name here,
+# a head fit on 128-512px windows would be stamped `resize`, and would then load
+# cheerfully into a detector that feeds whole images -- scoring a feature space it
+# has never seen, silently. `probe.train._assert_crop_matches_input_mode` refuses
+# the mismatch from the other side too, so the mode and the `crop:` block in the
+# probe config cannot drift apart.
+#
+# This detector is what stage 0 and the cache render use. It is NOT an evaluation
+# arm: the two arms are dinov3-wildfake-crop200.yaml and dinov3-wildfake-r512.yaml,
+# both of which load THIS head.
+
+name: dinov3-wildfake-multiscale
+target: pipeline.detectors.dinov3.DINOv3MLPDetector
+args:
+  backbone_id: facebook/dinov3-vits16-pretrain-lvd1689m
+  head_checkpoint: ../grace_adapter/checkpoints/probe/dinov3_wildfake_multiscale/head.pt
+  pool: cls+patchmean
+  input_mode: multiscale   # THE swept key (reference: resize)
+  hidden: 512
+  n_layers: 2
+device: auto

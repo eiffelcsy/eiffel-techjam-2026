@@ -283,6 +283,104 @@ wandb:                      # off by default. summary.json next to the checkpoin
                             # outbound network.
 
 
+# ------------------------------------------------- the multi-scale window ----
+# `crop:` appears on the probe, cache, stage-1 and both stage-2 configs. It is
+# the same block everywhere and it must hold the same numbers everywhere -- a
+# head fit at 128-448 and a cache rendered at 128-512 are not two settings of a
+# knob, they are a head scored on a feature space it was never fit on.
+#
+# OFF BY DEFAULT, so every config predating it keeps whole-image behaviour.
+
+crop:
+  enabled: false
+  s_min: 128
+  s_max: null               # NO DEFAULT, and enabling the crop without it RAISES.
+                            # The largest window every image can supply from its
+                            # own pixels is a property of the CORPUS: draw beyond
+                            # it and one class clamps more than the other, so the
+                            # realized crop size becomes the label. On
+                            # wildfake_test an unaudited 128-512 range scores
+                            # E-cropsize 0.9895 by itself, which is almost exactly
+                            # the shortcut the crop was introduced to remove. Run
+                            # eval_pipeline/scripts/audit_sizes.py and write down
+                            # what it says.
+  policy: uniform           # uniform | log_uniform. `uniform` puts most of its
+                            # mass at the coarse end -- 3/4 of draws from [128,
+                            # 512] exceed 224 and are therefore downsampled by
+                            # preprocessing. `log_uniform` spreads it evenly over
+                            # scale; it is E16, not the default.
+  seed: 0
+
+
+# ------------------------------------------------- the frequency side-view ----
+# `freq:` on a cache config renders the patch-DCT view alongside the features;
+# on a stage-2-enrich config it declares which protocol that run expects, and
+# `freq_sha` refuses a cache that disagrees.
+#
+# THE VIEW COUNT IS RESUMABLE AND THE COEFFICIENT SET IS NOT. Adding epochs to a
+# rendered cache costs only the new epochs; changing patch/grid/radial rewrites
+# every frequency byte. So render few views and full coefficients.
+
+freq:
+  enabled: false
+  patch: 8                  # JPEG's block size, so the block-boundary artefacts
+                            # the JPEG family produces land on coefficients this
+                            # basis resolves rather than smearing across it
+  grid: 14                  # 196 cells, one per DINOv3 patch token at 224, and
+                            # FIXED across the whole 128-512px crop range -- which
+                            # is what lets one rendered view serve every scale
+  channels: 3               # 1 or 3. Collapsing to luma would drop chromatic
+                            # artefacts, which is an ablation, not a saving.
+  radial: true              # order coefficients by radial spatial frequency, so a
+                            # band is a contiguous slice. `top_k` assumes it.
+  norm: log1p               # the only implemented value; it is a field because it
+                            # is fingerprinted
+
+
+# --------------------------------------------- train, stage 2 (enrichment) ----
+# configs/train/<name>_enrich.yaml -- the FREQUENCY branch. A sibling of the
+# discrepancy stage above, not a replacement: both freeze the same adapter and
+# both use labels, and they differ in what they read.
+
+run_id: dinov3_enrich
+cache_dir: cache_freq/dinov3-wildfake-multiscale
+adapter_checkpoint: checkpoints/grace/dinov3_multiscale/ema.pt
+
+epochs: 4
+batch_size: 256
+lr: 0.001
+lam_anchor: 0.1             # weight on ||fused - f_corrected||. 0 is E15. It is
+                            # what keeps this an ENRICHMENT rather than a
+                            # supervised re-fit of the seam: without it nothing
+                            # stops the module walking the features to wherever
+                            # the frozen head separates this corpus.
+finetune_head: false        # E14's second arm. Read `parallel_fraction` from
+                            # analyze_drift.py before choosing: round 1 measured
+                            # 0.0298, meaning 97% of drift lay where the frozen
+                            # head cannot see -- and if that holds, a frozen head
+                            # reduces this whole module to a scalar logit shift.
+head_lr: 0.0001             # an order below the enricher's: the head arrives
+                            # trained, and the arm asks whether it can be adjusted
+
+enricher:
+  d_model: 256              # attention width, and almost all the parameters
+  n_heads: 4
+  n_bands: 2                # HF and LF. 1 is E11's single-branch control. Two,
+                            # because blur DESTROYS high frequencies and gaussian
+                            # noise ADDS them -- opposite directions that one gate
+                            # cannot express.
+  dropout: 0.0
+  gate_init: -4.0           # sigmoid(-4) ~= 0.018. Belt to the zero-initialised
+                            # output projections' braces; the EXACT identity comes
+                            # from the projections, not from this.
+  severity_film: true       # condition the gates on stage 1's predicted severity
+  pos_emb: true             # learned 2D per-cell embedding; false is E13
+  top_k: null               # keep the k lowest radial coefficients PER CHANNEL.
+                            # Applied at read time over a fully rendered view, so
+                            # sweeping it costs no re-render. E13.
+  learn_masks: true         # false pins the band masks to their initialisation
+
+
 # -------------------------------------------------------------- detectors ----
 # configs/detectors/<name>+grace.yaml
 # Written in the HARNESS's DetectorConfig shape, because the harness reads it.

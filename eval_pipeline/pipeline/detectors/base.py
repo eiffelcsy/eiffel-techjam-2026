@@ -44,6 +44,23 @@ class FrozenDetector(nn.Module, ABC):
         """
         return self.preprocess
 
+    def aux_fn(self) -> Callable[[Image.Image], torch.Tensor] | None:
+        """A SECOND read of the same image, or None -- which is the default and
+        the case for every detector but one.
+
+        Returning None keeps the harness on its original path exactly: the
+        dataset yields a bare tensor, `collate` stacks it, and `forward` receives
+        what it always received. Returning a callable makes `forward` receive a
+        `pipeline.data.dataset.Inputs` instead.
+
+        It exists because some information cannot be recovered downstream of
+        preprocessing at any cost. `grace.detectors.fused.FusedDetector` needs a
+        patch-DCT at native pixel scale, and the 224px normalized tensor no
+        longer contains it. Same picklability contract as `preprocess_fn`: the
+        callable is forked into DataLoader workers and must hold no model.
+        """
+        return None
+
     @abstractmethod
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Batch of inputs -> (B,) logits. Higher = more likely generated."""

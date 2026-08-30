@@ -23,7 +23,9 @@ from typing import Any
 import yaml
 
 from grace.cache.schedule import DEFAULT_LEVEL_WEIGHTS
+from grace.splits.base import FeatureSpec
 from pipeline.degrade.crop import POLICIES, SampleCrop
+from pipeline.freq.view import FreqExtract
 
 
 @dataclass
@@ -84,6 +86,89 @@ class CropConfig:
         rather than a missing value -- see the field's own note."""
         crop = self.build()
         return crop.fingerprint() if crop is not None else ""
+
+
+@dataclass
+class FreqConfig:
+    """The patch-DCT side-view rendered alongside the features.
+
+    Off by default, so every cache config predating the frequency branch renders
+    exactly what it always did and every cache already on disk stays readable.
+
+    These five numbers are a RENDER-TIME COMMITMENT, and the asymmetry with the
+    view count is the reason they are fingerprinted. Views are resumable --
+    `build_cache` skips finished ones, so epochs 6-14 can be added to a rendered
+    cache later at zero rework. The coefficient set is not: change `patch`,
+    `grid` or `radial` and every frequency byte in the directory has to be
+    written again. So take the cheap side of the reversible knob (render few
+    views) and the safe side of the irreversible one (render full coefficients),
+    and let `freq_sha` refuse the mismatch rather than discovering it in a
+    training curve.
+
+    `channels` is 3 and is not a knob: `extract_freq` reads whatever the decoded
+    RGB image has, and the field exists so the declared shape and the fingerprint
+    can be computed without decoding one. Chromatic artefacts are among the
+    things a generation trace shows up in, so collapsing to luma would be a
+    deliberate ablation rather than a saving -- and it is not one this ships.
+    """
+
+    enabled: bool = False
+    patch: int = 8
+    """DCT block side. 8 is JPEG's, so the block-boundary artefacts the JPEG
+    degradation family produces land on coefficients this basis resolves."""
+    grid: int = 14
+    """Cells per side after adaptive pooling. 14x14 = 196, one per DINOv3 patch
+    token at 224, and fixed across the whole 128-512px crop range -- which is
+    what makes one rendered view serve every scale the draw produces."""
+    channels: int = 3
+    radial: bool = True
+    """Order coefficients by radial spatial frequency, so a band is a contiguous
+    slice of the coefficient axis. The enricher's band masks and E13's top-k
+    both assume it."""
+    norm: str = "log1p"
+
+    def __post_init__(self):
+        if not self.enabled:
+            return
+        if self.patch < 2 or self.patch & (self.patch - 1):
+            raise ValueError(
+                f"freq.patch must be a power of two >= 2, got {self.patch}. The "
+                f"DCT is taken per block and 8 is JPEG's block size."
+            )
+        if self.grid < 1:
+            raise ValueError(f"freq.grid must be >= 1, got {self.grid}")
+        if self.channels not in (1, 3):
+            raise ValueError(f"freq.channels must be 1 or 3, got {self.channels}")
+        if self.norm != "log1p":
+            raise ValueError(
+                f"freq.norm: only 'log1p' is implemented, got {self.norm!r}. It is "
+                f"a field rather than a constant because it is fingerprinted -- "
+                f"adding a second one must invalidate every rendered view."
+            )
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return (self.grid * self.grid, self.channels * self.patch * self.patch)
+
+    def feature(self) -> FeatureSpec | None:
+        """`CacheSpec.freq_feature`. `tokens` layout: the cell axis is a group
+        axis exactly as a `tokens` seam's patch axis is, which is what lets
+        `ShardWriter` and `_gather` carry it with no new on-disk format."""
+        if not self.enabled:
+            return None
+        return FeatureSpec(layout="tokens", shape=self.shape)
+
+    def build(self) -> FreqExtract | None:
+        """The `(image) -> tensor` the render path applies in its workers."""
+        if not self.enabled:
+            return None
+        return FreqExtract(patch=self.patch, grid=self.grid, radial=self.radial)
+
+    def fingerprint(self) -> str:
+        """`CacheSpec.freq_sha`. Empty when disabled, which pairs with a
+        `freq_feature` of None -- the two are set and cleared together."""
+        extract = self.build()
+        return "" if extract is None else extract.fingerprint(self.channels, self.norm)
 
 
 @dataclass
@@ -229,6 +314,15 @@ class CacheConfig:
     """
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     crop: CropConfig = field(default_factory=CropConfig)
+    freq: FreqConfig = field(default_factory=FreqConfig)
+    """Render the DCT side-view too. See `FreqConfig`.
+
+    Note what this does NOT change: the number of views. A frequency cache is a
+    separate render with its own `out_dir` and its own (smaller) `n_epochs`,
+    because the frequency branch trains a small module over a few epochs while
+    stage 1 wants fifteen -- and because the coefficient set is the irreversible
+    knob, so the view count is where the saving is taken.
+    """
 
 
 @dataclass
@@ -486,6 +580,169 @@ class DiscrepancyTrainConfig:
             raise ValueError(f"log_every must be >= 1, got {self.log_every}")
 
 
+@dataclass
+class EnricherConfig:
+    """The frequency enricher's geometry. Its OWN config, not `AdapterConfig`'s.
+
+    Deliberately a separate dataclass with a separate checkpoint, following
+    `DiscrepancyConfig`. `load_adapter` rebuilds a stage-1 module with
+    `AdapterConfig(**payload["adapter_cfg"])`, so every field on that dataclass
+    is a checkpoint-compatibility surface: adding one there would brick all 25
+    existing adapter checkpoints the same way `noise_dim` did. Adding one here
+    costs nothing, because nothing has been trained against it yet.
+    """
+
+    d_model: int = 256
+    """Width of the attention. The queries are projected down from the 768-d
+    seam, so this is the enricher's capacity knob and almost all of its
+    parameters."""
+    n_heads: int = 4
+    n_bands: int = 2
+    """Band experts. 2 = the HF/LF pair, 1 = the single-branch control (E11).
+
+    Two because blur-type damage (high frequencies destroyed) and noise-type
+    damage (high frequencies ADDED) move the same coefficients in opposite
+    directions, and one expert reading both has to represent that with a single
+    set of weights and a single gate. Each expert owns its band mask, its K/V
+    projection, its output projection and its gate, so the two can specialise
+    completely -- including to the point of one of them staying shut, which is
+    what makes E11 readable.
+    """
+    dropout: float = 0.0
+    gate_init: float = -4.0
+    """Logit each expert's gate starts at; sigmoid(-4) ~= 0.018. Belt to the
+    zero-initialised output projections' braces -- the exact identity comes from
+    the projections, not from this (see `grace.models.frequency`)."""
+    severity_film: bool = True
+    """Condition the gates on the predicted severity, reusing stage 1's scalar.
+    'How much should I trust the frequency read' is a different question at
+    JPEG-90 and JPEG-30, and severity is the only input that distinguishes
+    them."""
+    pos_emb: bool = True
+    """Learned per-cell position embedding. Off is one half of E13: without it
+    the 196 cells are an unordered set and the attention cannot express 'the
+    high-band energy in the top-left corner', only 'somewhere'."""
+    top_k: int | None = None
+    """Keep only the `k` lowest radial frequencies PER CHANNEL. None = all.
+
+    The other half of E13. Meaningful only because `radial: true` makes a
+    frequency band a contiguous slice, so 'top-k' means the k lowest
+    frequencies rather than the k first in raster order. Applied at read time
+    over the full rendered view, so sweeping it costs no re-render -- which is
+    exactly why the cache stores full coefficients.
+    """
+    learn_masks: bool = True
+    """Let the band masks move off their hard initialisation. False pins them
+    to `band_masks`, making the split a fixed decomposition rather than a
+    learned one."""
+
+    def __post_init__(self):
+        if self.n_bands < 1:
+            raise ValueError(f"enricher.n_bands must be >= 1, got {self.n_bands}")
+        if self.d_model % self.n_heads:
+            raise ValueError(
+                f"enricher.d_model ({self.d_model}) must divide evenly by n_heads "
+                f"({self.n_heads})"
+            )
+        if self.top_k is not None and self.top_k < 1:
+            raise ValueError(f"enricher.top_k must be >= 1 or null, got {self.top_k}")
+
+
+@dataclass
+class EnrichTrainConfig:
+    """Stage 2 for the frequency branch. The adapter is frozen, as in GRACE-D.
+
+    Separate from `DiscrepancyTrainConfig` because they train different modules
+    against different inputs, and sharing one dataclass would put every field of
+    each on the other. What they DO share is the invariant: the label-free
+    adapter is a finished artifact before either begins, and both ship it
+    unchanged.
+    """
+
+    run_id: str
+    cache_dir: str
+    adapter_checkpoint: str
+    epochs: int = 4
+    batch_size: int = 256
+    lr: float = 1e-3
+    weight_decay: float = 0.01
+    lam_anchor: float = 0.1
+    """Weight on `||fused - f_corrected||`. 0 is E15's unanchored arm.
+
+    The enricher is trained supervised against labels, so nothing in the
+    objective otherwise stops it from walking the features somewhere the frozen
+    head happens to separate on this corpus -- which is a content classifier
+    wearing the adapter's output as a starting point. The anchor says the
+    enrichment is a correction to the corrected features, not a replacement for
+    them.
+    """
+    finetune_head: bool = False
+    """Train a COPY of the detector's head alongside the enricher. E14's second
+    arm.
+
+    Not a default, and shipped as a first-class arm rather than an afterthought,
+    because round 1 measured `parallel_fraction = 0.0298`: 97% of feature drift
+    lay in directions the frozen head does not read. If that holds here, a frozen
+    head reduces the whole cross-attention enricher to a scalar logit shift --
+    the same function class as GRACE-D's aux logit, at a thousand times the
+    parameter count. Read E0-drift on this corpus BEFORE choosing, and read
+    `parallel_fraction` as the predicted ceiling on the frozen arm.
+
+    What the frozen arm buys is the head's provenance: it is the head the
+    baseline was measured with, so a gain is attributable to the features. The
+    fine-tuned arm gives that up. Report both.
+    """
+    head_lr: float = 1e-4
+    """Learning rate for the head copy when `finetune_head`. An order below the
+    enricher's: the head arrives trained, and the arm is asking whether it can be
+    *adjusted* to read enriched features, not re-fit from scratch."""
+    num_workers: int = 4
+    seed: int = 0
+    device: str = "auto"
+    out_dir: str = "checkpoints/grace/"
+    detector: str = ""
+    """The harness detector config. Needed even though no trunk runs: the frozen
+    head is what the BCE is taken through."""
+    split: str = ""
+    split_args: dict = field(default_factory=dict)
+    dataset: str = ""
+    val_datasets: list[str] = field(default_factory=list)
+    val_cache_dirs: list[str] = field(default_factory=list)
+    log_every: int = 50
+    enricher: EnricherConfig = field(default_factory=EnricherConfig)
+    crop: CropConfig = field(default_factory=CropConfig)
+    """Stage 2 decodes no images, but it still names the window protocol: it is
+    `crop_sha` that stops it reading a whole-image cache as though the stage-1
+    adapter it is freezing had been trained on one. Set it to whatever stage 1
+    used."""
+    freq: FreqConfig = field(default_factory=FreqConfig)
+    """The extraction protocol this run expects the cache to carry, and the one
+    stamped into the enricher checkpoint. Checked against `spec.freq_sha` at
+    startup: same shape, different frequencies is the mismatch that would
+    otherwise train quietly and score nonsense, because the band masks are
+    indexed by position along the coefficient axis."""
+    wandb: WandbConfig = field(default_factory=WandbConfig)
+
+    def __post_init__(self):
+        if self.log_every < 1:
+            raise ValueError(f"log_every must be >= 1, got {self.log_every}")
+        if len(self.val_datasets) != len(self.val_cache_dirs):
+            raise ValueError(
+                f"val_datasets has {len(self.val_datasets)} entry(s) but "
+                f"val_cache_dirs has {len(self.val_cache_dirs)}. They are parallel "
+                f"lists -- each dataset needs the cache root it was rendered to."
+            )
+        if not self.freq.enabled:
+            raise ValueError(
+                "freq.enabled must be true for an enrichment run -- the whole "
+                "stage reads the frequency view. Point cache_dir at a cache "
+                "rendered with configs/cache/wildfake_freq.yaml and set the same "
+                "`freq:` block here."
+            )
+        if self.lam_anchor < 0:
+            raise ValueError(f"lam_anchor must be >= 0, got {self.lam_anchor}")
+
+
 def read_yaml(path: str | Path) -> Any:
     with Path(path).open(encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
@@ -525,3 +782,7 @@ def load_train_config(path: str | Path) -> TrainConfig:
 
 def load_discrepancy_config(path: str | Path) -> DiscrepancyTrainConfig:
     return _build(DiscrepancyTrainConfig, read_yaml(path))
+
+
+def load_enrich_config(path: str | Path) -> EnrichTrainConfig:
+    return _build(EnrichTrainConfig, read_yaml(path))

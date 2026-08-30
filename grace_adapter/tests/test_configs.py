@@ -11,7 +11,8 @@ import pytest
 import yaml
 
 from grace.config import (
-    load_cache_config, load_discrepancy_config, load_probe_config, load_train_config,
+    load_cache_config, load_discrepancy_config, load_enrich_config, load_probe_config,
+    load_train_config,
 )
 
 CONFIGS = Path(__file__).resolve().parent.parent / "configs"
@@ -34,25 +35,124 @@ drifts internally; they can no longer catch one that is shaped around DINOv3
 alone, because there is nothing left to compare against."""
 
 
+CROP_CONFIGS = {
+    "probe/dinov3_wildfake_multiscale.yaml",
+    "cache/dinov3_multiscale.yaml",
+    "cache/dinov3_multiscale_val.yaml",
+    "cache/wildfake_freq.yaml",
+    "cache/wildfake_freq_val.yaml",
+    "train/dinov3_multiscale.yaml",
+    "train/dinov3_enrich.yaml",
+}
+"""Every config carrying the multi-scale window protocol.
+
+Seven files rather than one because the number has to be restated wherever the
+protocol is: stage 0 fits the head on those windows, four caches render them, and
+two training runs fingerprint them. `after_fetch.sh --write-range` writes all
+seven from one audit; `test_every_crop_config_agrees_on_the_range` is what stops
+them drifting apart afterwards."""
+
+AWAITING_AUDIT: set[str] = set()
+"""The subset of CROP_CONFIGS that must still REFUSE to load.
+
+`crop.s_max` is the largest window every image in the corpus can supply from its
+own pixels, and it is a property of the corpus rather than of the method: draw
+beyond it and one class clamps more than the other, so the realized crop size
+becomes a classifier and the augmentation hands back the shortcut it was added to
+remove. On wildfake_test an unaudited 128-512 range scores 0.9895 that way. So
+these ship with `s_max` absent and raise on load -- the refusal IS the feature.
+
+EMPTIED 2026-08-30, when `audit_sizes.py` measured the training corpus and
+`--write-range` wrote s_max: 256 into all seven. It is deliberately still here
+and still separate from CROP_CONFIGS: the next corpus needs the same forcing
+function, and re-populating this set is how it gets one."""
+
+STAGE_TWO = {"discrepancy", "enrich"}
+"""Filename markers for the two stage-2 families, which load through their own
+dataclasses. `train/` holds three kinds of run now, not two."""
+
+
+def _audited(subdir, path) -> bool:
+    return f"{subdir}/{path.name}" in AWAITING_AUDIT
+
+
 @pytest.mark.parametrize("path", _paths("probe"), ids=lambda p: p.name)
 def test_probe_configs_load(path):
     """Stage 0, PoC only. `out: ""` is not a mistake -- it means "take the path
     from the detector config", which is what keeps it written down once."""
+    if _audited("probe", path):
+        pytest.skip("refuses to load until audited; see test_the_crop_range_must_be_audited")
     cfg = load_probe_config(path)
     assert cfg.epochs > 0 and cfg.detector and cfg.dataset
     assert cfg.n_layers >= 1
 
 
+LOADERS = {
+    "probe": load_probe_config,
+    "cache": load_cache_config,
+    "train": load_train_config,
+}
+
+
+@pytest.mark.parametrize("name", sorted(AWAITING_AUDIT))
+def test_the_crop_range_must_be_audited(name):
+    """The forcing function, tested rather than trusted.
+
+    Once `scripts/after_fetch.sh --write-range` writes the audited `s_max` in,
+    this test starts failing -- and that failure is the signal to empty
+    AWAITING_AUDIT, not to soften the check."""
+    subdir, filename = name.split("/")
+    loader = LOADERS[subdir]
+    if subdir == "train" and any(m in filename for m in STAGE_TWO):
+        loader = load_enrich_config if "enrich" in filename else load_discrepancy_config
+    with pytest.raises(ValueError, match="audit_sizes"):
+        loader(CONFIGS / subdir / filename)
+
+
+def test_every_crop_config_agrees_on_the_range():
+    """One measurement, restated in seven files, and they must not drift.
+
+    The crop range is a property of the CORPUS, so a stage-0 head fit at 128-448
+    and a cache rendered at 128-512 are not two settings of a knob -- they are a
+    head scored on a feature space it was never fit on, which is exactly what
+    `crop_sha` and `_assert_head_matches` exist to refuse one layer down. Here it
+    is caught before anything runs.
+
+    Reads the YAML rather than the dataclass so it still says something while
+    `s_max` is unset: seven files with no `s_max` agree, vacuously and correctly.
+
+    Ranges over CROP_CONFIGS, not AWAITING_AUDIT. Those were one set until the
+    audit landed, at which point iterating the empty one would have quietly
+    turned this into a test of nothing -- exactly when it began to matter.
+    """
+    ranges = {}
+    for name in sorted(CROP_CONFIGS):
+        raw = yaml.safe_load((CONFIGS / name).read_text()).get("crop") or {}
+        ranges[name] = (raw.get("s_min"), raw.get("s_max"), raw.get("policy"),
+                        raw.get("seed"))
+    assert len(set(ranges.values())) == 1, (
+        f"the crop range differs across configs that must share it:\n  "
+        + "\n  ".join(f"{k}: s_min={v[0]} s_max={v[1]} policy={v[2]} seed={v[3]}"
+                      for k, v in ranges.items())
+    )
+
+
 @pytest.mark.parametrize("path", _paths("cache"), ids=lambda p: p.name)
 def test_cache_configs_load(path):
+    if _audited("cache", path):
+        pytest.skip("refuses to load until audited; see test_the_crop_range_must_be_audited")
     cfg = load_cache_config(path)
     assert cfg.n_epochs > 0 and cfg.split
 
 
 @pytest.mark.parametrize(
-    "path", [p for p in _paths("train") if "discrepancy" not in p.name], ids=lambda p: p.name
+    "path",
+    [p for p in _paths("train") if not any(m in p.name for m in STAGE_TWO)],
+    ids=lambda p: p.name,
 )
 def test_stage_one_configs_load(path):
+    if _audited("train", path):
+        pytest.skip("refuses to load until audited; see test_the_crop_range_must_be_audited")
     cfg = load_train_config(path)
     assert cfg.target_view in ("clean", "degraded")
     assert cfg.source in ("cache", "live")
@@ -65,6 +165,29 @@ def test_stage_one_configs_load(path):
 )
 def test_stage_two_configs_load(path):
     assert load_discrepancy_config(path).adapter_checkpoint
+
+
+@pytest.mark.parametrize(
+    "path", [p for p in _paths("train") if "enrich" in p.name], ids=lambda p: p.name
+)
+def test_enrich_configs_load(path):
+    if _audited("train", path):
+        pytest.skip("refuses to load until audited; see test_the_crop_range_must_be_audited")
+    cfg = load_enrich_config(path)
+    assert cfg.adapter_checkpoint and cfg.freq.enabled
+    assert cfg.lam_anchor >= 0
+
+
+def test_an_enrich_config_without_the_freq_view_is_rejected(tmp_path):
+    """The whole stage reads the frequency view, so `freq.enabled: false` is not
+    a smaller run -- it is a run whose every step would fail on a missing memmap
+    several minutes in, or worse, train an enricher over zeros."""
+    path = tmp_path / "no_freq.yaml"
+    path.write_text(
+        "run_id: x\ncache_dir: y\nadapter_checkpoint: z\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="freq.enabled"):
+        load_enrich_config(path)
 
 
 def test_unknown_key_is_rejected(tmp_path):
@@ -84,6 +207,18 @@ def test_nested_unknown_key_is_rejected(tmp_path):
         load_train_config(path)
 
 
+GRACE_DETECTORS = {
+    "grace.detectors.adapted.AdaptedDetector",
+    "grace.detectors.fused.FusedDetector",
+}
+"""The two detector classes this package puts into the harness.
+
+`AdaptedDetector` takes one tensor and walks the harness's original path.
+`FusedDetector` takes an `Inputs` pair, because the DCT branch has to read the
+image at native pixel scale and that does not survive preprocessing. Anything
+else appearing here is a config pointed at a class the harness cannot build."""
+
+
 @pytest.mark.parametrize("path", _paths("detectors"), ids=lambda p: p.name)
 def test_detector_configs_are_in_the_harness_shape(path):
     """These are read by eval_pipeline, not by grace, so they must match its
@@ -91,8 +226,35 @@ def test_detector_configs_are_in_the_harness_shape(path):
     from pipeline.config import load_detector_config
 
     cfg = load_detector_config(path)
-    assert cfg.target == "grace.detectors.adapted.AdaptedDetector"
+    assert cfg.target in GRACE_DETECTORS
     assert "base" in cfg.args and "split" in cfg.args
+
+
+@pytest.mark.parametrize(
+    "arm", ["crop200", "r512"]
+)
+def test_freq_arms_differ_from_their_control_in_one_key(arm):
+    """E10 and E12 are read off three files that must be one key apart.
+
+    `+grace` is the control, `+grace-freq-null` must reproduce it exactly, and
+    `+grace-freq` is the measurement. If they wrapped different bases or loaded
+    different adapters, the difference between their result files would be two
+    changes and neither experiment would mean anything.
+    """
+    raws = {
+        suffix: yaml.safe_load(
+            (CONFIGS / f"detectors/dinov3-{arm}+{suffix}.yaml").read_text()
+        )
+        for suffix in ("grace", "grace-freq-null", "grace-freq")
+    }
+    assert len({r["args"]["base"] for r in raws.values()}) == 1
+    assert len({r["args"]["split"] for r in raws.values()}) == 1
+    assert len({r["args"]["checkpoint"] for r in raws.values()}) == 1
+    assert raws["grace-freq-null"]["args"]["enricher"] is None
+    assert raws["grace-freq"]["args"]["enricher"] is not None
+    # The base must be the eval arm this file is named for, or the two-column
+    # table silently reports one arm twice.
+    assert raws["grace"]["args"]["base"].endswith(f"dinov3-wildfake-{arm}.yaml")
 
 
 @pytest.mark.parametrize("family", FAMILIES)
@@ -244,3 +406,22 @@ def test_manifest_paths_resolve_the_same_from_either_package(path):
         f"{path.name}: manifests belong under the repo-root data/ directory, "
         f"got {from_harness}"
     )
+
+
+@pytest.mark.parametrize("name", sorted(CROP_CONFIGS))
+def test_crop_configs_load_once_audited(name):
+    """The other side of the forcing function.
+
+    While a config is in AWAITING_AUDIT it must refuse; once the audit has
+    written `s_max` it must load AND carry a real range. Without this, emptying
+    AWAITING_AUDIT would leave nothing asserting these files work at all.
+    """
+    if name in AWAITING_AUDIT:
+        pytest.skip("still awaiting the audit")
+    subdir, filename = name.split("/")
+    loader = LOADERS[subdir]
+    if subdir == "train" and any(m in filename for m in STAGE_TWO):
+        loader = load_enrich_config if "enrich" in filename else load_discrepancy_config
+    cfg = loader(CONFIGS / subdir / filename)
+    assert cfg.crop.enabled
+    assert cfg.crop.s_max is not None and cfg.crop.s_max >= cfg.crop.s_min

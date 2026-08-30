@@ -1,0 +1,59 @@
+# The FREQUENCY cache: spatial features and the patch-DCT view, one render.
+#
+#   python scripts/build_cache.py configs/cache/wildfake_freq.yaml --dry-run
+#   python scripts/build_cache.py configs/cache/wildfake_freq.yaml
+#
+# One key apart from configs/cache/dinov3_multiscale.yaml -- `freq.enabled` --
+# plus the view count and the out_dir that follow from it.
+#
+# BOTH VIEWS IN ONE ROOT, on purpose. Stage 2 reads `f_deg` and `freq_deg` for
+# the same row in the same step, and a second root would mean two caches whose
+# alignment nothing checks: same manifest, same crop draw, same schedule, and no
+# single fingerprint saying so. Here `index.npy` is shared by every view in the
+# directory, which is the property `test_freq_cache_alignment` rests on.
+#
+# CLEAN + 5 DEGRADED + 1 HELD-OUT, not 15. The asymmetry is deliberate and it is
+# the cheap side of the reversible knob:
+#
+#   views        RESUMABLE. `build_cache` skips finished views and recipes are
+#                stored, so epochs 6-14 can be added later at zero rework.
+#   coefficients NOT resumable. Change `freq.patch`, `freq.grid` or
+#                `freq.radial` and every frequency byte is written again.
+#
+# So the view count is where the saving is taken and the coefficient set ships at
+# its safest setting (full, radially ordered). Stage 2 trains a 1.5M-parameter
+# module; the view count is not its binding constraint.
+#
+# THE COST. The DCT view is ~73.5 KB an image-view against the features' 1.5 KB
+# -- 49x -- so `--dry-run` first, always. At 60,000 images x 7 views that is
+# about 31 GB. The arithmetic itself is free: it runs in the DataLoader workers
+# on an image that is already decoded, degraded and cropped, while the GPU is
+# busy with the trunk.
+
+detector: ../eval_pipeline/configs/detectors/dinov3-wildfake-multiscale.yaml
+split: grace.splits.dinov3.DINOv3Split
+dataset: ../eval_pipeline/configs/datasets/wildfake_train.yaml
+
+out_dir: cache_freq/
+n_epochs: 5
+n_val_epochs: 1
+batch_size: 8
+trunk_batch_size: 128
+num_workers: 8
+
+schedule: {}
+
+freq:
+  enabled: true      # THE swept key (reference: configs/cache/dinov3_multiscale.yaml)
+  patch: 8           # JPEG's block size, so JPEG artefacts land on resolvable coefficients
+  grid: 14           # 196 cells, one per DINOv3 patch token at 224, fixed across 128-512px
+  channels: 3
+  radial: true       # a band is then a contiguous slice, which E13's top-k needs
+  norm: log1p
+
+crop:
+  enabled: true
+  s_min: 128
+  policy: uniform
+  seed: 0
+  s_max: 256          # from results/audit_sizes__wildfake-train.json

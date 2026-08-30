@@ -45,6 +45,16 @@ directory layout untouched: a cache without taps is byte-identical to one
 rendered before taps existed.
 """
 
+FREQ_DIR = "freq"
+"""The DCT side-view, nested for exactly the reasons `TAP_DIR` is.
+
+Taps and frequency are the same mechanism -- a named side channel rendered
+alongside the features, one directory per view, its own `FeatureSpec` -- so this
+is a second name in an existing scheme rather than a second scheme. `_gather` and
+`ShardWriter` were already parameterized by `feature`, which is what made
+generalising cheaper than mirroring.
+"""
+
 
 def view_name(epoch: int | None) -> str:
     return CLEAN_VIEW if epoch is None else f"epoch={epoch:03d}"
@@ -59,6 +69,17 @@ def tap_view_name(epoch: int | None) -> str:
     analysis scripts without a re-render.
     """
     return f"{TAP_DIR}/{view_name(epoch)}"
+
+
+def freq_view_name(epoch: int | None) -> str:
+    """The frequency view paired with `view_name(epoch)` -- `freq/epoch=003`.
+
+    Rendered for the clean view too, and unlike the clean taps this one IS read:
+    `analyze_freq.py` compares clean band energies against degraded ones, and it
+    is the clean view that says what a band looks like before any transform
+    touched it.
+    """
+    return f"{FREQ_DIR}/{view_name(epoch)}"
 
 
 @dataclass(frozen=True)
@@ -97,6 +118,23 @@ class CacheSpec:
     """
     tap_feature: FeatureSpec | None = None
     """Shape of one image's stacked taps, `(K, tap_dim)`. Set iff `taps` is."""
+    freq_feature: FeatureSpec | None = None
+    """Shape of one image's DCT view, `(n_cells, n_coeffs)` -- layout `tokens`.
+
+    None means a cache with no frequency views, which is every cache rendered
+    before the frequency branch existed. Presence is the decision, exactly as
+    `taps` is: the field ADDS views to the directory layout and changes nothing
+    about the bytes already there, so an old cache stays readable.
+    """
+    freq_sha: str = ""
+    """Identity of the extraction protocol -- `FreqExtract.fingerprint()`.
+
+    Unlike the view count, which is resumable (`build_cache` skips finished
+    views, so epochs can be added later at zero rework), the coefficient set is
+    not: changing the patch size, the cell grid or the radial ordering
+    re-renders every frequency byte in the directory. So it is asserted on load
+    beside the other fingerprints rather than trusted to match.
+    """
 
     def to_dict(self) -> dict:
         return {
@@ -112,6 +150,8 @@ class CacheSpec:
             "crop_sha": self.crop_sha,
             "taps": list(self.taps),
             "tap_feature": self.tap_feature.to_dict() if self.tap_feature else None,
+            "freq_feature": self.freq_feature.to_dict() if self.freq_feature else None,
+            "freq_sha": self.freq_sha,
         }
 
     @classmethod
@@ -131,6 +171,10 @@ class CacheSpec:
             tap_feature=(
                 FeatureSpec.from_dict(d["tap_feature"]) if d.get("tap_feature") else None
             ),
+            freq_feature=(
+                FeatureSpec.from_dict(d["freq_feature"]) if d.get("freq_feature") else None
+            ),
+            freq_sha=d.get("freq_sha", ""),
         )
 
     def save(self, root: str | Path) -> None:
@@ -223,10 +267,47 @@ class CacheSpec:
                     f"they are -- this is a different detector or pooling."
                 )
 
+    def assert_freq_available(self, want: FeatureSpec, want_sha: str = "") -> None:
+        """Refuse a cache that cannot serve the frequency branch.
+
+        Split out of `assert_compatible` rather than folded into it because the
+        two are asked by different callers at different times. Stage 1 and the
+        eval arms read a cache that may or may not carry a frequency view and
+        must not care; only stage 2's enrichment run needs one, and it needs it
+        to be the same protocol its enricher was shaped for.
+
+        Both halves are hard. A missing view is bytes that are simply not there.
+        A protocol mismatch is worse than missing: the shapes can agree while the
+        coefficients mean different frequencies, and the enricher's learned band
+        masks are indexed by position along that axis.
+        """
+        if self.freq_feature is None:
+            raise FileNotFoundError(
+                f"this cache was rendered without a frequency view, so the "
+                f"enricher has nothing to read. Re-render with `freq.enabled: "
+                f"true` (configs/cache/wildfake_freq.yaml), or train the plain "
+                f"adapter."
+            )
+        if (self.freq_feature.layout, self.freq_feature.shape) != (want.layout, want.shape):
+            raise ValueError(
+                f"frequency view mismatch: cache holds {self.freq_feature.layout}"
+                f"{self.freq_feature.shape}, this run wants {want.layout}"
+                f"{want.shape}. The coefficient set is a render-time commitment "
+                f"-- re-render with scripts/build_cache.py."
+            )
+        if want_sha and self.freq_sha and self.freq_sha != want_sha:
+            raise ValueError(
+                f"cache is stale: freq_sha differs ({self.freq_sha} != {want_sha}) "
+                f"-- the patch size, cell grid or radial ordering changed, so the "
+                f"coefficient axis means something else. Same shape, different "
+                f"frequencies. Re-render with scripts/build_cache.py."
+            )
+
     def bytes_per_view(self) -> int:
-        """One image, one view -- features plus taps if this cache carries them."""
+        """One image, one view -- features plus taps and freq if it carries them."""
         tap = self.tap_feature.bytes_per_image() if self.tap_feature else 0
-        return self.feature.bytes_per_image() + tap
+        freq = self.freq_feature.bytes_per_image() if self.freq_feature else 0
+        return self.feature.bytes_per_image() + tap + freq
 
     def nbytes(self, n_views: int | None = None) -> int:
         """Total on-disk size. Printed by `build_cache.py --dry-run` before

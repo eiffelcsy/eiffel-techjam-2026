@@ -148,6 +148,32 @@ class SplitDetector(nn.Module, ABC):
         module docstring.
         """
 
+    def head_module(self) -> nn.Module:
+        """The `nn.Module` behind `head()`, for the one stage that COPIES it.
+
+        `head` is a method, and for everything GRACE does that is the right
+        interface: the adapter differentiates through it, the losses evaluate it,
+        nobody needs the object. E14 is the exception -- the fine-tuned-head arm
+        deep-copies the head and trains the copy -- and a `deepcopy` needs a
+        module, not a bound method.
+
+        The default resolves it by convention, `head_module` then `head`, because
+        two of the three splits in this tree name it one way and one the other,
+        and a third abstract method would force every future split to implement
+        something only one experiment reads. A split whose head is not a plain
+        attribute overrides this; one that raises here simply cannot run E14,
+        which is a clear message rather than a wrong copy.
+        """
+        for name in ("head_module", "head"):
+            candidate = getattr(self.detector, name, None)
+            if isinstance(candidate, nn.Module):
+                return candidate
+        raise NotImplementedError(
+            f"{type(self).__name__} cannot expose its head as a module, so the "
+            f"fine-tuned-head arm (E14) has nothing to copy. Override "
+            f"head_module(), or run with finetune_head: false."
+        )
+
     def taps(self) -> tuple[str, ...]:
         """Names of the intermediate activations this split exposes, in order.
 

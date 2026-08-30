@@ -16,7 +16,9 @@ import numpy as np
 import pandas as pd
 import torch
 
-from grace.cache.spec import CLEAN_VIEW, INDEX_FILE, CacheSpec, tap_view_name, view_name
+from grace.cache.spec import (
+    CLEAN_VIEW, INDEX_FILE, CacheSpec, freq_view_name, tap_view_name, view_name,
+)
 from grace.cache.writer import RECIPE_FILE, is_complete
 from grace.splits.base import FeatureSpec
 
@@ -176,6 +178,32 @@ class FeatureCache:
 
     def taps(self, indices, epoch: int) -> torch.Tensor:
         return self._tap_gather(tap_view_name(epoch), indices)
+
+    @property
+    def has_freq(self) -> bool:
+        return self._spec.freq_feature is not None
+
+    def _freq_gather(self, name: str, indices) -> torch.Tensor:
+        if not self.has_freq:
+            raise FileNotFoundError(
+                f"{self.root} was rendered without a frequency view, so the "
+                f"enricher has nothing to read. Re-render with `freq.enabled: "
+                f"true` (scripts/build_cache.py configs/cache/wildfake_freq.yaml), "
+                f"or train the plain adapter."
+            )
+        return self._gather(name, self.rows_for(indices), self._spec.freq_feature)
+
+    def clean_freq(self, indices) -> torch.Tensor:
+        """`(B, n_cells, n_coeffs)` for the undegraded window.
+
+        Read, unlike `clean_taps`: `analyze_freq.py` needs it to say what a band
+        looks like before any transform touched it, which is the reference every
+        per-degradation band signature is a delta from.
+        """
+        return self._freq_gather(freq_view_name(None), indices)
+
+    def freq(self, indices, epoch: int) -> torch.Tensor:
+        return self._freq_gather(freq_view_name(epoch), indices)
 
     def recipes(self, epoch: int) -> pd.DataFrame:
         """Per-image recipe table for one epoch, indexed by manifest index.

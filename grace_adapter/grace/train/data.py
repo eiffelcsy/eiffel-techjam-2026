@@ -62,12 +62,20 @@ class CachedPairDataset(Dataset):
 
     `with_taps` adds `taps_deg`, one more memmap read. The cache also holds
     clean taps, but nothing in the objective reads them, so they are not loaded.
+
+    `with_freq` adds `freq_deg`, the DCT view of the same degraded window, for
+    stage-2 enrichment. Also not loaded by default: it is ~7x the width of a
+    768-d feature row, so a stage-1 run that never reads it should not pay for
+    it. Same rule as the taps -- the flag is what the objective asks for, and
+    `assert_freq_available` is what refuses a cache that cannot supply it.
     """
 
-    def __init__(self, cache: FeatureCache, manifest, epoch: int, with_taps: bool = False):
+    def __init__(self, cache: FeatureCache, manifest, epoch: int, with_taps: bool = False,
+                 with_freq: bool = False):
         self.cache = cache
         self.epoch = epoch
         self.with_taps = with_taps
+        self.with_freq = with_freq
         self.index = np.asarray(manifest.index, dtype=np.int64)
         self.labels = np.asarray(manifest["label"], dtype=np.int64)
         severity = cache.recipes(epoch)["severity"]
@@ -87,6 +95,8 @@ class CachedPairDataset(Dataset):
         }
         if self.with_taps:
             item["taps_deg"] = self.cache.taps(idx, self.epoch)[0]
+        if self.with_freq:
+            item["freq_deg"] = self.cache.freq(idx, self.epoch)[0]
         return item
 
 
@@ -134,7 +144,8 @@ class LivePairDataset(Dataset):
 
 
 def build_loader(cfg, cache, manifest, schedule, epoch: int, preprocess=None,
-                 shuffle: bool = True, with_taps: bool = False, crop=None) -> DataLoader:
+                 shuffle: bool = True, with_taps: bool = False, crop=None,
+                 with_freq: bool = False) -> DataLoader:
     """Pick the dataset by `cfg.source` and wrap it in a DataLoader.
 
     `cache.worker_init` is passed in both modes: memmaps are opened per worker,
@@ -144,8 +155,19 @@ def build_loader(cfg, cache, manifest, schedule, epoch: int, preprocess=None,
     the other side.
     """
     if cfg.source == "cache":
-        dataset = CachedPairDataset(cache, manifest, epoch, with_taps=with_taps)
+        dataset = CachedPairDataset(
+            cache, manifest, epoch, with_taps=with_taps, with_freq=with_freq
+        )
     elif cfg.source == "live":
+        if with_freq:
+            # Not an oversight to fix later: stage 2 is `source: cache` by
+            # construction (`_cache_loader_cfg`), and a live frequency read would
+            # have to re-derive the crop draw in the loop to stay the same window
+            # the cached clean features are of.
+            raise ValueError(
+                "source: live cannot supply the frequency view -- render it with "
+                "scripts/build_cache.py and train the enricher against the cache."
+            )
         if preprocess is None:
             raise ValueError("source: live needs the detector's preprocess_fn()")
         dataset = LivePairDataset(
