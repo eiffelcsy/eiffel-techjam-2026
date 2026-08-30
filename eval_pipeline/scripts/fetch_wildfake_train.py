@@ -218,7 +218,7 @@ def plan(available: dict[str, Path]) -> set[str]:
     import copy
 
     from pipeline.config import load_dataset_config
-    from pipeline.utils.imports import instantiate
+    from common.imports import instantiate
 
     spec = copy.deepcopy(load_dataset_config(CONFIG).source)
     spec["args"]["available_lists"] = {g: str(p) for g, p in available.items()}

@@ -8,7 +8,7 @@ detector, so a run loads its weights exactly once however many places need them.
 """
 
 from grace.splits.base import LAYOUTS, FeatureSpec, SplitDetector
-from pipeline.utils.imports import locate
+from common.imports import locate
 
 __all__ = ["LAYOUTS", "FeatureSpec", "SplitDetector", "build_split"]
 

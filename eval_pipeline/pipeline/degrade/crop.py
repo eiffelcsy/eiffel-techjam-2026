@@ -52,7 +52,7 @@ from dataclasses import dataclass
 import numpy as np
 from PIL import Image
 
-from pipeline.utils.seeding import stable_seed
+from common.seeding import stable_seed
 
 POLICIES = ("uniform", "log_uniform")
 """How the crop side length is drawn from [s_min, s_max].

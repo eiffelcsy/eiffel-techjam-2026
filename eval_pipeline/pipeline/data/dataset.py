@@ -14,7 +14,7 @@ import torch
 from PIL import Image, PngImagePlugin
 from torch.utils.data import Dataset
 
-from pipeline.utils.io import list_images
+from common.io import list_images
 
 
 class Inputs(NamedTuple):

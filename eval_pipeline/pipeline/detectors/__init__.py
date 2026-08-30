@@ -18,7 +18,7 @@ is a module here plus a config line, never an edit to this file.
 import torch
 
 from pipeline.detectors.base import FrozenDetector
-from pipeline.utils.imports import instantiate
+from common.imports import instantiate
 
 __all__ = ["FrozenDetector", "build_detector", "resolve_device"]
 

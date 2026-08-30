@@ -41,7 +41,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 from pipeline.degrade.ops import TRANSFORMS  # noqa: E402
 from pipeline.eval.runner import LEVEL_KEYS  # noqa: E402
-from pipeline.utils.io import read_json  # noqa: E402
+from common.io import read_json  # noqa: E402
 
 LEVEL_OF = {name: level for level, name in LEVEL_KEYS.items()}
 

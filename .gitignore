@@ -1,13 +1,23 @@
-# Datasets, shared by both packages.
-#
-# `data/` sits at the repo root rather than inside eval_pipeline/ because BOTH
-# packages read it and neither owns it: run_eval.py runs with CWD=eval_pipeline/
-# and the GRACE training scripts run with CWD=grace_adapter/. A path of
-# `../data/...` in a dataset config resolves to the same directory from either,
-# which a path inside one package cannot do.
-#
-# Materialized images and their manifests: reproducible from a dataset config
-# via `build_manifest.py`, and large.
-/data/
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
 .venv/
 .DS_Store
+
+# Generated/output directories, shared by every stage. Reproducible from a
+# config plus a manifest/checkpoint sha (see train/cache/spec.py) -- not
+# something to commit, and each is potentially large.
+#
+# LEADING SLASH IS LOAD-BEARING on the ones with a common basename component:
+# unanchored, e.g. `logs/` would match a `logs/` directory at any depth and
+# could silently exclude source files that happen to sit under one.
+/data/
+/cache_ms/
+/cache_ms_val/
+/checkpoints/
+/results/*
+!/results/.gitkeep
+/logs/
+/wandb/

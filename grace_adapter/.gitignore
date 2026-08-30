@@ -4,16 +4,6 @@ __pycache__/
 .venv/
 .pytest_cache/
 
-# Generated output. LEADING SLASH IS LOAD-BEARING: these are anchored to this
-# directory, so `/cache/` means grace/cache/ and NOT the grace/grace/cache/
-# package. Unanchored, `cache/` matches a directory of that name at any depth
-# and silently excludes schedule.py, spec.py, writer.py and reader.py from the
-# repo -- which is how this file was originally wrong.
-#
-# Rendered feature caches are hundreds of GB and reproducible from a config plus
-# a manifest sha; that is the point of the fingerprints in grace/cache/spec.py.
-/cache*/
-/checkpoints/
-/results/
-/wandb/
-/logs/
+# cache_ms/, cache_ms_val/, checkpoints/, results/, logs/, wandb/ moved to the
+# repo root -- see the .gitignore there. Every stage reads them, so they live
+# above all of this rather than inside one package.

@@ -10,7 +10,7 @@ import argparse
 
 from pipeline.config import load_dataset_config
 from pipeline.data.manifest import build_manifest
-from pipeline.utils.imports import instantiate
+from common.imports import instantiate
 
 
 def main():

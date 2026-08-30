@@ -57,7 +57,7 @@ from pipeline.config import load_dataset_config
 from pipeline.data.manifest import load_manifest
 from pipeline.degrade.crop import draw_size
 from pipeline.eval.metrics import roc_auc
-from pipeline.utils.seeding import stable_seed
+from common.seeding import stable_seed
 
 CANDIDATES = (128, 160, 200, 224, 256, 320, 384, 448, 512)
 CHANCE = 0.55

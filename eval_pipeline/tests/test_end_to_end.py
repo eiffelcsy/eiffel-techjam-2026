@@ -187,7 +187,7 @@ def test_detector_configs_load(path):
     have -- only that the config is well-formed and the module resolves.
     """
     from pipeline.config import load_detector_config
-    from pipeline.utils.imports import locate
+    from common.imports import locate
 
     cfg = load_detector_config(path)
     assert cfg.name and cfg.device
@@ -204,7 +204,7 @@ def test_dataset_configs_load(path):
     another config (wildfake_train_val) is a legitimate spec with nothing to import.
     """
     from pipeline.config import load_dataset_config
-    from pipeline.utils.imports import locate
+    from common.imports import locate
 
     cfg = load_dataset_config(path)
     assert cfg.name and cfg.manifest

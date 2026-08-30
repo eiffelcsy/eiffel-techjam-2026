@@ -38,12 +38,12 @@
 run_id: dinov3_poc_freq
 
 detectors:
-  # - ../grace_adapter/configs/detectors/dinov3-crop200+grace.yaml
+  - ../grace_adapter/configs/detectors/dinov3-crop200+grace.yaml
   # - ../grace_adapter/configs/detectors/dinov3-crop200+grace-freq-null.yaml
-  - ../grace_adapter/configs/detectors/dinov3-crop200+grace-freq.yaml
+  # - ../grace_adapter/configs/detectors/dinov3-crop200+grace-freq.yaml
   # - ../grace_adapter/configs/detectors/dinov3-r512+grace.yaml
   # - ../grace_adapter/configs/detectors/dinov3-r512+grace-freq-null.yaml
-  - ../grace_adapter/configs/detectors/dinov3-r512+grace-freq.yaml
+  # - ../grace_adapter/configs/detectors/dinov3-r512+grace-freq.yaml
 
 datasets:
   - configs/datasets/wildfake_coco_dalle3.yaml

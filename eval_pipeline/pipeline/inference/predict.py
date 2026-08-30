@@ -17,7 +17,7 @@ from tqdm import tqdm
 
 from pipeline.data.dataset import ImageFolderDataset, collate
 from pipeline.detectors import build_detector, resolve_device
-from pipeline.utils.io import write_json
+from common.io import write_json
 
 
 def predict_dir(

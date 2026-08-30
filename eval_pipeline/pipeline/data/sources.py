@@ -862,7 +862,7 @@ class ImageDirSource:
         self.split = split
 
     def rows(self, out_dir: str | Path) -> Iterator[dict]:
-        from pipeline.utils.io import list_images
+        from common.io import list_images
 
         n = {REAL: 0, FAKE: 0}
         for root in self.roots:
@@ -905,7 +905,7 @@ class ConcatSource:
     """
 
     def __init__(self, sources: list[dict], prefix: bool = True):
-        from pipeline.utils.imports import instantiate
+        from common.imports import instantiate
 
         if not sources:
             raise ValueError("ConcatSource needs at least one source")

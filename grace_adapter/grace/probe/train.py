@@ -38,7 +38,7 @@ from tqdm import tqdm
 from grace.train.tracker import build_tracker, flatten_config
 from pipeline.data.dataset import AIGCDataset, collate
 from pipeline.detectors.dinov3 import ProbeHead
-from pipeline.utils.seeding import seed_everything
+from common.seeding import seed_everything
 
 
 @torch.no_grad()

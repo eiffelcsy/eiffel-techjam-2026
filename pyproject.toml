@@ -1,0 +1,67 @@
+[project]
+name = "aigc-robustness"
+version = "0.1.0"
+description = "Robust AI-generated-image detection: eval harness + the GRACE adapter and frequency branches"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "torchvision",
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "pillow",
+    "scikit-learn",
+    "matplotlib",
+    "pyyaml",
+    "tqdm",
+    "tabulate",
+    "transformers>=5.0",
+    "datasets",
+    "huggingface-hub",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+# Optional tracking for training runs. `train.tracker` is a null object when
+# this is absent or when no config enables it, so nothing imports wandb unless
+# asked -- and a run with tracking off writes exactly the same files.
+wandb = ["wandb"]
+
+# The detector zoo's dependencies, kept out of the base install: nothing in
+# `eval`/`load_data`/`preprocessing`/`train` imports them, only a vendored-repo
+# detector adapter would, and any such adapter defers its imports so the
+# harness runs without any of this.
+#   timm  -- a ViT-with-registers backbone; >=1.0.12 for set_input_size
+#   peft  -- LoRA-wrapped checkpoints will not load without it
+#   clip  -- OpenAI's CLIP, not open_clip; ftfy and regex are its deps
+zoo = [
+    "timm>=1.0.12",
+    "peft",
+    "ftfy",
+    "regex",
+    "clip @ git+https://github.com/openai/CLIP.git",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+# namespaces = false is load-bearing: without it, setuptools treats every
+# directory lacking an __init__.py as an implicit PEP 420 namespace package,
+# which sweeps up eval_pipeline/, grace_adapter/ (still mid-migration, holding
+# configs/, cache_ms/, checkpoints/, the old grace/ package, ...) and matches
+# them against the globs below. With it, discovery matches the two existing
+# sibling pyproject.tomls: only a real package (an __init__.py, with every
+# ancestor up to `where` also carrying one) is found.
+namespaces = false
+include = [
+    "common", "common.*",
+    "load_data", "load_data.*",
+    "preprocessing", "preprocessing.*",
+    "train", "train.*",
+    "eval", "eval.*",
+    "grace_adapter", "grace_adapter.*",
+    "freq_branch", "freq_branch.*",
+]

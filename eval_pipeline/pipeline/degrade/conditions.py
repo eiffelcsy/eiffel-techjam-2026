@@ -34,7 +34,7 @@ import yaml
 from PIL import Image
 
 from pipeline.degrade.ops import TRANSFORMS
-from pipeline.utils.seeding import stable_seed
+from common.seeding import stable_seed
 
 LEVELS = {
     0: dict(name="clean",  n_transforms=(0, 0)),

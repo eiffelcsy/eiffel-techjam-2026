@@ -17,7 +17,7 @@ restated: a run references the other two by path.
 
 Components are named by dotted import path rather than by a registry key, so
 pointing the harness at a new model or dataset never requires editing pipeline
-code. See `pipeline.utils.imports`.
+code. See `common.imports`.
 
 Paths inside a config are resolved relative to the current working directory,
 which the README's usage assumes is the repo root.
