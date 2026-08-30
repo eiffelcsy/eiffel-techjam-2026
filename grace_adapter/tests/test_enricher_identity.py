@@ -15,9 +15,9 @@ multiplying a zero -- and the zero case would catch none of them.
 import pytest
 import torch
 
-from grace.config import EnricherConfig, FreqConfig
-from grace.models.factory import build_enricher, load_enricher, save_enricher
-from grace.splits.base import FeatureSpec
+from train.config import EnricherConfig, FreqConfig
+from freq_branch.models.factory import build_enricher, load_enricher, save_enricher
+from eval.splits.base import FeatureSpec
 
 SPEC = FeatureSpec(layout="vector", shape=(32,))
 FREQ = FreqConfig(enabled=True, patch=4, grid=3)   # (9, 48)

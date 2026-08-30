@@ -27,14 +27,14 @@ from pathlib import Path
 import pytest
 import torch
 
-from grace.cache.reader import FeatureCache
-from grace.cache.schedule import EpochSchedule
-from grace.cache.spec import CacheSpec, sha_manifest, sha_preprocess
-from grace.cache.writer import build_cache
+from train.cache.reader import FeatureCache
+from train.cache.schedule import EpochSchedule
+from train.cache.spec import CacheSpec, sha_manifest, sha_preprocess
+from train.cache.writer import build_cache
 from preprocessing.degrade.conditions import load_grid
 from tests.fixtures import SPECS, ToySplit, features, write_images
 
-SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "analyze_drift.py"
+SCRIPT = Path(__file__).resolve().parent.parent.parent / "scripts" / "analyze_drift.py"
 GRID_FILE = "preprocessing/configs/degradations.yaml"
 
 
@@ -138,7 +138,7 @@ def test_the_split_is_built_once_not_once_per_batch(clean_only_cache, tmp_path, 
         eval.detectors, "build_detector",
         lambda cfg: (calls.append(1), split.detector)[1],
     )
-    monkeypatch.setattr("grace.splits.build_split", lambda d, t, **kw: split)
+    monkeypatch.setattr("eval.splits.build_split", lambda d, t, **kw: split)
 
     dataset = _dataset_yaml(tmp_path, manifest)
     _run([

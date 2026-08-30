@@ -29,14 +29,14 @@ import torch
 import torch.nn as nn
 from PIL import Image
 
-from grace.config import EnricherConfig, FreqConfig
-from grace.models.factory import build_enricher
-from grace.splits.base import FeatureSpec
+from train.config import EnricherConfig, FreqConfig
+from freq_branch.models.factory import build_enricher
+from eval.splits.base import FeatureSpec
 from preprocessing.dataset import AIGCDataset, Inputs, collate
 from preprocessing.degrade.crop import fixed_crop, fixed_resample
 from eval.detectors.base import FrozenDetector
 from eval.detectors.hf import _CropResizePreprocess, _ResamplePreprocess
-from pipeline.freq.view import FreqExtract
+from freq_branch.view import FreqExtract
 from tests.fixtures import ToyPreprocess, write_images
 
 SPEC = FeatureSpec(layout="vector", shape=(16,))
@@ -277,7 +277,7 @@ def test_freq_geometry_is_read_off_the_arm_s_own_table(input_mode, expected):
     """`FusedDetector` derives the DCT window from `dinov3.VIEWS`, the same table
     `_build_preprocess` reads. Two config keys that were meant to agree is how
     the two branches would end up on different windows."""
-    from grace.detectors.fused import _freq_geometry
+    from freq_branch.detectors.fused import _freq_geometry
 
     detector = type("_Stub", (), {"input_mode": input_mode})()
     assert _freq_geometry(detector) == expected
@@ -287,6 +287,6 @@ def test_a_detector_with_no_input_mode_reads_what_it_is_handed():
     """Every detector but DINOv3's is gone from this tree, and the next one to
     arrive will not have an `input_mode`. Defaulting to "no geometry" is right:
     it means the caller chose the window, which is the training-path contract."""
-    from grace.detectors.fused import _freq_geometry
+    from freq_branch.detectors.fused import _freq_geometry
 
     assert _freq_geometry(object()) == ("", 0)

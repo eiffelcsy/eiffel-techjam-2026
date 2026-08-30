@@ -13,7 +13,7 @@ and every one of them must produce `(196, 192)`, or the cache has no layout.
 import numpy as np
 import pytest
 
-from pipeline.freq.dct import (
+from freq_branch.dct import (
     DEFAULT_GRID, DEFAULT_PATCH,
     band_masks, cell_pool, dct_basis, extract_freq, freq_fingerprint,
     normalize, patch_dct, radial_order,

@@ -17,7 +17,7 @@ import torch
 import torch.nn as nn
 from PIL import Image
 
-from grace.splits.base import FeatureSpec, SplitDetector
+from eval.splits.base import FeatureSpec, SplitDetector
 
 
 class LinearHead(nn.Module):
@@ -107,7 +107,7 @@ class ToySplit(SplitDetector):
         self.eval()
         self.requires_grad_(False)
         if verify:
-            from grace.splits.verify import verify_split, verify_taps
+            from eval.splits.verify import verify_split, verify_taps
 
             verify_split(self)
             verify_taps(self)

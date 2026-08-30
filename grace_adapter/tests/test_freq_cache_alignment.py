@@ -17,17 +17,17 @@ import pytest
 import torch
 from PIL import Image
 
-from grace.cache.reader import FeatureCache
-from grace.cache.schedule import EpochSchedule, val_epochs
-from grace.cache.spec import (
+from train.cache.reader import FeatureCache
+from train.cache.schedule import EpochSchedule, val_epochs
+from train.cache.spec import (
     CLEAN_VIEW, DONE_FILE, CacheSpec, freq_view_name, sha_manifest, sha_preprocess,
     view_name,
 )
-from grace.cache.writer import build_cache
-from grace.config import FreqConfig
+from train.cache.writer import build_cache
+from train.config import FreqConfig
 from preprocessing.dataset import load_normalized
 from preprocessing.degrade.conditions import load_grid
-from pipeline.freq.dct import extract_freq
+from freq_branch.dct import extract_freq
 from tests.fixtures import SPECS, ToySplit, write_images
 
 N_IMAGES = 24
@@ -163,7 +163,7 @@ def test_view_is_incomplete_until_the_freq_view_finishes(rendered, tmp_path):
     """One epoch is three directories now. A `.done` on the features alone must
     not count, or the render would skip an epoch whose frequency shards are
     half-written -- which is zeros, silently."""
-    from grace.cache.writer import view_is_complete
+    from train.cache.writer import view_is_complete
 
     out, _, _, _, spec = rendered
     partial = tmp_path / "partial"
@@ -181,7 +181,7 @@ def test_an_interrupted_render_resumes_to_the_same_freq_view(rendered, tmp_path)
     other would leave a contiguous band of rows holding another image's spectrum
     -- which nothing downstream would notice.
     """
-    from grace.cache.writer import PROGRESS_FILE
+    from train.cache.writer import PROGRESS_FILE
 
     out, manifest, split, schedule, spec = rendered
     reference = FeatureCache(out)

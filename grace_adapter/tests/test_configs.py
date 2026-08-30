@@ -10,16 +10,28 @@ from pathlib import Path
 import pytest
 import yaml
 
-from grace.config import (
+from train.config import (
     load_cache_config, load_discrepancy_config, load_enrich_config, load_probe_config,
     load_train_config,
 )
 
-CONFIGS = Path(__file__).resolve().parent.parent / "configs"
+ROOT = Path(__file__).resolve().parent.parent.parent
+CONFIGS = ROOT / "train" / "configs"          # probe/, cache/, train/, defaults.yaml
+DETECTORS = ROOT / "eval" / "configs" / "detectors"
 
 
 def _paths(subdir):
-    return sorted(CONFIGS.joinpath(subdir).glob("*.yaml"))
+    root = DETECTORS if subdir == "detectors" else CONFIGS.joinpath(subdir)
+    return sorted(root.glob("*.yaml"))
+
+
+def _adapted_detector_paths():
+    """This package's own detector configs within eval/configs/detectors/ --
+    the ones naming an AdaptedDetector/FusedDetector, not the plain harness
+    detectors (dinov3-wildfake*.yaml) that merged into the same directory.
+    Named `<base>+<arm>.yaml` throughout the project, so a literal `+` is the
+    discriminator."""
+    return sorted(p for p in DETECTORS.glob("*.yaml") if "+" in p.name)
 
 
 FAMILIES = ["dinov3"]
@@ -208,8 +220,8 @@ def test_nested_unknown_key_is_rejected(tmp_path):
 
 
 GRACE_DETECTORS = {
-    "grace.detectors.adapted.AdaptedDetector",
-    "grace.detectors.fused.FusedDetector",
+    "grace_adapter.detectors.adapted.AdaptedDetector",
+    "freq_branch.detectors.fused.FusedDetector",
 }
 """The two detector classes this package puts into the harness.
 
@@ -219,7 +231,7 @@ image at native pixel scale and that does not survive preprocessing. Anything
 else appearing here is a config pointed at a class the harness cannot build."""
 
 
-@pytest.mark.parametrize("path", _paths("detectors"), ids=lambda p: p.name)
+@pytest.mark.parametrize("path", _adapted_detector_paths(), ids=lambda p: p.name)
 def test_detector_configs_are_in_the_harness_shape(path):
     """These are read by eval_pipeline, not by grace, so they must match its
     DetectorConfig rather than anything defined here."""
@@ -243,7 +255,7 @@ def test_freq_arms_differ_from_their_control_in_one_key(arm):
     """
     raws = {
         suffix: yaml.safe_load(
-            (CONFIGS / f"detectors/dinov3-{arm}+{suffix}.yaml").read_text()
+            (DETECTORS / f"dinov3-{arm}+{suffix}.yaml").read_text()
         )
         for suffix in ("grace", "grace-freq-null", "grace-freq")
     }
@@ -260,7 +272,7 @@ def test_freq_arms_differ_from_their_control_in_one_key(arm):
 @pytest.mark.parametrize("family", FAMILIES)
 def test_identity_config_has_no_checkpoint(family):
     """E1's whole point: the null adapter must reproduce the baseline exactly."""
-    raw = yaml.safe_load((CONFIGS / f"detectors/{family}+identity.yaml").read_text())
+    raw = yaml.safe_load((DETECTORS / f"{family}+identity.yaml").read_text())
     assert raw["args"]["checkpoint"] is None
 
 
@@ -268,8 +280,8 @@ def test_identity_config_has_no_checkpoint(family):
 def test_grace_and_grace_d_share_an_adapter(family):
     """Stage 2 never touches the adapter, so the two variants must name the same
     checkpoint -- otherwise the comparison confounds two changes."""
-    grace = yaml.safe_load((CONFIGS / f"detectors/{family}+grace.yaml").read_text())
-    graced = yaml.safe_load((CONFIGS / f"detectors/{family}+grace-d.yaml").read_text())
+    grace = yaml.safe_load((DETECTORS / f"{family}+grace.yaml").read_text())
+    graced = yaml.safe_load((DETECTORS / f"{family}+grace-d.yaml").read_text())
     assert grace["args"]["checkpoint"] == graced["args"]["checkpoint"]
     assert grace["args"]["discrepancy"] is None
     assert graced["args"]["discrepancy"] is not None
@@ -280,7 +292,7 @@ def test_all_three_arms_wrap_the_same_base_detector(family):
     """identity / grace / grace-d must differ in the adapter alone. A different
     `base` or `split` between them makes the comparison meaningless."""
     raws = [
-        yaml.safe_load((CONFIGS / f"detectors/{family}+{arm}.yaml").read_text())
+        yaml.safe_load((DETECTORS / f"{family}+{arm}.yaml").read_text())
         for arm in ("identity", "grace", "grace-d")
     ]
     assert len({r["args"]["base"] for r in raws}) == 1
@@ -314,7 +326,6 @@ def test_defaults_yaml_is_documentation_only():
 # Every script in the project is now run from the repo root, so every path
 # resolves from there -- unlike the two-CWD split this test used to check.
 
-ROOT = CONFIGS.parent.parent
 
 
 @pytest.mark.parametrize(
@@ -336,7 +347,7 @@ def test_referenced_detectors_and_datasets_exist(path):
                 assert (ROOT / ref).resolve().is_file(), f"{path.name}: {key} -> {ref}"
 
 
-@pytest.mark.parametrize("path", _paths("detectors"), ids=lambda p: p.name)
+@pytest.mark.parametrize("path", _adapted_detector_paths(), ids=lambda p: p.name)
 def test_adapted_detectors_reference_a_real_base(path):
     base = yaml.safe_load(path.read_text())["args"]["base"]
     assert (ROOT / base).resolve().is_file(), f"{path.name}: base -> {base}"

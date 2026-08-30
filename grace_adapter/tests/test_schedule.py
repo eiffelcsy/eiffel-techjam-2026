@@ -8,7 +8,7 @@ that claim.
 import numpy as np
 import pytest
 
-from grace.cache.schedule import VAL_EPOCH_OFFSET, EpochSchedule, val_epochs
+from train.cache.schedule import VAL_EPOCH_OFFSET, EpochSchedule, val_epochs
 from preprocessing.degrade.conditions import Condition, load_grid
 
 GRID_FILE = "preprocessing/configs/degradations.yaml"

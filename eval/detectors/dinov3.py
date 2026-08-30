@@ -34,7 +34,7 @@ solved the problem GRACE is trying to solve, and its retention curve would say
 nothing.
 
 The trunk never sees the head, so a cache rendered from this detector stays valid
-across probe retrainings -- `grace.cache.spec` hashes the detector's *config*,
+across probe retrainings -- `train.cache.spec` hashes the detector's *config*,
 and the head checkpoint path in it names weights the cached features do not
 depend on.
 
@@ -185,7 +185,7 @@ class ProbeHead(nn.Module):
     Deliberately plain. The head is the thing GRACE holds frozen and
     differentiates through, and every extra inductive bias in it is one more
     explanation for a retention number that is not "the adapter did it". An MLP
-    rather than a bare linear layer only because `grace.train.weighting` claims
+    rather than a bare linear layer only because `train.weighting` claims
     one Jacobian implementation covers both cases, and a linear head would let
     that claim go untested on a real model.
 
@@ -277,7 +277,7 @@ class DINOv3MLPDetector(FrozenDetector):
 
     # -- the seam ------------------------------------------------------------
     # `trunk` and `head` are public API here rather than an afterthought:
-    # `grace.splits.dinov3.DINOv3Split` is a two-line delegation to them, which
+    # `eval.splits.dinov3.DINOv3Split` is a two-line delegation to them, which
     # is the entire point of building this detector.
 
     def trunk(self, x: torch.Tensor) -> torch.Tensor:
@@ -289,7 +289,7 @@ class DINOv3MLPDetector(FrozenDetector):
 
         Split out of `trunk` so the ladder can pool an *intermediate* block's
         tokens through the identical code -- see
-        `grace.splits.dinov3.DINOv3Split.trunk_with_taps`. Sharing the function
+        `eval.splits.dinov3.DINOv3Split.trunk_with_taps`. Sharing the function
         rather than restating three lines is what makes a tap at the last block
         reduce to the seam feature exactly, which is the check `verify_taps`
         runs and the reason a tapped forward cannot silently drift from the

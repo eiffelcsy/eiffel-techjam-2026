@@ -1,0 +1,39 @@
+# The PoC cache: DINOv3 ViT-S/16, pooled to one 768-d vector per image.
+#
+# `vector` layout, 768 dims x 2 bytes = 1.5 KB per image per view -- a `layers`
+# seam emitting one token per encoder block would be ~48 KB. At 16 views (clean
+# + 12 train + 2 val, plus the clean target) that is ~24 KB per image, so the
+# 100,000-image train split renders to ~2.4 GB.
+# Stage 1 then reads it at memory bandwidth: the trunk never runs again.
+#
+#   python scripts/build_cache.py configs/cache/dinov3.yaml --dry-run
+#   python scripts/build_cache.py configs/cache/dinov3.yaml
+#
+# Cached on the TRAIN split of wildfake_train.yaml -- 100,000 of the manifest's
+# 120,000 rows. The other 20,000 are `split: validation` and are rendered
+# separately; `dataset.split` is what keeps the two apart, so this cache cannot
+# pick up a validation row by accident.
+#
+# Stage-1 image-level validation is rendered by configs/cache/dinov3_val.yaml to
+# its own out_dir. ONE val cache now, where NTIRE needed two (val and val_hard);
+# every stage-1 config's `val_datasets` / `val_cache_dirs` are single-entry
+# lists to match.
+#
+# Stage 0 must have run first: build_cache loads the detector, and the detector
+# loads a head checkpoint that does not exist until then. (The features
+# themselves depend only on the trunk, so re-fitting the probe later does not
+# invalidate this cache -- `detector_sha` hashes the config, and the head path in
+# it names weights these features never saw.)
+
+detector: eval/configs/detectors/dinov3-wildfake.yaml
+split: eval.splits.dinov3.DINOv3Split
+dataset: load_data/configs/datasets/wildfake_train.yaml
+
+out_dir: cache/
+n_epochs: 12
+n_val_epochs: 2
+batch_size: 8          # IMAGES per batch; each carries all 15 views
+trunk_batch_size: 128
+num_workers: 8
+
+schedule: {}      # the standard training mix: all eleven transforms, default weights

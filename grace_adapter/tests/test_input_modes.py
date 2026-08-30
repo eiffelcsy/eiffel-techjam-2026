@@ -16,7 +16,7 @@ import pytest
 import torch
 from PIL import Image
 
-from grace.cache.spec import sha_preprocess
+from train.cache.spec import sha_preprocess
 from eval.detectors.dinov3 import (
     HEAD_COMPATIBILITY, INPUT_MODES, VIEWS, _assert_head_matches, _build_preprocess,
 )
@@ -198,7 +198,7 @@ def test_every_mode_is_cacheable(mode):
 # --- the mode and the crop config must not disagree --------------------------
 
 def probe_cfg(**kw):
-    from grace.config import CropConfig
+    from train.config import CropConfig
 
     return type("_C", (), {"crop": CropConfig(**kw)})()
 
@@ -213,7 +213,7 @@ def test_crops_without_the_mode_are_refused():
     let it past the evaluation guard against a whole-image detector, and score a
     feature space it never saw -- the exact silent failure the guard exists for,
     reintroduced from the training side."""
-    from grace.probe.train import _assert_crop_matches_input_mode
+    from train.probe import _assert_crop_matches_input_mode
 
     cfg = probe_cfg(enabled=True, s_max=200)
     with pytest.raises(ValueError, match="input_mode"):
@@ -222,14 +222,14 @@ def test_crops_without_the_mode_are_refused():
 
 def test_the_mode_without_crops_is_refused():
     """The other direction: a head named for windows that were never drawn."""
-    from grace.probe.train import _assert_crop_matches_input_mode
+    from train.probe import _assert_crop_matches_input_mode
 
     with pytest.raises(ValueError, match="crop.enabled"):
         _assert_crop_matches_input_mode(probe_cfg(), split_with("multiscale"))
 
 
 def test_the_agreeing_combinations_pass():
-    from grace.probe.train import _assert_crop_matches_input_mode
+    from train.probe import _assert_crop_matches_input_mode
 
     _assert_crop_matches_input_mode(probe_cfg(), split_with("resize"))
     _assert_crop_matches_input_mode(probe_cfg(), split_with("crop"))

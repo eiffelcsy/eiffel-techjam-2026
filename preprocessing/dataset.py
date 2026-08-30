@@ -26,7 +26,7 @@ class Inputs(NamedTuple):
     device))` sees exactly what it always saw, byte for byte.
 
     This exists for one detector shape -- a second branch that must read the
-    image in a basis preprocessing destroys. `grace.detectors.fused.FusedDetector`
+    image in a basis preprocessing destroys. `freq_branch.detectors.fused.FusedDetector`
     runs a patch-DCT over the same window at NATIVE pixel scale; by the time the
     224 tensor exists that information is gone, and it cannot be recovered from
     the tensor at any cost. So the second read happens in the worker, beside the

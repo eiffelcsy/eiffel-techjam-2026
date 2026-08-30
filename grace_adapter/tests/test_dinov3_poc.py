@@ -24,19 +24,19 @@ from PIL import Image
 
 transformers = pytest.importorskip("transformers")
 
-from grace.cache.reader import FeatureCache                          # noqa: E402
-from grace.cache.schedule import EpochSchedule, val_epochs           # noqa: E402
-from grace.cache.spec import (                                       # noqa: E402
+from train.cache.reader import FeatureCache                          # noqa: E402
+from train.cache.schedule import EpochSchedule, val_epochs           # noqa: E402
+from train.cache.spec import (                                       # noqa: E402
     CacheSpec, sha_manifest, sha_preprocess,
 )
-from grace.cache.writer import build_cache                           # noqa: E402
-from grace.config import (                                           # noqa: E402
+from train.cache.writer import build_cache                           # noqa: E402
+from train.config import (                                           # noqa: E402
     AdapterConfig, DiscrepancyConfig, DiscrepancyTrainConfig, LossConfig,
     ProbeConfig, TrainConfig,
 )
-from grace.probe import train_probe                                  # noqa: E402
-from grace.splits.dinov3 import DINOv3Split                          # noqa: E402
-from grace.train.loop import train_adapter, train_discrepancy        # noqa: E402
+from train.probe import train_probe                                  # noqa: E402
+from eval.splits.dinov3 import DINOv3Split                          # noqa: E402
+from train.loop import train_adapter, train_discrepancy        # noqa: E402
 from preprocessing.degrade.conditions import load_grid                    # noqa: E402
 from tests.fixtures import write_images                              # noqa: E402
 
@@ -136,7 +136,7 @@ def test_head_of_trunk_reproduces_the_detector(detector_factory):
 def test_head_is_differentiable_wrt_its_input(detector_factory):
     """The Jacobian weighting takes ∇_f head(f). A head that killed the graph
     would disable the objective silently, not raise."""
-    from grace.train.weighting import head_gradient
+    from train.weighting import head_gradient
 
     split = _split(detector_factory)
     f = split.trunk(torch.randn(4, 3, IMAGE, IMAGE)).detach()
@@ -300,7 +300,7 @@ def test_stage_one_then_stage_two(poc_run):
 def test_adapter_parameter_budget_is_small(poc_run):
     """The claim is that the evidence is displaced, not destroyed -- which a
     large adapter would make untestable. Pin the ratio, not just the count."""
-    from grace.models.factory import build_adapter
+    from grace_adapter.models.factory import build_adapter
 
     _, _, split, _, _ = poc_run
     adapter = build_adapter(split.feature_spec, AdapterConfig(bottleneck=128, n_blocks=2))
@@ -318,16 +318,16 @@ def test_identity_adapter_reproduces_the_base_detector(poc_run, monkeypatch, tmp
     need a detector yaml on disk; the code path under test -- trunk, no adapter,
     head -- is `AdaptedDetector.forward` either way.
     """
-    from grace.detectors.adapted import AdaptedDetector
+    from grace_adapter.detectors.adapted import AdaptedDetector
 
     _, _, split, _, _ = poc_run
     monkeypatch.setattr(
-        "grace.detectors.adapted.build_detector", lambda cfg: split.detector
+        "grace_adapter.detectors.adapted.build_detector", lambda cfg: split.detector
     )
     monkeypatch.setattr(
-        "grace.detectors.adapted.load_detector_config", lambda entry: entry
+        "grace_adapter.detectors.adapted.load_detector_config", lambda entry: entry
     )
-    adapted = AdaptedDetector(base={}, split="grace.splits.dinov3.DINOv3Split")
+    adapted = AdaptedDetector(base={}, split="eval.splits.dinov3.DINOv3Split")
 
     x = torch.randn(4, 3, IMAGE, IMAGE)
     with torch.no_grad():

@@ -9,10 +9,10 @@ learned.
 import pytest
 import torch
 
-from grace.config import AdapterConfig, DiscrepancyConfig
-from grace.models.discrepancy import FusedHead
-from grace.models.factory import build_adapter, build_discrepancy_head
-from grace.train import diagnostics as D
+from train.config import AdapterConfig, DiscrepancyConfig
+from grace_adapter.models.discrepancy import FusedHead
+from grace_adapter.models.factory import build_adapter, build_discrepancy_head
+from train import diagnostics as D
 from tests.fixtures import SPECS, LinearHead, features
 
 
@@ -84,7 +84,7 @@ def test_drift_asymmetry_reports_the_decision_subspace_split():
 
 
 def _ladder_and_taps(n_taps=4, tap_in=16, batch=6):
-    from grace.splits.base import FeatureSpec
+    from eval.splits.base import FeatureSpec
     spec = SPECS["vector"]
     tspec = FeatureSpec(layout="layers", shape=(n_taps, tap_in))
     lad = build_adapter(spec, AdapterConfig(taps=True), tspec)

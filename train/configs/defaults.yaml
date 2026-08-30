@@ -1,0 +1,397 @@
+# Reference: every key of every config kind, shown with its default.
+# Nothing loads this file -- copy the bits you need. Unknown keys raise rather
+# than being ignored, so a typo cannot silently train the default objective.
+#
+# Four kinds of config, one directory each:
+#
+#   train/configs/probe/<name>.yaml     PoC only -- fit the frozen detector's own head
+#   train/configs/cache/<name>.yaml     what to render, for which detector
+#   train/configs/train/<name>.yaml     one stage-1 or stage-2 run against a cache
+#   eval/configs/detectors/<name>.yaml  the ADAPTED detector, read by the eval harness
+#
+# Detectors and datasets are never redefined -- they are referenced by path into
+# eval/configs/ and load_data/configs/, so there is one description of each in
+# the project. Every script below is run from the repo root.
+#
+#   python scripts/train_probe.py       train/configs/probe/<name>.yaml   # PoC only
+#   python scripts/build_cache.py       train/configs/cache/<name>.yaml [--dry-run]
+#   python scripts/analyze_drift.py     --cache cache_ms/<detector> --dataset <path>
+#                                       ^ E0. NEEDS the cache: it compares the
+#                                         clean view against a degraded one.
+#   python scripts/train_adapter.py     train/configs/train/<name>.yaml
+#   python scripts/train_discrepancy.py train/configs/train/<name>.yaml
+#   python scripts/run_eval.py --config eval/configs/runs/<name>.yaml
+#   python scripts/compare.py --baseline <json> --adapted <json>
+
+
+# ---------------------------------------------------------- train, stage 0 ----
+# train/configs/probe/<name>.yaml -- the PROOF-OF-CONCEPT ONLY.
+#
+# The one config kind that trains a detector, and it exists because the PoC
+# detector is assembled here rather than downloaded: a DINOv3 trunk has no
+# classifier, and GRACE cannot adapt a seam whose head does not exist yet. Every
+# other detector arrives with its head already trained by its authors and never
+# touches this directory.
+#
+#   python scripts/train_probe.py train/configs/probe/<name>.yaml
+#
+# Clean images only, no degradation augmentation. That is the premise -- a head
+# trained under augmentation would have partly solved the problem GRACE exists to
+# solve, and every retention number downstream would measure the augmentation.
+
+run_id: dinov3_wildfake
+detector: eval/configs/detectors/dinov3-wildfake.yaml
+dataset: load_data/configs/datasets/wildfake_train.yaml        # split: train
+val_dataset:                # one path, or several -- selection is the unweighted
+  - load_data/configs/datasets/wildfake_train_val.yaml
+                            # mean of their AUCs. One entry now: it is the
+                            # held-out `validation` split of the SAME manifest,
+                            # disjoint from `train` by construction. NOT the
+                            # benchmark (wildfake_coco_dalle3.yaml) -- nothing
+                            # selected here may ever be reported against that.
+split: eval.splits.dinov3.DINOv3Split
+
+out: ""                     # "" = the head_checkpoint the DETECTOR config names,
+                            # so the path written and the path loaded are one
+                            # string in one file
+
+hidden: 512                 # head geometry. Decided here; the checkpoint carries
+n_layers: 2                 # it and the detector rebuilds from the checkpoint, so
+dropout: 0.0                # a config/checkpoint mismatch cannot happen
+
+epochs: 40
+lr: 0.001
+weight_decay: 0.01
+decay_gate: true            # false exempts gate_logit/tap_gate_logit from
+                            # weight_decay and nothing else. Decoupled decay
+                            # pulls a LOGIT toward 0, i.e. the gate toward 0.5,
+                            # so with this on the gate opens whether or not the
+                            # objective asks it to -- and measurably does: decay
+                            # accounts for the whole of the gate's drift in
+                            # the reference arm dinov3_clean.
+batch_size: 32              # images per trunk forward, during feature extraction
+head_batch_size: 64         # features per optimizer step -- the trunk runs once
+num_workers: 4
+seed: 0
+device: auto
+
+wandb:                      # off by default. summary.json next to the checkpoints
+  enabled: false            # stays the record of every run either way -- this only
+  project: grace-adapter    # mirrors it somewhere a sweep can be sorted.
+  entity: null              # null = your default entity
+  group: ""                 # the experiment id (e3_losses, e4_erasure). Set it and
+                            # every arm of a sweep lands in one comparison.
+  tags: []
+  mode: online              # online | offline | disabled. `offline` writes to
+                            # ./wandb/ and syncs later -- for a node with no
+                            # outbound network.
+
+
+
+# ------------------------------------------------------------------ cache ----
+# train/configs/cache/<name>.yaml
+
+detector: eval/configs/detectors/dinov3-wildfake.yaml
+split: eval.splits.dinov3.DINOv3Split # dotted path to the SplitDetector
+split_args: {}              # keyword arguments for the split. The ladder's tap
+                            # set is the one that matters today:
+                            #   split_args: {tap_blocks: [0, 2, 4, 6, 9]}
+                            # Present on cache, train and discrepancy configs,
+                            # and it must be the SAME in all three -- the cache
+                            # records what it rendered and refuses a mismatch.
+dataset: load_data/configs/datasets/wildfake_train.yaml
+
+out_dir: cache/
+n_epochs: 12                # degraded views to render. Each is one full trunk
+                            # pass; each costs n * bytes_per_image
+n_val_epochs: 2             # held-out degradations, numbered from 10000 so their
+                            # `replicate` can never collide with a training epoch
+dtype: float16              # cache dtype; losses always compute in float32
+shard_size: 50000
+batch_size: 32              # IMAGES per trunk forward. Lower it for a detector
+                            # that takes images at native resolution and cannot
+                            # stack them into a batch.
+num_workers: 8
+max_images: null            # per class; null = all
+device: auto
+
+schedule:
+  grid_file: preprocessing/configs/degradations.yaml
+  transforms: null          # null = all eleven; a list holds some out for the
+                            # unseen-transform generalization experiment
+  level_weights:            # composition level mix. L0 is clean: those steps are
+    0: 0.15                 # where the adapter learns to do nothing -- the only
+    1: 0.35                 # thing anchoring it to a no-op on clean inputs
+    2: 0.30
+    3: 0.20
+  seed: 0                   # part of the cache fingerprint; changing it
+                            # invalidates every degraded view
+
+
+# ---------------------------------------------------------- train, stage 1 ----
+# train/configs/train/<name>.yaml -- the label-free adapter.
+# `run_id` and `cache_dir` are the only keys without a default.
+
+run_id: dinov3_clean
+cache_dir: cache/dinov3-wildfake
+
+detector: eval/configs/detectors/dinov3-wildfake.yaml
+split: eval.splits.dinov3.DINOv3Split
+dataset: load_data/configs/datasets/wildfake_train.yaml
+# The detector is loaded even in `source: cache` mode: the frozen head is what
+# head_kl and the Jacobian weighting differentiate through, so the model is
+# needed whether or not the trunk ever runs.
+
+val_datasets: []            # held-out IMAGES for stage-1 validation, reported in
+val_cache_dirs: []          # summary.json under `validation`. PARALLEL lists --
+                            # each dataset needs the cache root it was rendered
+                            # to, and __post_init__ rejects a length mismatch.
+                            #
+                            # Separate roots because build_cache.py derives its
+                            # root from the DETECTOR name alone, so two datasets
+                            # rendered for one detector would collide.
+                            #
+                            # Distinct from the cache's own validation axis,
+                            # which holds out DEGRADATIONS (val epochs, numbered
+                            # from 10000) over the training images. That axis
+                            # answers "does this adapter generalize to an unseen
+                            # corruption"; it cannot answer "to an unseen image",
+                            # because every row it scores was trained on. Both
+                            # are reported, separately.
+                            #
+                            # Loaded up front, so a missing or mis-specified val
+                            # cache fails at second zero rather than after the
+                            # full run, at the one moment its result is wanted.
+
+target_view: clean          # clean = arm B (proposed) | degraded = arm A (control)
+source: cache               # cache = read pre-rendered features (no trunk at all)
+                            # live  = degrade + run the trunk in the loop
+epochs: 12
+batch_size: 256             # features, not images -- go large.
+lr: 0.0001
+weight_decay: 0.01
+warmup_steps: 500
+grad_clip: 1.0
+ema_decay: 0.999
+num_workers: 4
+seed: 0
+device: auto
+out_dir: checkpoints/grace/
+checkpoint_every: 0         # >0 writes intermediate checkpoints for experiment
+                            # E4 (the erasure trade-off curve)
+log_every: 50               # diagnostics cadence in steps: cos(delta, j), the mean
+                            # gate and the loss terms. The W&B tracker mirrors these
+                            # exact points, so a dashboard and a summary.json can
+                            # never disagree about what was measured when.
+
+adapter:
+  bottleneck: 256
+  n_blocks: 2
+  per_channel_gate: true    # `layers` gets one gate vector per layer -- the
+                            # per-block damage profile, and the figure
+  dropout: 0.0
+  severity_film: true       # zero-initialised, so conditioning starts a no-op
+  taps: false               # true builds a LadderAdapter reading the split's
+                            # intermediate taps. A bool, not a block list: WHICH
+                            # blocks is a property of the split (split_args
+                            # below) and of the cache rendered from it, and
+                            # stating it twice invites the two to disagree.
+                            # Requires a cache rendered with the same taps --
+                            # `CacheSpec.taps` records them and a mismatch is
+                            # refused at startup.
+  tap_dim: 64               # width each tap is projected to. Drives the
+                            # ladder's parameter count almost entirely: ~0.22M
+                            # at 64 over five 768-wide taps
+  gate_init: -4.0           # LOGIT the gate starts at, not a gate value:
+                            # sigmoid(-4) ~= 0.018. Small enough that a broken
+                            # identity guarantee is still a near-no-op, non-zero
+                            # so the gate -- and the ladder's tap_proj behind it
+                            # -- has gradient from step 0. Applies to the seam
+                            # gate and to tap_gate alike.
+
+loss:
+  weighting: jacobian       # none = plain MSE. NOT the GRACE v1 objective -- v1
+                            # also ran lam_kl 0.5 and the since-removed
+                            # sliced-Wasserstein and clean-anchor terms.
+  eps_iso: 0.05             # isotropic floor; 1.0 is exactly F.mse_loss
+  w_cos: 1.0                # cosine on normalized features
+  w_err: 1.0                # decision-weighted squared error on raw features
+  lam_kl: 0.1               # demoted from 0.5: subsumed by the Jacobian weighting
+  kl_temperature: 2.0
+  lam_sev: 0.1              # severity regression. Label-free: the target comes
+                            # from the degradation sampler, not from annotation
+
+schedule: {}                # must match the cache's, or its fingerprint rejects it
+
+wandb:                      # off by default. summary.json next to the checkpoints
+  enabled: false            # stays the record of every run either way -- this only
+  project: grace-adapter    # mirrors it somewhere a sweep can be sorted.
+  entity: null              # null = your default entity
+  group: ""                 # the experiment id (e3_losses, e4_erasure). Set it and
+                            # every arm of a sweep lands in one comparison.
+  tags: []
+  mode: online              # online | offline | disabled. `offline` writes to
+                            # ./wandb/ and syncs later -- for a node with no
+                            # outbound network.
+
+
+# ---------------------------------------------------------- train, stage 2 ----
+# train/configs/train/<name>_discrepancy.yaml -- the supervised auxiliary head.
+# The adapter is frozen, so GRACE and GRACE-D ship the same weights bit for bit
+# and "the adapter is trained without labels" stays literally true.
+
+run_id: dinov3_disc
+cache_dir: cache/dinov3-wildfake
+adapter_checkpoint: checkpoints/grace/dinov3_clean/ema.pt
+
+detector: eval/configs/detectors/dinov3-wildfake.yaml
+split: eval.splits.dinov3.DINOv3Split
+dataset: load_data/configs/datasets/wildfake_train.yaml
+
+epochs: 4
+batch_size: 256
+lr: 0.001
+weight_decay: 0.01
+num_workers: 4
+seed: 0
+device: auto
+out_dir: checkpoints/grace/
+
+log_every: 50
+
+discrepancy:
+  hidden: 256
+  proj: 64
+  use_severity: true        # "is this drift large *for this much corruption*" --
+                            # a heavily degraded real image drifts a lot too
+  use_taps: false           # feed the ladder's per-tap drift norms alongside
+                            # Delta: one log1p'd norm per tapped block, i.e. the
+                            # per-block damage profile. Requires a LADDER stage-1
+                            # checkpoint (it computes the per-tap read); against
+                            # a plain adapter this is refused at startup. On a
+                            # `vector` seam like DINOv3's the head otherwise sees
+                            # one drift norm however deep the damage entered.
+
+wandb:                      # off by default. summary.json next to the checkpoints
+  enabled: false            # stays the record of every run either way -- this only
+  project: grace-adapter    # mirrors it somewhere a sweep can be sorted.
+  entity: null              # null = your default entity
+  group: ""                 # the experiment id (e3_losses, e4_erasure). Set it and
+                            # every arm of a sweep lands in one comparison.
+  tags: []
+  mode: online              # online | offline | disabled. `offline` writes to
+                            # ./wandb/ and syncs later -- for a node with no
+                            # outbound network.
+
+
+# ------------------------------------------------- the multi-scale window ----
+# `crop:` appears on the probe, cache, stage-1 and both stage-2 configs. It is
+# the same block everywhere and it must hold the same numbers everywhere -- a
+# head fit at 128-448 and a cache rendered at 128-512 are not two settings of a
+# knob, they are a head scored on a feature space it was never fit on.
+#
+# OFF BY DEFAULT, so every config predating it keeps whole-image behaviour.
+
+crop:
+  enabled: false
+  s_min: 128
+  s_max: null               # NO DEFAULT, and enabling the crop without it RAISES.
+                            # The largest window every image can supply from its
+                            # own pixels is a property of the CORPUS: draw beyond
+                            # it and one class clamps more than the other, so the
+                            # realized crop size becomes the label. On
+                            # wildfake_test an unaudited 128-512 range scores
+                            # E-cropsize 0.9895 by itself, which is almost exactly
+                            # the shortcut the crop was introduced to remove. Run
+                            # eval_pipeline/scripts/audit_sizes.py and write down
+                            # what it says.
+  policy: uniform           # uniform | log_uniform. `uniform` puts most of its
+                            # mass at the coarse end -- 3/4 of draws from [128,
+                            # 512] exceed 224 and are therefore downsampled by
+                            # preprocessing. `log_uniform` spreads it evenly over
+                            # scale; it is E16, not the default.
+  seed: 0
+
+
+# ------------------------------------------------- the frequency side-view ----
+# `freq:` on a cache config renders the patch-DCT view alongside the features;
+# on a stage-2-enrich config it declares which protocol that run expects, and
+# `freq_sha` refuses a cache that disagrees.
+#
+# THE VIEW COUNT IS RESUMABLE AND THE COEFFICIENT SET IS NOT. Adding epochs to a
+# rendered cache costs only the new epochs; changing patch/grid/radial rewrites
+# every frequency byte. So render few views and full coefficients.
+
+freq:
+  enabled: false
+  patch: 8                  # JPEG's block size, so the block-boundary artefacts
+                            # the JPEG family produces land on coefficients this
+                            # basis resolves rather than smearing across it
+  grid: 14                  # 196 cells, one per DINOv3 patch token at 224, and
+                            # FIXED across the whole 128-512px crop range -- which
+                            # is what lets one rendered view serve every scale
+  channels: 3               # 1 or 3. Collapsing to luma would drop chromatic
+                            # artefacts, which is an ablation, not a saving.
+  radial: true              # order coefficients by radial spatial frequency, so a
+                            # band is a contiguous slice. `top_k` assumes it.
+  norm: log1p               # the only implemented value; it is a field because it
+                            # is fingerprinted
+
+
+# --------------------------------------------- train, stage 2 (enrichment) ----
+# train/configs/train/<name>_enrich.yaml -- the FREQUENCY branch. A sibling of the
+# discrepancy stage above, not a replacement: both freeze the same adapter and
+# both use labels, and they differ in what they read.
+
+run_id: dinov3_enrich
+cache_dir: cache_freq/dinov3-wildfake-multiscale
+adapter_checkpoint: checkpoints/grace/dinov3_multiscale/ema.pt
+
+epochs: 4
+batch_size: 256
+lr: 0.001
+lam_anchor: 0.1             # weight on ||fused - f_corrected||. 0 is E15. It is
+                            # what keeps this an ENRICHMENT rather than a
+                            # supervised re-fit of the seam: without it nothing
+                            # stops the module walking the features to wherever
+                            # the frozen head separates this corpus.
+finetune_head: false        # E14's second arm. Read `parallel_fraction` from
+                            # analyze_drift.py before choosing: round 1 measured
+                            # 0.0298, meaning 97% of drift lay where the frozen
+                            # head cannot see -- and if that holds, a frozen head
+                            # reduces this whole module to a scalar logit shift.
+head_lr: 0.0001             # an order below the enricher's: the head arrives
+                            # trained, and the arm asks whether it can be adjusted
+
+enricher:
+  d_model: 256              # attention width, and almost all the parameters
+  n_heads: 4
+  n_bands: 2                # HF and LF. 1 is E11's single-branch control. Two,
+                            # because blur DESTROYS high frequencies and gaussian
+                            # noise ADDS them -- opposite directions that one gate
+                            # cannot express.
+  dropout: 0.0
+  gate_init: -4.0           # sigmoid(-4) ~= 0.018. Belt to the zero-initialised
+                            # output projections' braces; the EXACT identity comes
+                            # from the projections, not from this.
+  severity_film: true       # condition the gates on stage 1's predicted severity
+  pos_emb: true             # learned 2D per-cell embedding; false is E13
+  top_k: null               # keep the k lowest radial coefficients PER CHANNEL.
+                            # Applied at read time over a fully rendered view, so
+                            # sweeping it costs no re-render. E13.
+  learn_masks: true         # false pins the band masks to their initialisation
+
+
+# -------------------------------------------------------------- detectors ----
+# eval/configs/detectors/<name>+grace.yaml
+# Written in the HARNESS's DetectorConfig shape, because the harness reads it.
+
+name: dinov3+grace
+target: grace_adapter.detectors.adapted.AdaptedDetector
+args:
+  base: eval/configs/detectors/dinov3-wildfake.yaml
+  split: eval.splits.dinov3.DINOv3Split
+  checkpoint: checkpoints/grace/dinov3_clean/ema.pt  # null = identity, i.e. the
+                                                     # untouched base detector
+  discrepancy: null         # a stage-2 checkpoint here makes this GRACE-D
+device: auto

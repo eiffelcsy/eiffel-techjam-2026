@@ -1,0 +1,67 @@
+# E7 -- the ladder arm, and the ONLY legitimate one. Controlled against
+# dinov3_clean.yaml, the reference arm, at the same loss weights and the same 12
+# epochs. Any 4-epoch ladder run is a third of the training, not a worse
+# architecture, and must not be read against the plain arm.
+#
+#   python scripts/train_adapter.py configs/train/dinov3_ladder_final.yaml
+#
+# Against dinov3_clean.yaml the differences are exactly four: `cache_dir`
+# (the tap cache), `split_args` (which blocks the split emits), and
+# `adapter.taps`/`adapter.tap_dim`. Seed, epochs, schedule, loss weights, batch
+# size and adapter geometry are copied verbatim -- change any of them and the
+# result stops being attributable to the ladder.
+#
+# Why 12 epochs matters here. The previous round's ladder runs stopped at 4,336
+# steps against the plain arm's 13,008, so their 66-71% gap-closed on
+# ntire_val_hard could not be read against the plain arm's 87%. That is the
+# mistake this config exists to not repeat: `epochs` is copied from the
+# reference and must stay copied from it.
+#
+# `tap_gate/*` in summary.json's history is the figure this arm exists to make.
+# Read it against the seam `gate` in the same history, and read BOTH knowing that
+# weight decay moves them on its own -- see decay_gate in configs/defaults.yaml.
+
+# Its stage-2 pair is configs/train/dinov3_discrepancy_ladder{,_taps}.yaml, which
+# both load this run's ema.pt, and configs/detectors/dinov3+grace-ladder.yaml,
+# which scores it through the harness.
+
+run_id: dinov3_ladder_final
+
+detector: eval/configs/detectors/dinov3-wildfake.yaml
+split: eval.splits.dinov3.DINOv3Split
+dataset: load_data/configs/datasets/wildfake_train.yaml
+
+split_args:
+  tap_blocks: [0, 2, 4, 6, 9]
+
+val_datasets:
+  - load_data/configs/datasets/wildfake_train_val.yaml
+val_cache_dirs:
+  - cache_val_taps/dinov3-wildfake
+
+cache_dir: cache_taps/dinov3-wildfake
+epochs: 12
+seed: 0
+target_view: clean
+source: cache
+checkpoint_every: 2
+val_every: 4
+
+batch_size: 256
+warmup_steps: 10
+
+adapter:
+  bottleneck: 128
+  n_blocks: 3
+  taps: true
+  tap_dim: 64
+
+loss:               # verbatim from dinov3_clean.yaml, the reference arm
+  w_err: 4.0
+  w_cos: 0.25
+  eps_iso: 0.01
+
+wandb:
+  enabled: false
+  project: grace-adapter
+  group: ""

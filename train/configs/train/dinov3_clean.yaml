@@ -1,0 +1,104 @@
+# THE REFERENCE ARM. Every stage-1 ablation in this project is this file with
+# exactly one key changed, and every detector config loads this run's `ema.pt`.
+# Change anything here and every ablation moves with it.
+#
+# Arm B of E2: the target is the CLEAN view from the cache. `dinov3_degraded.yaml`
+# is its one-key pair (`target_view: degraded`), which asks the adapter to
+# reproduce its own input and should therefore achieve nothing.
+#
+# WHAT HANGS OFF THIS FILE, one key each:
+#
+#   dinov3_degraded.yaml              target_view: degraded       E2
+#   dinov3_plain_mse.yaml             loss.weighting: none        E3
+#   dinov3_gate_nodecay.yaml          decay_gate: false           E8
+#   dinov3_sweep_gate_-3.yaml         adapter.gate_init: -3.0     E9
+#   dinov3_sweep_wratio_*.yaml        loss.w_err / loss.w_cos     E9
+#   dinov3_sweep_nblocks_2.yaml       adapter.n_blocks: 2         E9
+#   dinov3_sweep_bottleneck_256.yaml  adapter.bottleneck: 256     E9
+#   dinov3_live.yaml                  source: live                E6
+#
+# This file is ALSO the control for three of them. `decay_gate` and `gate_init`
+# default to `true` / -4.0, so this run IS the decay-on, gate-init-(-4) arm --
+# there is no `dinov3_sweep_gate_-4.yaml` and there should not be one. Likewise
+# w_err/w_cos = 4.0/0.25 is ratio 16, so this run is the wratio sweep's top
+# point and there is no `dinov3_sweep_wratio_16.yaml`.
+#
+# `checkpoint_every: 2` writes the six intermediate adapters E4 sweeps stage 2
+# against. A full stage-1 run on this cache is minutes, so there is no reason
+# not to.
+#
+# `val_every: 4` writes held-out numbers alongside those checkpoints, so the
+# erasure curve and the retention curve share an x-axis. `summary.json` keeps
+# these rows under `val_history`; `validation` stays the finished adapter.
+#
+# LOSS WEIGHTS. w_err 4.0 / w_cos 0.25 -- ratio 16, the winner on E9's only live
+# axis by about 4 seed-sd on ntire_val_hard. The preference REVERSED on
+# ntire_val, where ratio 4 measured better; both directions were backed by
+# five-seed families, so that was a measured split-dependence to report, not
+# noise to resolve by picking a split.
+#
+# STALE PROVENANCE -- read before quoting this as tuned. Both of those numbers
+# come from NTIRE, which this project no longer trains or validates on, and the
+# two-split comparison that produced them cannot be repeated: WildFake supplies
+# one validation split, not a plain/hard pair. So ratio 16 is an INHERITED
+# default here, not a setting tuned on the current corpus. Re-running E9 on
+# WildFake is what would make it tuned again; until then the sweep configs
+# (dinov3_sweep_wratio_*) carry the same caveat.
+#
+# GEOMETRY. bottleneck 128, n_blocks 3. E9 found capacity saturated -- 2 blocks
+# and a 256 bottleneck both land inside the seed floor -- so this is a
+# defensible default, not a tuned optimum.
+#
+# The objective carries no sliced-Wasserstein or clean-anchor term; both were
+# removed from the pipeline. Any checkpoint whose `history` logs `sw` or
+# `identity` predates that removal and is not comparable to this one.
+#
+#   python scripts/train_adapter.py configs/train/dinov3_clean.yaml
+#   python scripts/train_adapter.py configs/train/dinov3_clean.yaml --seed 1 --run-id dinov3_clean_s1
+
+run_id: dinov3_clean
+
+detector: eval/configs/detectors/dinov3-wildfake.yaml
+split: eval.splits.dinov3.DINOv3Split
+dataset: load_data/configs/datasets/wildfake_train.yaml
+
+# Held-out IMAGES, alongside the cache's held-out degradations. The two answer
+# different questions and summary.json reports them separately: the degradation
+# axis scores unseen corruptions over images that WERE trained on, and cannot
+# speak to generalization across images; these datasets can.
+val_datasets:
+  - load_data/configs/datasets/wildfake_train_val.yaml
+val_cache_dirs:
+  - cache_val/dinov3-wildfake
+
+
+cache_dir: cache/dinov3-wildfake
+epochs: 12
+seed: 0
+target_view: clean
+source: cache
+checkpoint_every: 2
+val_every: 4
+
+batch_size: 256
+warmup_steps: 10
+
+adapter:
+  bottleneck: 128   # 768 -> 128 -> 768: ~0.4M parameters against a 21M frozen
+                    # trunk. The parameter budget IS the claim -- if the gap only
+                    # closed with a large adapter, the evidence was not merely
+                    # displaced. (dinov3_sweep_bottleneck_256 doubles it and
+                    # gains nothing.)
+  n_blocks: 3
+
+loss:               # Jacobian-weighted error through the frozen head.
+  w_err: 4.0        # ratio 16 -- E9's tuned point. See the header.
+  w_cos: 0.25
+  eps_iso: 0.01
+
+# Optional. `--wandb --wandb-group <experiment>` on the command line does the
+# same thing without editing a file, which is what a sweep wants.
+wandb:
+  enabled: true
+  project: grace-adapter
+  group: ""

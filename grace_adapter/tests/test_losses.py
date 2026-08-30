@@ -4,8 +4,8 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from grace.train.losses import alignment_loss, head_kl
-from grace.train.weighting import decision_weighted_error, head_gradient
+from train.losses import alignment_loss, head_kl
+from train.weighting import decision_weighted_error, head_gradient
 from tests.fixtures import SPECS, LinearHead, MLPHead, features
 
 

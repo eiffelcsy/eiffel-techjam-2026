@@ -16,20 +16,20 @@ import numpy as np
 import pytest
 import torch
 
-from grace.cache.reader import FeatureCache
-from grace.cache.schedule import EpochSchedule, val_epochs
-from grace.cache.spec import (
+from train.cache.reader import FeatureCache
+from train.cache.schedule import EpochSchedule, val_epochs
+from train.cache.spec import (
     CacheSpec, sha_manifest, sha_preprocess, tap_view_name, view_name,
 )
-from grace.cache.writer import build_cache, is_complete
-from grace.config import AdapterConfig, LossConfig, TrainConfig
-from grace.models.adapter import GATE_INIT, GatedResidualAdapter
-from grace.models.factory import build_adapter, load_adapter, save_adapter
-from grace.models.ladder import LadderAdapter, tap_spec_for
-from grace.splits.base import FeatureSpec
-from grace.splits.verify import verify_taps
-from grace.train.data import build_loader
-from grace.train.loop import train_adapter
+from train.cache.writer import build_cache, is_complete
+from train.config import AdapterConfig, LossConfig, TrainConfig
+from grace_adapter.models.adapter import GATE_INIT, GatedResidualAdapter
+from grace_adapter.models.factory import build_adapter, load_adapter, save_adapter
+from grace_adapter.models.ladder import LadderAdapter, tap_spec_for
+from eval.splits.base import FeatureSpec
+from eval.splits.verify import verify_taps
+from train.data import build_loader
+from train.loop import train_adapter
 from preprocessing.degrade.conditions import load_grid
 from tests.fixtures import SPECS, MLPHead, ToySplit, features, write_images
 

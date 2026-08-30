@@ -1,0 +1,65 @@
+# E6 -- the control for the whole pre-rendering argument: degrade in the loop.
+#
+# Pre-rendering fixes the augmentation set at `n_epochs` draws per image, and the
+# fair worry is that stage 1 exploits that finite set rather than learning to
+# undo a degradation family. `source: live` runs the same schedule, the same
+# grid_file and the same level weights, but samples a fresh recipe every step and
+# runs the trunk in the loop -- so it is the direct control.
+#
+# Cached ~= live means the finite epoch set is not being exploited and every
+# cached number stands. A gap means the cached runs are partly memorising 12
+# specific corruptions per image, and `n_epochs` has to go up.
+#
+#   python scripts/train_adapter.py configs/train/dinov3_live.yaml
+#
+# This is the ONE arm that is not fast. `source: cache` has no trunk forward at
+# all -- a step is two memmap reads and a 2-layer MLP -- while this one pays a
+# full DINOv3 forward per image per step. Expect hours where the others take
+# minutes, and cap it with `--epochs` if that is too much for a control.
+#
+# `batch_size` counts IMAGES here, not cached features, which is why it drops
+# from 256 to 32: the trunk is back in the loop and the memory profile is the
+# detector's, not the adapter's. The `val_cache_dirs` are still caches -- stage-1
+# validation reads pre-rendered features whatever the training source is.
+#
+# Identical to dinov3_clean.yaml except `source`, `batch_size` and `num_workers`.
+
+run_id: dinov3_live
+
+detector: eval/configs/detectors/dinov3-wildfake.yaml
+split: eval.splits.dinov3.DINOv3Split
+dataset: load_data/configs/datasets/wildfake_train.yaml
+
+val_datasets:
+  - load_data/configs/datasets/wildfake_train_val.yaml
+val_cache_dirs:
+  - cache_val/dinov3-wildfake
+
+cache_dir: cache/dinov3-wildfake
+epochs: 12
+seed: 0
+target_view: clean
+source: live
+
+# Matches the baseline's cadence so the two held-out curves are sampled at the
+# same epochs and can be plotted against each other.
+checkpoint_every: 2
+val_every: 4
+
+batch_size: 32      # images now, not features
+num_workers: 8
+warmup_steps: 10
+
+adapter:
+  bottleneck: 128
+  n_blocks: 3
+
+loss:
+  w_err: 4.0
+  w_cos: 0.25
+  eps_iso: 0.01
+
+wandb:
+  enabled: true
+  project: grace-adapter
+  group: e6_source

@@ -9,9 +9,9 @@ place a future change could break it silently.
 import pytest
 import torch
 
-from grace.config import AdapterConfig
-from grace.models.adapter import GATE_INIT, GatedResidualAdapter
-from grace.models.factory import build_adapter, gate_shape_for
+from train.config import AdapterConfig
+from grace_adapter.models.adapter import GATE_INIT, GatedResidualAdapter
+from grace_adapter.models.factory import build_adapter, gate_shape_for
 from tests.fixtures import SPECS, features
 
 

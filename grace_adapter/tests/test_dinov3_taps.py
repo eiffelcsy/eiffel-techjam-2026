@@ -21,8 +21,8 @@ import torch
 transformers = pytest.importorskip("transformers")
 pytest.importorskip("transformers.models.dinov3_vit")
 
-from grace.splits.dinov3 import DEFAULT_TAP_BLOCKS, DINOv3Split      # noqa: E402
-from grace.splits.verify import verify_taps                          # noqa: E402
+from eval.splits.dinov3 import DEFAULT_TAP_BLOCKS, DINOv3Split      # noqa: E402
+from eval.splits.verify import verify_taps                          # noqa: E402
 from tests.test_dinov3_poc import (                                  # noqa: E402,F401
     HIDDEN, IMAGE, detector_factory, tiny_backbone,
 )

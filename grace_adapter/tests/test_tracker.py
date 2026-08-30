@@ -18,8 +18,8 @@ import warnings
 
 import pytest
 
-from grace.config import TrainConfig, WandbConfig
-from grace.train.tracker import (
+from train.config import TrainConfig, WandbConfig
+from train.tracker import (
     NullTracker, add_wandb_args, apply_wandb_args, build_tracker, flatten_config,
 )
 

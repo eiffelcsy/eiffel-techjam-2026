@@ -43,6 +43,18 @@ zoo = [
     "clip @ git+https://github.com/openai/CLIP.git",
 ]
 
+[tool.pytest.ini_options]
+# grace_adapter/tests/ and the root tests/ are both packages named `tests`
+# (transitional -- grace_adapter/tests merges into tests/ in a later reorg
+# stage). Pytest's default "prepend" import mode resolves a test file's dotted
+# module name by walking up through __init__.py files and importing each
+# package level by NAME, so the two same-named packages collide regardless of
+# sys.path order: whichever "tests" some earlier import happened to cache
+# wins, silently, for every subsequent `from tests.x import y`. "importlib"
+# mode imports each test file by its file path instead, sidestepping the
+# collision entirely.
+addopts = "--import-mode=importlib"
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"

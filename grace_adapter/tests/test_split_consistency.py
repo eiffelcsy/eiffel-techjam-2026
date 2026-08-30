@@ -11,9 +11,9 @@ import pytest
 import torch
 import torch.nn as nn
 
-from grace.splits import build_split
-from grace.splits.base import FeatureSpec
-from grace.splits.verify import verify_split
+from eval.splits import build_split
+from eval.splits.base import FeatureSpec
+from eval.splits.verify import verify_split
 from tests.fixtures import SPECS, MLPHead, ToySplit
 
 
@@ -106,7 +106,7 @@ def test_feature_spec_validates_rank():
 def test_verify_uses_an_image_shaped_probe():
     """It builds its own input from the detector's declared `input_size`, so a
     split can be checked with no dataset present."""
-    from grace.splits.verify import _probe_shape
+    from eval.splits.verify import _probe_shape
 
     split = ToySplit(SPECS["vector"])
     assert _probe_shape(split) == (3, 224, 224)

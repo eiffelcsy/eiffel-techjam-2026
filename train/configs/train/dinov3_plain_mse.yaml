@@ -1,0 +1,83 @@
+# E3, arm 1 of 3 -- the loss ablation: Jacobian weighting OFF.
+#
+# `weighting: none` makes L_err exactly `F.mse_loss` (README section 3: the
+# error term is written as a blend so eps_iso: 1.0 and weighting: none are the
+# same objective) -- tests/test_losses.py pins the equivalence.
+#
+# This arm isolates the WEIGHTING and nothing else, so every other loss key is
+# dinov3_clean.yaml's. It is deliberately not "the GRACE v1 objective": v1 also
+# carried lam_kl: 0.5 and the since-removed lam_sw / n_proj / lam_id terms, and
+# changing those here would confound the one key this experiment is about. That
+# baseline is no longer expressible in this schema at all.
+#
+# RESULT (see docs/RESULTS.md): the readout below did NOT work. This run finished
+# at cos_decision 0.1072 -- twice dinov3_clean's 0.0655, not "near 0" -- and
+# across arms cos_decision is anti-correlated with the outcome. The weighting
+# still wins on AUC (+0.0148 vs +0.0103 hard, ~3.5 seed-sd), so the term keeps
+# its place, but read hard-split delta AUC, not cos_decision.
+#
+# This run also predates the lam_sw / lam_id removal: its history still logs `sw`
+# and `identity` (1.49% of the objective here, 1.65% in dinov3_clean -- symmetric
+# enough that the ablation stands). It has NOT been re-run since.
+#
+# The superseded readout, kept for context: read `cos_decision` against
+# dinov3_clean's; if this run sits near 0 while the weighted one climbs, the
+# adapter here is spending capacity on feature directions the frozen head cannot
+# see, which was the empirical motivation for the weighting term.
+#
+# That readout only exists because loop.py builds a diagnostic Jacobian on
+# logging steps when the loss did not need one. `weighting: none` switches off
+# the loss's `j`, and the metric would otherwise be absent from exactly the arm
+# the figure is about.
+#
+#   python scripts/train_adapter.py configs/train/dinov3_plain_mse.yaml
+#
+# Identical to dinov3_clean.yaml except `loss.weighting`. Any other difference
+# makes this not an ablation.
+
+run_id: dinov3_plain_mse
+
+detector: eval/configs/detectors/dinov3-wildfake.yaml
+split: eval.splits.dinov3.DINOv3Split
+dataset: load_data/configs/datasets/wildfake_train.yaml
+
+val_datasets:
+  - load_data/configs/datasets/wildfake_train_val.yaml
+val_cache_dirs:
+  - cache_val/dinov3-wildfake
+
+cache_dir: cache/dinov3-wildfake
+epochs: 12
+seed: 0
+target_view: clean
+source: cache
+
+# Matches the baseline's cadence so the two held-out curves are sampled at the
+# same epochs and can be plotted against each other.
+checkpoint_every: 2
+val_every: 4
+
+batch_size: 256
+warmup_steps: 10
+
+adapter:
+  bottleneck: 128
+  n_blocks: 3
+
+loss:
+  weighting: none   # THE ablated key. L_err becomes plain F.mse_loss, provably
+                    # and not approximately -- tests/test_losses.py pins the
+                    # equivalence.
+  w_err: 4.0        # Every other value here is dinov3_clean.yaml's, written out
+  w_cos: 0.25       # verbatim rather than inherited: the LossConfig defaults
+  eps_iso: 0.01     # differ from the tuned reference, so inheriting them would
+                    # make this three changes instead of one.
+                    #
+                    # (eps_iso is inert under `weighting: none` -- the plain-MSE
+                    # branch returns before reading it -- but it is set anyway so
+                    # a diff against the reference shows exactly one changed key.)
+
+wandb:
+  enabled: true
+  project: grace-adapter
+  group: e3_losses

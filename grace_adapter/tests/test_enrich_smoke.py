@@ -16,15 +16,15 @@ import json
 import pytest
 import torch
 
-from grace.cache.schedule import EpochSchedule, val_epochs
-from grace.cache.spec import CacheSpec, sha_manifest, sha_preprocess
-from grace.cache.writer import build_cache
-from grace.config import (
+from train.cache.schedule import EpochSchedule, val_epochs
+from train.cache.spec import CacheSpec, sha_manifest, sha_preprocess
+from train.cache.writer import build_cache
+from train.config import (
     AdapterConfig, EnricherConfig, EnrichTrainConfig, FreqConfig, LossConfig,
     TrainConfig,
 )
-from grace.models.factory import load_enricher
-from grace.train.loop import train_adapter, train_enrich
+from freq_branch.models.factory import load_enricher
+from train.loop import train_adapter, train_enrich
 from preprocessing.degrade.conditions import load_grid
 from tests.fixtures import SPECS, MLPHead, ToySplit, write_images
 

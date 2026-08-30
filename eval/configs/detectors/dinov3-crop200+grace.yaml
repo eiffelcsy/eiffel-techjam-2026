@@ -1,0 +1,23 @@
+# GRACE under the multi-scale protocol, scored on evaluation arm crop200.
+#
+# THE CONTROL FOR E12. `dinov3-crop200+grace-freq.yaml` is this file with the
+# enricher added and nothing else changed -- same base, same split, same adapter
+# checkpoint -- so the difference between their two result files is the
+# enrichment and nothing else.
+#
+# Distinct from dinov3+grace.yaml, which wraps the whole-image `resize` detector
+# and loads the pre-crop adapter. The two are not comparable and are not meant to
+# be: they were trained on different pixels.
+#
+# Ceiling: restoration cannot exceed the clean-feature score, so retention <= 1.0
+# by construction here. The frequency arm is the one that can pass it, because it
+# reads the image rather than repairing a summary of it.
+
+name: dinov3-crop200+grace
+target: grace_adapter.detectors.adapted.AdaptedDetector
+args:
+  base: eval/configs/detectors/dinov3-wildfake-crop200.yaml
+  split: eval.splits.dinov3.DINOv3Split
+  checkpoint: checkpoints/grace/dinov3_multiscale/ema.pt
+  discrepancy: null
+device: auto

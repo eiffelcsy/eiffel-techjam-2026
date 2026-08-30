@@ -1,0 +1,25 @@
+# GRACE-D on the PoC detector -- the same adapter, plus the discrepancy branch.
+#
+#   logit = head(adapter(trunk(x)))  +  beta * aux(delta, severity)
+#
+# `checkpoint` is byte-identical to dinov3+grace.yaml's: stage 2 never touches
+# the adapter. The only difference is that delta -- the correction the adapter
+# proposes, i.e. its estimate of the drift -- is read rather than discarded.
+#
+# This is the arm that can exceed retention 1.0, because the magnitude of the
+# damage is information the clean image does not contain. Compare with
+# scripts/compare.py, which normalises by the BASELINE's clean AUC; the harness's
+# own retention divides by this detector's clean AUC and would hide the effect.
+#
+# Caveat carried over from configs/train/dinov3_discrepancy.yaml: on a `vector`
+# split the auxiliary head sees ONE drift norm, not RINE's 24. This is the
+# branch's weakest form, and a null result here says correspondingly little.
+
+name: dinov3+grace-d
+target: grace_adapter.detectors.adapted.AdaptedDetector
+args:
+  base: eval/configs/detectors/dinov3-wildfake.yaml
+  split: eval.splits.dinov3.DINOv3Split
+  checkpoint: checkpoints/grace/dinov3_clean/ema.pt
+  discrepancy: checkpoints/grace/dinov3_disc/discrepancy.pt
+device: auto

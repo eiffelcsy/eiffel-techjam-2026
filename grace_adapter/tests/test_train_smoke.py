@@ -12,17 +12,17 @@ import json
 import pytest
 import torch
 
-from grace.cache.reader import FeatureCache
-from grace.cache.schedule import EpochSchedule, val_epochs
-from grace.cache.spec import CacheSpec, sha_manifest, sha_preprocess
-from grace.cache.writer import build_cache
-from grace.config import (
+from train.cache.reader import FeatureCache
+from train.cache.schedule import EpochSchedule, val_epochs
+from train.cache.spec import CacheSpec, sha_manifest, sha_preprocess
+from train.cache.writer import build_cache
+from train.config import (
     AdapterConfig, DiscrepancyConfig, DiscrepancyTrainConfig, LossConfig,
     TrainConfig,
 )
-from grace.cache.reader import FeatureCache
-from grace.models.factory import build_adapter, load_adapter
-from grace.train.loop import train_adapter, train_discrepancy, validate
+from train.cache.reader import FeatureCache
+from grace_adapter.models.factory import build_adapter, load_adapter
+from train.loop import train_adapter, train_discrepancy, validate
 from preprocessing.degrade.conditions import load_grid
 from tests.fixtures import SPECS, MLPHead, ToySplit, write_images
 
@@ -229,7 +229,7 @@ def test_accuracy_uses_one_threshold_across_views(workspace):
     row = out["held_out_degradations"][f"epoch_{min(val_epochs(1))}"]
 
     from eval.metrics import threshold_from_clean
-    from grace.train.data import build_loader
+    from train.data import build_loader
 
     scores, labels = [], []
     for batch in build_loader(cfg, cache, manifest, None, min(val_epochs(1)),
@@ -279,8 +279,8 @@ def test_decay_gate_false_exempts_only_the_gate_logits():
     so every other parameter must stay in the decayed group -- including the
     severity head, which is optimized alongside the adapter.
     """
-    from grace.models.factory import build_severity_head
-    from grace.train.loop import _param_groups
+    from grace_adapter.models.factory import build_severity_head
+    from train.loop import _param_groups
     from tests.fixtures import SPECS
 
     spec = SPECS["vector"]

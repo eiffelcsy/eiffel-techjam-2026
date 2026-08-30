@@ -54,7 +54,7 @@ class FrozenDetector(nn.Module, ABC):
         `preprocessing.dataset.Inputs` instead.
 
         It exists because some information cannot be recovered downstream of
-        preprocessing at any cost. `grace.detectors.fused.FusedDetector` needs a
+        preprocessing at any cost. `freq_branch.detectors.fused.FusedDetector` needs a
         patch-DCT at native pixel scale, and the 224px normalized tensor no
         longer contains it. Same picklability contract as `preprocess_fn`: the
         callable is forked into DataLoader workers and must hold no model.

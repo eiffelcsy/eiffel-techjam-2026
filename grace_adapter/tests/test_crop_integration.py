@@ -17,11 +17,11 @@ import pytest
 import torch
 from PIL import Image
 
-from grace.cache.reader import FeatureCache
-from grace.cache.schedule import EpochSchedule
-from grace.cache.spec import CacheSpec, sha_manifest, sha_preprocess
-from grace.cache.writer import MultiViewDataset, build_cache
-from grace.config import CropConfig
+from train.cache.reader import FeatureCache
+from train.cache.schedule import EpochSchedule
+from train.cache.spec import CacheSpec, sha_manifest, sha_preprocess
+from train.cache.writer import MultiViewDataset, build_cache
+from train.config import CropConfig
 from preprocessing.degrade.conditions import load_grid
 from preprocessing.degrade.crop import SampleCrop
 from tests.fixtures import SPECS, ToySplit

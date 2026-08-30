@@ -14,9 +14,9 @@ import pytest
 import torch
 from PIL import Image
 
-from grace.cache.reader import FeatureCache
-from grace.cache.schedule import EpochSchedule, val_epochs
-from grace.cache.spec import (
+from train.cache.reader import FeatureCache
+from train.cache.schedule import EpochSchedule, val_epochs
+from train.cache.spec import (
     CLEAN_VIEW,
     DONE_FILE,
     CacheSpec,
@@ -24,7 +24,7 @@ from grace.cache.spec import (
     sha_preprocess,
     view_name,
 )
-from grace.cache.writer import build_cache
+from train.cache.writer import build_cache
 from preprocessing.degrade.conditions import load_grid
 from tests.fixtures import SPECS, ToySplit, write_images
 
@@ -170,7 +170,7 @@ def test_stochastic_preprocess_is_rejected():
 # with a hole in it that nothing downstream would notice.
 
 def test_shard_writer_refuses_a_mid_shard_resume():
-    from grace.cache.writer import ShardWriter
+    from train.cache.writer import ShardWriter
 
     spec = CacheSpec(detector="toy", feature=SPECS["vector"], n=20, shard_size=10)
     with pytest.raises(ValueError, match="not a multiple of shard_size"):
@@ -187,7 +187,7 @@ def test_progress_checkpoints_when_batches_straddle_a_shard(rendered, tmp_path):
     dropping it re-creates the shard with `mode="w+"` and zeroes the rows
     already in it.
     """
-    from grace.cache.writer import PROGRESS_FILE, build_cache
+    from train.cache.writer import PROGRESS_FILE, build_cache
 
     out, manifest, split, schedule, spec = rendered
     epochs = [0, 1, *val_epochs(1)]
@@ -204,7 +204,7 @@ def test_progress_checkpoints_when_batches_straddle_a_shard(rendered, tmp_path):
 
 def test_progress_ignores_a_checkpoint_from_a_different_view_set(tmp_path):
     """Resuming into a different set of views would interleave two passes."""
-    from grace.cache.writer import _Progress
+    from train.cache.writer import _Progress
 
     _Progress(tmp_path, ["clean", "epoch=000"], 10).record(30)
     assert _Progress(tmp_path, ["clean", "epoch=000"], 10).resume_row() == 30
@@ -219,7 +219,7 @@ def test_an_interrupted_render_resumes_to_the_same_features(rendered, tmp_path):
     carries `.done`, and `.progress` says how far the pass got. What comes out
     has to be indistinguishable from the uninterrupted render.
     """
-    from grace.cache.writer import PROGRESS_FILE, build_cache
+    from train.cache.writer import PROGRESS_FILE, build_cache
 
     out, manifest, split, schedule, spec = rendered
     reference = FeatureCache(out)
@@ -266,7 +266,7 @@ def test_an_interrupted_render_resumes_to_the_same_features(rendered, tmp_path):
 
 def test_a_finished_view_is_not_re_rendered(rendered, tmp_path):
     """Adding an epoch to a finished cache must not redo the ones it has."""
-    from grace.cache.writer import build_cache
+    from train.cache.writer import build_cache
 
     out, manifest, split, schedule, spec = rendered
     grown = tmp_path / "grown"

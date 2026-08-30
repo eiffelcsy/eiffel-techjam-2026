@@ -1,0 +1,51 @@
+# Stage 2 against a LADDER stage-1 adapter. Identical to dinov3_discrepancy.yaml
+# except for what a ladder requires: the tap cache, and the split_args that say
+# which blocks it was rendered from.
+#
+#   python scripts/train_discrepancy.py configs/train/dinov3_discrepancy_ladder.yaml \
+#     --adapter checkpoints/grace/<ladder run>/ema.pt --run-id disc_ladder
+#
+# WHAT THIS DOES NOT DO. It does not give the discrepancy head the per-block
+# damage profile. `DiscrepancyHead` is built from `split.feature_spec`, which is
+# `vector (768,)` for DINOv3 whatever the adapter reads, so the head sees ONE
+# drift norm here exactly as it does against a plain adapter. The taps enter the
+# ADAPTER's bottleneck; Δ leaves as a single vector. The `layers` layout the
+# note in dinov3_discrepancy.yaml is about is a property of the detector's seam
+# (RINE), not of the ladder.
+#
+# So this arm tests one thing only: whether a ladder's BETTER Δ fuses better than
+# a plain adapter's. Against `disc_gate_ctrl` as its control, which is the same
+# stage 2 over a plain adapter on the same images.
+
+run_id: disc_ladder
+cache_dir: cache_taps/dinov3-wildfake
+adapter_checkpoint: checkpoints/grace/dinov3_ladder_final/ema.pt
+
+detector: eval/configs/detectors/dinov3-wildfake.yaml
+split: eval.splits.dinov3.DINOv3Split
+dataset: load_data/configs/datasets/wildfake_train.yaml
+
+# MUST match what the adapter was trained against. `load_adapter` refuses a
+# ladder whose tap set differs from the split's, so a stale value here fails at
+# startup rather than scoring a model reading the wrong trunk depth.
+split_args:
+  tap_blocks: [0, 2, 4, 6, 9]
+
+val_datasets:
+  - load_data/configs/datasets/wildfake_train_val.yaml
+val_cache_dirs:
+  - cache_val_taps/dinov3-wildfake
+
+epochs: 4
+batch_size: 64
+seed: 0
+
+discrepancy:
+  hidden: 256
+  proj: 64
+  use_severity: true
+
+wandb:
+  enabled: false
+  project: grace-adapter
+  group: ""
