@@ -9,13 +9,13 @@ drift the adapter already computed. This reads the image a second time, in a
 basis the trunk's resize threw away -- which is why it can exceed the
 restoration ceiling, and why it needs a cache rendered with `freq.enabled`.
 
-WHAT TO LOOK AT FIRST. `validation.step_0` is scored before the first optimizer
+`validation.step_0` is scored before the first optimizer
 step, when every expert's output projection is still zero. `auc_fused` there must
 equal `auc_corrected` exactly -- that is E10, measured rather than asserted, and
 if the two differ the module is not wired where it claims to be and nothing after
 it is a measurement.
 
-THE TWO ARMS OF E14. `--finetune-head` trains a copy of the detector's head
+`--finetune-head` trains a copy of the detector's head
 alongside the enricher. Run BOTH and report both. Which one is the honest
 headline depends on `parallel_fraction` from `analyze_drift.py`: round 1 measured
 0.0298 on NTIRE, meaning 97% of feature drift lay in directions the frozen head

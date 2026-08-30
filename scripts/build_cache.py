@@ -3,19 +3,12 @@
     python scripts/build_cache.py train/configs/cache/dinov3.yaml --dry-run
     python scripts/build_cache.py train/configs/cache/dinov3.yaml
 
-`--dry-run` prints the CacheSpec and the on-disk size and exits. Always run it
-first: the seam cache and the tap cache differ by 6x on this detector, and
-finding that out after four hours of GPU time is avoidable.
+`--dry-run` prints the CacheSpec and the on-disk size and exits.
 
 Resumable at shard granularity -- rerun after an interruption and it picks up at
 the last checkpoint. Views already carrying `.done` from a completed earlier
 render are skipped entirely, so adding epochs to a finished cache renders only
 the new ones.
-
-Every view of an image is rendered from one decode, and the degradations run on
-the GPU. Before running this against a full manifest for the first time on new
-hardware, run `scripts/validate_cuda_degrade.py` on the same config: it checks
-that the GPU degradations put the trunk in the same place the PIL ones did.
 """
 
 import argparse

@@ -2,13 +2,7 @@
 
     python scripts/train_probe.py train/configs/probe/dinov3_wildfake.yaml
 
-Run this once, before build_cache.py. Nothing else in the pipeline trains a
-detector; this exists because the PoC detector is a DINOv3 trunk plus a head
-that has to come from somewhere. See `train.probe`.
-
-The head is written to the path the *detector config* names in
-`args.head_checkpoint`, so the file the probe produces and the file the detector
-loads are the same string in one place. `--out` overrides that for a variant.
+See `train.probe`.
 
 Ordering note: this script builds the detector with `head_checkpoint: null` --
 the head does not exist yet, and only the trunk is needed to extract features.

@@ -1,12 +1,3 @@
-"""Dataset yielding (tensor, meta).
-
-Format neutrality is the one correctness detail worth being paranoid about:
-if reals are JPEGs and fakes are PNGs, a detector can learn the container
-instead of the content. Every image goes through an identical decode path
-before anything else touches it, and sources write a single on-disk format, so
-no container statistic is left correlated with the label.
-"""
-
 from typing import NamedTuple
 
 import numpy as np
