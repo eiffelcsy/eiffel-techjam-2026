@@ -180,7 +180,7 @@ PROBE=train/configs/probe/dinov3_wildfake_multiscale.yaml
 # wherever the protocol is -- stage 0 fits the head on those windows, four caches
 # render them, two training runs fingerprint them -- and seven files edited by
 # hand is seven chances to typo the one number the whole protocol rests on.
-# `grace_adapter/tests/test_configs.py::test_every_crop_config_agrees_on_the_range`
+# `tests/train/test_configs.py::test_every_crop_config_agrees_on_the_range`
 # is the check that they still match afterwards.
 CROP_CONFIGS=(
   "$PROBE"
@@ -214,7 +214,7 @@ open(path, "w", encoding="utf-8").write(
 print(f"   {path}: s_max {s_max}")
 PY
   done
-  note "grace_adapter/tests/test_configs.py::test_the_crop_range_must_be_audited"
+  note "tests/train/test_configs.py::test_the_crop_range_must_be_audited"
   note "will now fail -- that is the signal to EMPTY AWAITING_AUDIT, not to"
   note "soften the check. test_every_crop_config_agrees_on_the_range keeps them"
   note "in step from here on."

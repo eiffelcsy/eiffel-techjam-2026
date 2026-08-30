@@ -356,7 +356,7 @@ if step "E2  the clean teacher -- is it the mechanism, or self-distillation?"; t
   # target_view: degraded asks the adapter to reproduce its own INPUT. That adds
   # no information, so it should achieve nothing. If it matches the clean-teacher
   # arm, the clean teacher was not the mechanism and something else explains the
-  # result. grace_adapter/tests/test_configs.py pins the pair at one key apart.
+  # result. tests/train/test_configs.py pins the pair at one key apart.
   stage1 dinov3_degraded train/configs/train/dinov3_degraded.yaml
 fi
 
