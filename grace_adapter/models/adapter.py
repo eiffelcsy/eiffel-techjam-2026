@@ -50,11 +50,11 @@ GATE_INIT = -4.0
 near-no-op even if a future change breaks the exact-identity guarantee.
 
 Nothing pins it at exactly -4: the two constraints are "small" (so a broken
-identity guarantee is still a near-no-op) and "not zero" (so the gate, and in the
-ladder everything behind `tap_gate`, has gradient from step 0). Anywhere in
-roughly -3 to -5 satisfies both, and -4 is the round pick inside that band. It is
-the DEFAULT, not the only value: `AdapterConfig.gate_init` sweeps it, which is
-what `configs/train/dinov3_sweep_gate_-3.yaml` exists to do."""
+identity guarantee is still a near-no-op) and "not zero" (so the gate has
+gradient from step 0). Anywhere in roughly -3 to -5 satisfies both, and -4 is
+the round pick inside that band. It is the DEFAULT, not the only value:
+`AdapterConfig.gate_init` sweeps it, which is what
+`configs/train/dinov3_sweep_gate_-3.yaml` exists to do."""
 
 
 def _expand(t: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
@@ -122,17 +122,6 @@ class GatedResidualAdapter(nn.Module):
             nn.init.zeros_(self.film.weight)
             nn.init.zeros_(self.film.bias)
 
-    @property
-    def reads_taps(self) -> bool:
-        """False here, True for `grace_adapter.models.ladder.LadderAdapter`.
-
-        Every call site passes `taps=` unconditionally and this decides whether
-        they are used or refused. The alternative -- an `isinstance` check in
-        the training loop, the losses and the adapted detector -- would put the
-        ladder's existence in four places instead of one.
-        """
-        return False
-
     def gate(self, severity: torch.Tensor | None = None) -> torch.Tensor:
         """The gate, optionally FiLM-modulated by a scalar severity in [0, 1].
 
@@ -149,45 +138,16 @@ class GatedResidualAdapter(nn.Module):
             )
         return torch.sigmoid(logit)
 
-    def _side_input(self, taps: torch.Tensor | None) -> torch.Tensor | None:
-        """Summarize the taps ONCE per forward, or None for no ladder.
-
-        Hoisted out of the block loop because the summary -- a LayerNorm and a
-        projection per tap -- does not depend on `i`, and recomputing it inside
-        an `n_blocks` loop would cost `n_blocks` times the tap arithmetic to
-        produce the same tensor.
-        """
-        return None
-
-    def _side(self, i: int, side: torch.Tensor) -> torch.Tensor:
-        """Block `i`'s read of the tap summary. Unreachable unless
-        `_side_input` was overridden to return something."""
-        raise NotImplementedError(f"{type(self).__name__} has no side pathway")
-
     def forward(
         self,
         f: torch.Tensor,
         severity: torch.Tensor | None = None,
-        taps: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """`taps` is refused rather than ignored: a config that renders a tap
-        cache and then trains a plain adapter would otherwise burn the render
-        silently and report an honest-looking number for the wrong model.
-        """
-        if taps is not None and not self.reads_taps:
-            raise ValueError(
-                f"{type(self).__name__} has no ladder but was given taps of shape "
-                f"{tuple(taps.shape)}. Build a LadderAdapter (set `adapter.taps` in "
-                f"the train config) or stop passing them."
-            )
         g = self.gate(severity)
         if severity is not None:
             g = _expand(g, f)
-        side = self._side_input(taps)
         for i in range(len(self.fc1)):
             h = self.fc1[i](self.norms[i](f))
-            if side is not None:
-                h = h + _expand(self._side(i, side), h)
             f = f + g * self.fc2[i](self.drop(self.act(h)))
         return f
 

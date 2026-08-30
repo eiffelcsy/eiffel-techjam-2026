@@ -60,21 +60,15 @@ class CachedPairDataset(Dataset):
     the axis along which the corruption varies. Shuffling *within* an epoch is
     free and expected; manifest order only matters at write time.
 
-    `with_taps` adds `taps_deg`, one more memmap read. The cache also holds
-    clean taps, but nothing in the objective reads them, so they are not loaded.
-
     `with_freq` adds `freq_deg`, the DCT view of the same degraded window, for
-    stage-2 enrichment. Also not loaded by default: it is ~7x the width of a
-    768-d feature row, so a stage-1 run that never reads it should not pay for
-    it. Same rule as the taps -- the flag is what the objective asks for, and
+    stage-2 enrichment. Not loaded by default: it is ~7x the width of a 768-d
+    feature row, so a stage-1 run that never reads it should not pay for it.
     `assert_freq_available` is what refuses a cache that cannot supply it.
     """
 
-    def __init__(self, cache: FeatureCache, manifest, epoch: int, with_taps: bool = False,
-                 with_freq: bool = False):
+    def __init__(self, cache: FeatureCache, manifest, epoch: int, with_freq: bool = False):
         self.cache = cache
         self.epoch = epoch
-        self.with_taps = with_taps
         self.with_freq = with_freq
         self.index = np.asarray(manifest.index, dtype=np.int64)
         self.labels = np.asarray(manifest["label"], dtype=np.int64)
@@ -93,8 +87,6 @@ class CachedPairDataset(Dataset):
             "severity": float(self.severity[i]),
             "index": int(self.index[i]),
         }
-        if self.with_taps:
-            item["taps_deg"] = self.cache.taps(idx, self.epoch)[0]
         if self.with_freq:
             item["freq_deg"] = self.cache.freq(idx, self.epoch)[0]
         return item
@@ -108,7 +100,7 @@ class LivePairDataset(Dataset):
     """
 
     def __init__(self, cache: FeatureCache, manifest, schedule: EpochSchedule,
-                 epoch: int, preprocess, with_taps: bool = False, crop=None):
+                 epoch: int, preprocess, crop=None):
         self.cache = cache
         self.schedule = schedule
         self.epoch = epoch
@@ -116,10 +108,6 @@ class LivePairDataset(Dataset):
         self.crop = crop
         """Must match the crop the cache's clean view was rendered under, or
         `f_clean` is the target for a different window than `image` shows."""
-        self.with_taps = with_taps
-        """Accepted for interface parity with `CachedPairDataset` and unused:
-        the degraded taps come out of the same live `trunk_with_taps` call that
-        produces `f_deg` in the loop, and nothing else reads taps here."""
         self.paths = manifest["path"].tolist()
         self.index = np.asarray(manifest.index, dtype=np.int64)
         self.labels = np.asarray(manifest["label"], dtype=np.int64)
@@ -144,8 +132,7 @@ class LivePairDataset(Dataset):
 
 
 def build_loader(cfg, cache, manifest, schedule, epoch: int, preprocess=None,
-                 shuffle: bool = True, with_taps: bool = False, crop=None,
-                 with_freq: bool = False) -> DataLoader:
+                 shuffle: bool = True, crop=None, with_freq: bool = False) -> DataLoader:
     """Pick the dataset by `cfg.source` and wrap it in a DataLoader.
 
     `cache.worker_init` is passed in both modes: memmaps are opened per worker,
@@ -155,9 +142,7 @@ def build_loader(cfg, cache, manifest, schedule, epoch: int, preprocess=None,
     the other side.
     """
     if cfg.source == "cache":
-        dataset = CachedPairDataset(
-            cache, manifest, epoch, with_taps=with_taps, with_freq=with_freq
-        )
+        dataset = CachedPairDataset(cache, manifest, epoch, with_freq=with_freq)
     elif cfg.source == "live":
         if with_freq:
             # Not an oversight to fix later: stage 2 is `source: cache` by
@@ -170,9 +155,7 @@ def build_loader(cfg, cache, manifest, schedule, epoch: int, preprocess=None,
             )
         if preprocess is None:
             raise ValueError("source: live needs the detector's preprocess_fn()")
-        dataset = LivePairDataset(
-            cache, manifest, schedule, epoch, preprocess, with_taps=with_taps, crop=crop
-        )
+        dataset = LivePairDataset(cache, manifest, schedule, epoch, preprocess, crop=crop)
     else:
         raise ValueError(f"source must be 'cache' or 'live', got {cfg.source!r}")
 

@@ -90,12 +90,6 @@ def test_build_split_rejects_a_non_split():
         build_split(nn.Linear(2, 2), "torch.nn.Identity")
 
 
-def test_taps_are_empty_but_declared():
-    """FUTURE ladder. The hook exists so `CacheSpec.taps` is meaningful from the
-    first render and enabling taps adds views rather than changing the format."""
-    assert ToySplit(SPECS["vector"]).taps() == ()
-
-
 def test_feature_spec_validates_rank():
     with pytest.raises(ValueError, match="2-d shape"):
         FeatureSpec(layout="layers", shape=(16,))

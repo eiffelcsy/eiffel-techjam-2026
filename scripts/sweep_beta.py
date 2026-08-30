@@ -73,17 +73,12 @@ def _scores(fused, adapter, split, cache, manifest, epoch, cfg, device) -> dict:
     """
     loader_cfg = _cache_loader_cfg(cfg)
     main, aux, clean, labels = [], [], [], []
-    for batch in build_loader(
-        loader_cfg, cache, manifest, None, epoch, shuffle=False,
-        with_taps=adapter.reads_taps,
-    ):
+    for batch in build_loader(loader_cfg, cache, manifest, None, epoch, shuffle=False):
         f_deg = _to_float(batch["f_deg"], device)
         sev = batch["severity"].to(device).float()
-        taps = _to_float(batch["taps_deg"], device) if adapter.reads_taps else None
-        delta = adapter(f_deg, severity=sev, taps=taps) - f_deg
-        tap_drift = adapter.tap_drift(taps) if fused.aux.n_taps else None
+        delta = adapter(f_deg, severity=sev) - f_deg
         main.append(split.head(f_deg + delta).cpu().numpy())
-        aux.append(fused.aux(delta, sev, tap_drift).cpu().numpy())
+        aux.append(fused.aux(delta, sev).cpu().numpy())
         clean.append(split.head(_to_float(batch["f_clean"], device)).cpu().numpy())
         labels.append(batch["label"].numpy())
     return {k: np.concatenate(v) for k, v in
@@ -104,23 +99,17 @@ def main():
     )
     device = next(split.parameters()).device
     spec = split.feature_spec
-    tap_spec = split.tap_spec()
-    adapter = load_adapter(cfg.adapter_checkpoint, spec, tap_spec).to(device).eval()
+    adapter = load_adapter(cfg.adapter_checkpoint, spec).to(device).eval()
 
     from train.config import DiscrepancyConfig
     fused = FusedHead(
-        build_discrepancy_head(
-            spec, DiscrepancyConfig(**payload["discrepancy_cfg"]),
-            payload.get("n_taps", 0),
-        )
+        build_discrepancy_head(spec, DiscrepancyConfig(**payload["discrepancy_cfg"]))
     ).to(device)
     fused.load_state_dict(payload["state_dict"])
     fused.eval()
     learned = float(fused.beta.detach())
 
-    expect = _expect_spec(
-        split, tap_spec if adapter.reads_taps else None, cfg.crop.fingerprint()
-    )
+    expect = _expect_spec(split, cfg.crop.fingerprint())
     dataset_cfg = load_dataset_config(cfg.dataset)
     sets = [(
         "held_out_degradations",

@@ -1,36 +1,8 @@
-# Stage 2, the frequency enricher, against a FROZEN stage-1 adapter.
+# Stage 2, the frequency enricher, against the FROZEN multiscale adapter. A
+# sibling of dinov3_discrepancy.yaml: both freeze the same adapter and use
+# labels, but this one reads the image again in a basis the resize destroyed.
 #
 #   python scripts/train_enrich.py configs/train/dinov3_enrich.yaml
-#
-# A sibling of dinov3_discrepancy.yaml, not a replacement. Both freeze the same
-# adapter and both use labels; they differ in what they read. GRACE-D reads the
-# drift the adapter already computed; this reads the image again, in a basis the
-# trunk's resize destroyed.
-#
-# THE ARMS THAT HANG OFF THIS FILE, one key each:
-#
-#   E11  enricher.n_bands: 1        single branch instead of the HF/LF pair
-#   E13  enricher.top_k: 16         the 16 lowest radial coefficients per channel
-#   E13  enricher.pos_emb: false    cells become an unordered set
-#   E14  finetune_head: true        --finetune-head does the same from the CLI
-#   E15  lam_anchor: 0.0            --lam-anchor 0 likewise
-#   E16  the crop range             swept in the CACHE, not here -- a narrower
-#                                   range is a different render
-#
-# The CLI flags exist so a sweep is five invocations rather than five near-
-# identical files; the ones that are worth a file get one when they are reported.
-#
-# READ `validation.step_0` FIRST in the summary. It is scored before the first
-# optimizer step, when every expert's output projection is still zero, so
-# `auc_fused` must equal `auc_corrected` -- the `+grace` arm -- to the last
-# decimal. train_enrich.py exits non-zero if it does not.
-#
-# READ `parallel_fraction` FROM analyze_drift.py BEFORE reading any gain. Round 1
-# measured 0.0298: 97% of feature drift lay in directions the frozen head cannot
-# see. If that holds here, a frozen head reduces this whole cross-attention
-# module to a scalar logit shift, which is GRACE-D's function class at a thousand
-# times the parameters -- and the honest headline is then the fine-tuned arm,
-# reported as such, with the head's provenance given up.
 
 run_id: dinov3_enrich
 cache_dir: cache_ms/dinov3-wildfake-multiscale

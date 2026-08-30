@@ -1,27 +1,8 @@
-# THE REFERENCE ARM UNDER THE CROP PROTOCOL. dinov3_clean.yaml, re-pointed.
+# THE REFERENCE ARM under the multi-scale crop protocol -- dinov3_clean.yaml,
+# re-pointed at windowed pixels. Every ablation in this family is this file
+# with one key changed, and every detector config loads this run's `ema.pt`.
 #
 #   python scripts/train_adapter.py configs/train/dinov3_multiscale.yaml
-#   python scripts/train_adapter.py configs/train/dinov3_multiscale.yaml --seed 1 --run-id dinov3_multiscale_s1
-#
-# Identical to dinov3_clean.yaml in every key that shapes the objective -- same
-# loss weights, same geometry, same schedule, same epochs, same seed -- and
-# different in exactly the four that say WHICH PIXELS: the detector, the two
-# cache roots and the `crop:` block. Diffing the two files is the whole
-# statement of what the multi-scale protocol changed.
-#
-# WHY IT IS A NEW FILE RATHER THAN AN EDIT. dinov3_clean.yaml is the control for
-# nine ablations and every detector config loads its `ema.pt`. Repointing it
-# would move all of them at once and silently invalidate the comparison each was
-# built to make. So the crop era gets its own reference arm, its own five-seed
-# floor, and its own ablation family as those are re-run against it.
-#
-# WHAT LOADS THIS RUN'S CHECKPOINT: configs/train/dinov3_enrich.yaml (stage 2)
-# and configs/detectors/dinov3+grace-freq*.yaml (the harness arms). They name
-# checkpoints/grace/dinov3_multiscale/ema.pt, so this must run before either.
-#
-# `crop:` here is not decoration -- stage 1 reads a cache, but `crop_sha` is what
-# stops it reading a WHOLE-IMAGE cache while believing it trained on windows, and
-# the fingerprint comes from this block. It must match the cache config's.
 
 run_id: dinov3_multiscale
 

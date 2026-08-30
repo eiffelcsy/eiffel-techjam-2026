@@ -303,15 +303,9 @@ class CacheConfig:
     max_images: int | None = None
     device: str = "auto"
     split_args: dict = field(default_factory=dict)
-    """Keyword arguments for the split, e.g. `{tap_blocks: [0, 2, 4, 6, 9]}`.
-
-    The split is named by dotted path and built with no arguments today, so
-    anything that varies *per run* rather than per detector has to arrive here.
-    The ladder's tap set is the first such thing: two runs over one detector can
-    tap different blocks, and the cache each renders is only valid for its own.
-    `CacheSpec.taps` records what was actually rendered, so a train run against a
-    mismatched cache is refused rather than silently mis-fed.
-    """
+    """Keyword arguments for the split. The split is named by dotted path and
+    built with no arguments by default, so anything that varies *per run*
+    rather than per detector has to arrive here."""
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     crop: CropConfig = field(default_factory=CropConfig)
     freq: FreqConfig = field(default_factory=FreqConfig)
@@ -332,26 +326,14 @@ class AdapterConfig:
     per_channel_gate: bool = True
     dropout: float = 0.0
     severity_film: bool = True
-    taps: bool = False
-    """Build a `LadderAdapter` reading the split's intermediate taps.
-
-    A bool, not the block list: *which* blocks are tapped is a property of the
-    split (`split_args.tap_blocks`) and of the cache rendered from it, and
-    stating it twice is an invitation for the two to disagree. This says only
-    whether the adapter reads them. `grace_adapter.models.ladder.tap_spec_for` is where
-    the intent and the split's actual taps are reconciled.
-    """
-    tap_dim: int = 64
-    """Width each tap is projected to. Drives the ladder's parameter count
-    almost entirely -- see the budget table in `grace_adapter.models.ladder`."""
     gate_init: float = -4.0
-    """Logit the seam gate -- and the ladder's `tap_gate` -- starts at.
+    """Logit the seam gate starts at.
 
     A LOGIT, not a gate value: sigmoid(-4) ~= 0.018. Small so the adapter is a
     near-no-op at step 0 even if the exact-identity guarantee ever breaks, and
-    non-zero so gradient reaches the gate (and, in the ladder, `tap_proj` behind
-    it) from the first step. Sweeping it is an experiment about the second of
-    those -- see `grace_adapter.models.adapter.GATE_INIT`."""
+    non-zero so gradient reaches the gate from the first step. Sweeping it is an
+    experiment about the second of those -- see
+    `grace_adapter.models.adapter.GATE_INIT`."""
 
 
 @dataclass
@@ -373,18 +355,6 @@ class DiscrepancyConfig:
     hidden: int = 256
     proj: int = 64
     use_severity: bool = True
-    use_taps: bool = False
-    """Feed the ladder's per-tap drift norms to the head, alongside Δ.
-
-    Requires a ladder stage-1 checkpoint -- it is the ladder that computes the
-    per-tap read, and stage 2 never rebuilds the adapter. False against a ladder
-    is the control this arm is read against; True against a plain adapter is a
-    config error, raised at startup rather than silently ignored.
-
-    The point is the `vector` seam. On DINOv3 the head sees ONE drift norm no
-    matter how deep the damage entered, which is the weakest form of the RA-Det
-    argument; the tap norms are the per-block damage profile a `layers` seam
-    would have supplied for free. See `grace_adapter.models.discrepancy`."""
     lam_aux: float = 1.0
     """Weight on the auxiliary head's OWN supervised loss. 0 restores the
     fused-only objective.
@@ -426,9 +396,9 @@ class TrainConfig:
     """Apply `weight_decay` to the gate logits along with everything else.
 
     True is what every run before this was trained under. False exempts
-    `gate_logit`/`tap_gate_logit` and nothing else: decoupled decay pulls a logit
-    toward 0, i.e. the gate toward 0.5, so with it on the gate opens whether or
-    not the objective asks it to -- see `train.loop._param_groups`."""
+    `gate_logit` and nothing else: decoupled decay pulls a logit toward 0, i.e.
+    the gate toward 0.5, so with it on the gate opens whether or not the
+    objective asks it to -- see `train.loop._param_groups`."""
     warmup_steps: int = 500
     grad_clip: float = 1.0
     ema_decay: float = 0.999
@@ -460,15 +430,9 @@ class TrainConfig:
     through, so the model is loaded whether or not the trunk ever runs."""
     split: str = ""
     split_args: dict = field(default_factory=dict)
-    """Keyword arguments for the split, e.g. `{tap_blocks: [0, 2, 4, 6, 9]}`.
-
-    The split is named by dotted path and built with no arguments today, so
-    anything that varies *per run* rather than per detector has to arrive here.
-    The ladder's tap set is the first such thing: two runs over one detector can
-    tap different blocks, and the cache each renders is only valid for its own.
-    `CacheSpec.taps` records what was actually rendered, so a train run against a
-    mismatched cache is refused rather than silently mis-fed.
-    """
+    """Keyword arguments for the split. The split is named by dotted path and
+    built with no arguments by default, so anything that varies *per run*
+    rather than per detector has to arrive here."""
     dataset: str = ""
     val_datasets: list[str] = field(default_factory=list)
     """Held-out IMAGES for stage-1 validation. Parallel to `val_cache_dirs`.
@@ -547,15 +511,9 @@ class DiscrepancyTrainConfig:
     """Needed to score the main logit that the auxiliary logit is fused with."""
     split: str = ""
     split_args: dict = field(default_factory=dict)
-    """Keyword arguments for the split, e.g. `{tap_blocks: [0, 2, 4, 6, 9]}`.
-
-    The split is named by dotted path and built with no arguments today, so
-    anything that varies *per run* rather than per detector has to arrive here.
-    The ladder's tap set is the first such thing: two runs over one detector can
-    tap different blocks, and the cache each renders is only valid for its own.
-    `CacheSpec.taps` records what was actually rendered, so a train run against a
-    mismatched cache is refused rather than silently mis-fed.
-    """
+    """Keyword arguments for the split. The split is named by dotted path and
+    built with no arguments by default, so anything that varies *per run*
+    rather than per detector has to arrive here."""
     dataset: str = ""
     val_datasets: list[str] = field(default_factory=list)
     """Held-out IMAGE sets, same field as TrainConfig's and scored the same way.

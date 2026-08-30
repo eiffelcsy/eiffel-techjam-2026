@@ -16,11 +16,8 @@ import numpy as np
 import pandas as pd
 import torch
 
-from train.cache.spec import (
-    CLEAN_VIEW, INDEX_FILE, CacheSpec, freq_view_name, tap_view_name, view_name,
-)
+from train.cache.spec import CLEAN_VIEW, INDEX_FILE, CacheSpec, freq_view_name, view_name
 from train.cache.writer import RECIPE_FILE, is_complete
-from eval.splits.base import FeatureSpec
 
 
 class FeatureCache:
@@ -35,10 +32,6 @@ class FeatureCache:
         self._spec = CacheSpec.load(self.root)
         if expect is not None:
             self._spec.assert_compatible(expect)
-        # Which cached taps this reader hands back. Derived from `expect`
-        # rather than taken as its own argument: the caller already states what
-        # it needs there, and two places to say it is two places to disagree.
-        self._tap_select = self._resolve_tap_select(expect)
 
         self._index = np.load(self.root / INDEX_FILE)
         # searchsorted against a sorted copy: manifest order is ascending after
@@ -115,71 +108,6 @@ class FeatureCache:
         return self._gather(view_name(epoch), self.rows_for(indices))
 
     @property
-    def has_taps(self) -> bool:
-        return bool(self._spec.taps) and self._spec.tap_feature is not None
-
-    def _resolve_tap_select(self, expect: CacheSpec | None) -> list[int] | None:
-        """Column indices into the cached tap axis, or None to hand back all.
-
-        `assert_compatible` has already refused anything the cache does not
-        hold, so this is pure lookup. Returns None -- not `range(len)` -- when
-        the request is the whole set, so the common case does no indexing at all.
-
-        Order follows the REQUEST, not the cache: the adapter's `tap_names` come
-        from `SplitDetector.taps()`, and its per-tap gates are indexed by
-        position, so a reordering here would silently attach every gate to the
-        wrong block.
-        """
-        if expect is None or not expect.taps or not self.has_taps:
-            return None
-        want = tuple(expect.taps)
-        if want == tuple(self._spec.taps):
-            return None
-        return [self._spec.taps.index(name) for name in want]
-
-    @property
-    def taps_selected(self) -> tuple[str, ...]:
-        """The tap names this reader actually returns, in returned order."""
-        if self._tap_select is None:
-            return tuple(self._spec.taps)
-        return tuple(self._spec.taps[i] for i in self._tap_select)
-
-    @property
-    def tap_feature(self) -> FeatureSpec | None:
-        """Shape of what `taps()` RETURNS, after selection -- which is not
-        `spec.tap_feature` when a subset is being read."""
-        cached = self._spec.tap_feature
-        if cached is None or self._tap_select is None:
-            return cached
-        return FeatureSpec(
-            layout=cached.layout,
-            shape=(len(self._tap_select), cached.dim),
-            dtype=cached.dtype,
-        )
-
-    def _tap_gather(self, name: str, indices) -> torch.Tensor:
-        if not self.has_taps:
-            raise FileNotFoundError(
-                f"{self.root} was rendered without taps, so the ladder has nothing "
-                f"to read. Re-render with `split_args.tap_blocks` set "
-                f"(scripts/build_cache.py), or train the plain adapter."
-            )
-        # Gathered at the cache's full width and then sliced. The rows come off
-        # a memmap either way -- fancy-indexing the columns first would still
-        # touch every byte of each row -- so this costs a view, not a read.
-        out = self._gather(name, self.rows_for(indices), self._spec.tap_feature)
-        return out if self._tap_select is None else out[:, self._tap_select]
-
-    def clean_taps(self, indices) -> torch.Tensor:
-        """`(B, K, tap_dim)`. The clean view of the taps, rendered by every tap
-        cache. Not read by training -- it is here for analysis scripts that want
-        the undamaged taps without re-rendering the cache."""
-        return self._tap_gather(tap_view_name(None), indices)
-
-    def taps(self, indices, epoch: int) -> torch.Tensor:
-        return self._tap_gather(tap_view_name(epoch), indices)
-
-    @property
     def has_freq(self) -> bool:
         return self._spec.freq_feature is not None
 
@@ -196,9 +124,9 @@ class FeatureCache:
     def clean_freq(self, indices) -> torch.Tensor:
         """`(B, n_cells, n_coeffs)` for the undegraded window.
 
-        Read, unlike `clean_taps`: `analyze_freq.py` needs it to say what a band
-        looks like before any transform touched it, which is the reference every
-        per-degradation band signature is a delta from.
+        `analyze_freq.py` needs it to say what a band looks like before any
+        transform touched it, which is the reference every per-degradation band
+        signature is a delta from.
         """
         return self._freq_gather(freq_view_name(None), indices)
 

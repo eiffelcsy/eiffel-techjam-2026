@@ -54,15 +54,29 @@ CROP_CONFIGS = {
     "cache/wildfake_freq.yaml",
     "cache/wildfake_freq_val.yaml",
     "train/dinov3_multiscale.yaml",
+    "train/dinov3_degraded.yaml",
+    "train/dinov3_discrepancy.yaml",
     "train/dinov3_enrich.yaml",
+    "train/dinov3_gate_nodecay.yaml",
+    "train/dinov3_live.yaml",
+    "train/dinov3_plain_mse.yaml",
+    "train/dinov3_sweep_bottleneck_256.yaml",
+    "train/dinov3_sweep_gate_-3.yaml",
+    "train/dinov3_sweep_nblocks_2.yaml",
+    "train/dinov3_sweep_wratio_0.25.yaml",
+    "train/dinov3_sweep_wratio_1.yaml",
+    "train/dinov3_sweep_wratio_4.yaml",
 }
 """Every config carrying the multi-scale window protocol.
 
-Seven files rather than one because the number has to be restated wherever the
-protocol is: stage 0 fits the head on those windows, four caches render them, and
-two training runs fingerprint them. `after_fetch.sh --write-range` writes all
-seven from one audit; `test_every_crop_config_agrees_on_the_range` is what stops
-them drifting apart afterwards."""
+Grew to this set when the whole `train/` ablation family (everything but
+dinov3_clean.yaml, kept as the pre-multiscale baseline) was re-pointed at the
+multiscale reference arm, dinov3_multiscale.yaml. The number has to be restated
+wherever the protocol is: stage 0 fits the head on those windows, four caches
+render them, and every stage-1/stage-2 run below fingerprints them.
+`after_fetch.sh --write-range` writes every entry from one audit;
+`test_every_crop_config_agrees_on_the_range` is what stops them drifting apart
+afterwards."""
 
 AWAITING_AUDIT: set[str] = set()
 """The subset of CROP_CONFIGS that must still REFUSE to load.
@@ -301,9 +315,14 @@ def test_all_three_arms_wrap_the_same_base_detector(family):
 
 @pytest.mark.parametrize("family", FAMILIES)
 def test_arms_differ_only_in_target_view(family):
-    """Arm A and arm B must be one key apart, or the ablation is not an ablation."""
+    """Arm A and arm B must be one key apart, or the ablation is not an ablation.
+
+    Arm B is dinov3_multiscale.yaml, not dinov3_clean.yaml: the ablation family
+    was re-pointed at the multiscale reference arm, and dinov3_clean.yaml is
+    kept only as the pre-multiscale baseline -- it is no longer arm A's control.
+    """
     a = yaml.safe_load((CONFIGS / f"train/{family}_degraded.yaml").read_text())
-    b = yaml.safe_load((CONFIGS / f"train/{family}_clean.yaml").read_text())
+    b = yaml.safe_load((CONFIGS / f"train/{family}_multiscale.yaml").read_text())
     ignored = {"run_id", "target_view", "checkpoint_every", "loss"}
     assert {k: v for k, v in a.items() if k not in ignored} == {
         k: v for k, v in b.items() if k not in ignored

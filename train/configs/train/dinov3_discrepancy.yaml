@@ -1,44 +1,21 @@
-# PoC stage 2 -- GRACE-D's supervised auxiliary head, against a FROZEN adapter.
-#
-# The only part of GRACE that uses image labels. The adapter is frozen, so GRACE
+# Stage 2 -- GRACE-D's supervised auxiliary head, against the FROZEN
+# multiscale adapter (dinov3_multiscale.yaml). The adapter is frozen, so GRACE
 # and GRACE-D ship the same weights bit for bit.
 #
 #   python scripts/train_discrepancy.py configs/train/dinov3_discrepancy.yaml
-#
-# For E4, point --adapter at each intermediate stage-1 checkpoint in turn:
-#
-#   for ck in checkpoints/grace/dinov3_clean/step_*.pt; do
-#     python scripts/train_discrepancy.py configs/train/dinov3_discrepancy.yaml \
-#       --adapter "$ck" --run-id "e4_$(basename "$ck" .pt)"
-#   done
-#
-# then compare `auc_aux` across the summaries. Falling as stage 1 improves means
-# the adapter is destroying drift evidence it was never asked to preserve.
-#
-# NOTE on `vector` layout: DiscrepancyHead's per-group norm input is ONE number
-# here (n_groups == 1), where RINE's `layers` split would give it 24 -- the
-# per-block damage profile. The PoC therefore tests the branch's weakest form. A
-# null result here is much weaker evidence against GRACE-D than a null result on
-# a layers-layout detector would be, and should be reported that way.
 
 run_id: dinov3_disc
-cache_dir: cache/dinov3-wildfake
-adapter_checkpoint: checkpoints/grace/dinov3_clean/ema.pt
+cache_dir: cache_ms/dinov3-wildfake-multiscale
+adapter_checkpoint: checkpoints/grace/dinov3_multiscale/ema.pt
 
-detector: eval/configs/detectors/dinov3-wildfake.yaml
+detector: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
 split: eval.splits.dinov3.DINOv3Split
 dataset: load_data/configs/datasets/wildfake_train.yaml
 
-# Held-out IMAGES, the same two sets stage 1 scores. Without these E4 reports
-# only `held_out_degradations`, where the base head already sits at ~0.9999 AUC
-# -- `auc_fused` cannot exceed `auc_main` by more than rounding there, so the
-# discrepancy branch reads as inert no matter what it learned. On ntire_val_hard
-# the main head is at ~0.85 and there are 15 points of headroom for a real
-# signal to show up in.
 val_datasets:
   - load_data/configs/datasets/wildfake_train_val.yaml
 val_cache_dirs:
-  - cache_val/dinov3-wildfake
+  - cache_ms_val/dinov3-wildfake-multiscale
 
 epochs: 4
 batch_size: 64
@@ -49,8 +26,13 @@ discrepancy:
   proj: 64
   use_severity: true
 
-# Optional. `--wandb --wandb-group <experiment>` on the command line does the
-# same thing without editing a file, which is what a sweep wants.
+crop:
+  enabled: true
+  s_min: 128
+  policy: uniform
+  seed: 0
+  s_max: 256          # from results/audit_sizes__wildfake-train.json
+
 wandb:
   enabled: true
   project: grace-adapter

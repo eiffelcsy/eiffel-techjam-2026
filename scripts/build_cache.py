@@ -70,11 +70,7 @@ def main():
         # drawn in the dataset, before preprocessing, so that it can be seeded on
         # the image index without making the transform stochastic.
         crop_sha=cfg.crop.fingerprint(),
-        # Empty unless `split_args.tap_blocks` was set, so a cache config that
-        # says nothing about taps renders exactly what it always did.
-        taps=split.taps(),
-        tap_feature=split.tap_spec(),
-        # Likewise None unless `freq.enabled`. Set and cleared together with
+        # None unless `freq.enabled`. Set and cleared together with
         # `freq_sha` -- `build_cache` refuses a spec that claims a view no
         # extractor is going to write.
         freq_feature=cfg.freq.feature(),
@@ -88,13 +84,6 @@ def main():
         f"features   {spec.feature.layout}{spec.feature.shape} {spec.feature.dtype}"
         f"  ({spec.feature.bytes_per_image() / 1024:.1f} KB/image/view)"
     )
-    if spec.taps:
-        print(
-            f"taps       {list(spec.taps)} {spec.tap_feature.shape} "
-            f"({spec.tap_feature.bytes_per_image() / 1024:.1f} KB/image/view, "
-            f"{spec.tap_feature.bytes_per_image() / spec.feature.bytes_per_image():.1f}x "
-            f"the features)"
-        )
     if spec.freq_feature is not None:
         print(
             f"freq       {spec.freq_feature.shape} {spec.freq_feature.dtype} "

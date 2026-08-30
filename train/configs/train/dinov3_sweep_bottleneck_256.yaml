@@ -1,39 +1,21 @@
-# E9, capacity axis: does doubling the bottleneck buy anything?
-#
-# THE SWEPT KEY is `adapter.bottleneck`: 768 -> 256 -> 768 instead of
-# 768 -> 128 -> 768, which roughly doubles the adapter's parameter count.
-# Same argument as dinov3_sweep_nblocks_2.yaml: a saturated capacity axis is
-# evidence FOR the displacement claim, not against it.
-#
-# ONE KEY off configs/train/dinov3_clean.yaml, the reference arm. Every other
-# value is the reference's, written out verbatim rather than left to the
-# LossConfig / AdapterConfig defaults -- those differ from the tuned reference,
-# and inheriting them would make this two changes instead of one.
-#
-# Read against the reference arm's own five-seed family, not against a single
-# run: on this data the hard-split delta AUC has a seed sd of ~0.0007, so two
-# arms closer than about 0.0015 are the same arm.
+# Capacity axis: does doubling the bottleneck buy anything? THE SWEPT KEY is
+# `adapter.bottleneck` (256 vs the reference's 128). One key off
+# dinov3_multiscale.yaml; every other value is written out verbatim.
 #
 #   python scripts/train_adapter.py configs/train/dinov3_sweep_bottleneck_256.yaml
-#   python scripts/seed_stats.py 'dinov3_clean' 'dinov3_clean_s*' --vs dinov3_sweep_bottleneck_256
-#
+
 run_id: dinov3_sweep_bottleneck_256
 
-detector: eval/configs/detectors/dinov3-wildfake.yaml
+detector: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
 split: eval.splits.dinov3.DINOv3Split
 dataset: load_data/configs/datasets/wildfake_train.yaml
 
-# Held-out IMAGES, alongside the cache's held-out degradations. The two answer
-# different questions and summary.json reports them separately: the degradation
-# axis scores unseen corruptions over images that WERE trained on, and cannot
-# speak to generalization across images; these datasets can.
 val_datasets:
   - load_data/configs/datasets/wildfake_train_val.yaml
 val_cache_dirs:
-  - cache_val/dinov3-wildfake
+  - cache_ms_val/dinov3-wildfake-multiscale
 
-
-cache_dir: cache/dinov3-wildfake
+cache_dir: cache_ms/dinov3-wildfake-multiscale
 epochs: 12
 seed: 0
 target_view: clean
@@ -45,21 +27,21 @@ batch_size: 256
 warmup_steps: 10
 
 adapter:
-  bottleneck: 256   # THE swept key (reference: 128). 768 -> 256 -> 768 is
-                    # roughly 0.9M parameters against a 21M frozen trunk, about
-                    # double the reference's budget. That budget IS the claim --
-                    # if the gap only closes with a large adapter, the evidence
-                    # was not merely displaced -- so this arm coming back
-                    # saturated is a result FOR the method, not a null.
+  bottleneck: 256   # THE swept key (reference: 128)
   n_blocks: 3
 
-loss:               # Jacobian-weighted error through the frozen head.
-  w_err: 4.0        # ratio 16 -- E9's tuned point. See the header.
+loss:
+  w_err: 4.0
   w_cos: 0.25
   eps_iso: 0.01
 
-# Optional. `--wandb --wandb-group <experiment>` on the command line does the
-# same thing without editing a file, which is what a sweep wants.
+crop:
+  enabled: true
+  s_min: 128
+  policy: uniform
+  seed: 0
+  s_max: 256          # from results/audit_sizes__wildfake-train.json
+
 wandb:
   enabled: true
   project: grace-adapter

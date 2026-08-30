@@ -1,49 +1,21 @@
-# E9, loss-weight axis: w_err / w_cos = 4 (the reference runs 16).
-#
-# THE SWEPT KEYS are `loss.w_err` and `loss.w_cos`. They move together because
-# the axis under test is their RATIO -- how much of the objective is raw
-# decision-weighted squared error versus cosine on normalized features.
-#
-# The family is 0.25 / 1 / 4 / 16, and 16 is dinov3_clean.yaml itself, so
-# there is no `dinov3_sweep_wratio_16.yaml`. This is the ONLY axis E9 found
-# outside the seed floor -- and its preference is split-dependent: 16 wins on
-# ntire_val_hard, 4 (this file) wins on ntire_val. Report both, and do not
-# pick a split to make the disagreement go away.
-#
-# Caveat worth stating when this family is reported: the points vary the ratio
-# but not the total weight (2.5 / 2.0 / 2.5 / 4.25). Scale and ratio are
-# therefore mildly confounded across the family. It is how the sweep was run
-# and how it is reported; a scale-controlled version is a separate arm.
-#
-# ONE KEY off configs/train/dinov3_clean.yaml, the reference arm. Every other
-# value is the reference's, written out verbatim rather than left to the
-# LossConfig / AdapterConfig defaults -- those differ from the tuned reference,
-# and inheriting them would make this two changes instead of one.
-#
-# Read against the reference arm's own five-seed family, not against a single
-# run: on this data the hard-split delta AUC has a seed sd of ~0.0007, so two
-# arms closer than about 0.0015 are the same arm.
+# w_err/w_cos ratio sweep, rung 4 (w_cos 0.5, w_err 2.0). The family is
+# 0.25 / 1 / 4 / 16, and 16 is dinov3_multiscale.yaml itself. Identical to the
+# reference except `loss.w_cos` and `loss.w_err`.
 #
 #   python scripts/train_adapter.py configs/train/dinov3_sweep_wratio_4.yaml
-#   python scripts/seed_stats.py 'dinov3_clean' 'dinov3_clean_s*' --vs dinov3_sweep_wratio_4
-#
+
 run_id: dinov3_sweep_wratio_4
 
-detector: eval/configs/detectors/dinov3-wildfake.yaml
+detector: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
 split: eval.splits.dinov3.DINOv3Split
 dataset: load_data/configs/datasets/wildfake_train.yaml
 
-# Held-out IMAGES, alongside the cache's held-out degradations. The two answer
-# different questions and summary.json reports them separately: the degradation
-# axis scores unseen corruptions over images that WERE trained on, and cannot
-# speak to generalization across images; these datasets can.
 val_datasets:
   - load_data/configs/datasets/wildfake_train_val.yaml
 val_cache_dirs:
-  - cache_val/dinov3-wildfake
+  - cache_ms_val/dinov3-wildfake-multiscale
 
-
-cache_dir: cache/dinov3-wildfake
+cache_dir: cache_ms/dinov3-wildfake-multiscale
 epochs: 12
 seed: 0
 target_view: clean
@@ -55,20 +27,21 @@ batch_size: 256
 warmup_steps: 10
 
 adapter:
-  bottleneck: 128   # 768 -> 128 -> 768: ~0.4M parameters against a 21M frozen
-                    # trunk. The parameter budget IS the claim -- if the gap only
-                    # closed with a large adapter, the evidence was not merely
-                    # displaced. (dinov3_sweep_bottleneck_256 doubles it and
-                    # gains nothing.)
+  bottleneck: 128
   n_blocks: 3
 
-loss:               # Jacobian-weighted error through the frozen head.
+loss:
   w_err: 2.0        # THE swept keys: ratio 4 (reference: 16)
   w_cos: 0.5
   eps_iso: 0.01
 
-# Optional. `--wandb --wandb-group <experiment>` on the command line does the
-# same thing without editing a file, which is what a sweep wants.
+crop:
+  enabled: true
+  s_min: 128
+  policy: uniform
+  seed: 0
+  s_max: 256          # from results/audit_sizes__wildfake-train.json
+
 wandb:
   enabled: true
   project: grace-adapter

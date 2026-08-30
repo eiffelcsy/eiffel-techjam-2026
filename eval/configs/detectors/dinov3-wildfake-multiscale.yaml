@@ -25,7 +25,7 @@ args:
   backbone_id: facebook/dinov3-vits16-pretrain-lvd1689m
   head_checkpoint: checkpoints/probe/dinov3_wildfake_multiscale/head.pt
   pool: cls+patchmean
-  input_mode: multiscale   # THE swept key (reference: resize)
+  input_mode: multiscale
   hidden: 512
   n_layers: 2
 device: auto

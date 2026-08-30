@@ -285,16 +285,7 @@ class DINOv3MLPDetector(FrozenDetector):
         return self.pool_tokens(self.backbone(pixel_values=x).last_hidden_state)
 
     def pool_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
-        """(B, T, hidden) -> (B, feature_dim). Registers dropped; see POOLS.
-
-        Split out of `trunk` so the ladder can pool an *intermediate* block's
-        tokens through the identical code -- see
-        `eval.splits.dinov3.DINOv3Split.trunk_with_taps`. Sharing the function
-        rather than restating three lines is what makes a tap at the last block
-        reduce to the seam feature exactly, which is the check `verify_taps`
-        runs and the reason a tapped forward cannot silently drift from the
-        features every baseline was measured at.
-        """
+        """(B, T, hidden) -> (B, feature_dim). Registers dropped; see POOLS."""
         cls = tokens[:, 0]
         patches = tokens[:, self.n_prefix :].mean(dim=1)
         if self.pool == "cls":

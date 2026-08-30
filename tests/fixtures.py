@@ -84,33 +84,17 @@ class ToyDetector(nn.Module):
 
 
 class ToySplit(SplitDetector):
-    """A SplitDetector satisfying head(trunk(x)) == detector(x) by construction.
+    """A SplitDetector satisfying head(trunk(x)) == detector(x) by construction."""
 
-    `n_taps > 0` also makes it emit taps, so the ladder -- cache views, reader,
-    training loop, checkpoint round-trip -- is testable with no detector weights,
-    exactly as everything else here is. The taps are a deterministic function of
-    the seam features rather than genuine intermediate activations: what these
-    tests check is the plumbing (shapes, row alignment, which view a tap came
-    from), and a real trunk is not needed to get that wrong.
-    """
-
-    def __init__(
-        self,
-        spec: FeatureSpec,
-        head: nn.Module | None = None,
-        verify: bool = False,
-        n_taps: int = 0,
-    ):
+    def __init__(self, spec: FeatureSpec, head: nn.Module | None = None, verify: bool = False):
         super().__init__(ToyDetector(spec, head))
         self._spec = spec
-        self.n_taps = n_taps
         self.eval()
         self.requires_grad_(False)
         if verify:
-            from eval.splits.verify import verify_split, verify_taps
+            from eval.splits.verify import verify_split
 
             verify_split(self)
-            verify_taps(self)
 
     @property
     def feature_spec(self) -> FeatureSpec:
@@ -121,25 +105,6 @@ class ToySplit(SplitDetector):
 
     def head(self, f: torch.Tensor) -> torch.Tensor:
         return self.detector.head(f)
-
-    def taps(self) -> tuple[str, ...]:
-        return tuple(f"block{k:02d}" for k in range(self.n_taps))
-
-    def tap_spec(self) -> FeatureSpec | None:
-        if not self.n_taps:
-            return None
-        return FeatureSpec(layout="layers", shape=(self.n_taps, self._spec.numel()))
-
-    def trunk_with_taps(self, x: torch.Tensor):
-        f = self.trunk(x)
-        if not self.n_taps:
-            return f, None
-        # Distinct per tap and per image, so a test that crossed two taps or two
-        # rows would see it. `f` itself is returned unchanged -- `verify_taps`
-        # requires the tapped path to reproduce `trunk` exactly.
-        flat = f.flatten(1)
-        taps = torch.stack([flat * (k + 1) for k in range(self.n_taps)], dim=1)
-        return f, taps
 
 
 SPECS = {

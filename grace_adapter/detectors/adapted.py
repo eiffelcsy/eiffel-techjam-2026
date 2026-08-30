@@ -9,11 +9,6 @@ whatsoever: same conditions, same threshold rule, same retention denominator,
 same JSON schema, same report table. The baseline and the adapted model differ by
 one config file, which is the plug-and-play claim in concrete form.
 
-`split_args` reaches the split, and is how a ladder checkpoint is told which
-blocks to tap at inference: `{tap_blocks: [0, 2, 4, 6, 9]}`, matching whatever
-the cache it was trained on was rendered with. Mismatches are refused by
-`load_adapter` rather than silently scored.
-
 Three configurations, all the same class:
 
     checkpoint: null                    the null adapter -- must reproduce the
@@ -69,12 +64,7 @@ class AdaptedDetector(FrozenDetector):
         self.name = name
 
         spec = self.split.feature_spec
-        # Passed to `load_adapter` so a ladder checkpoint scored against a split
-        # tapping other blocks -- or a plain checkpoint against a tapping split
-        # -- is refused here rather than producing plausible numbers for a model
-        # reading the wrong part of the trunk.
-        tap_spec = self.split.tap_spec()
-        self.adapter = load_adapter(checkpoint, spec, tap_spec) if checkpoint else None
+        self.adapter = load_adapter(checkpoint, spec) if checkpoint else None
         self.severity_head = None
         self.fused = None
 
@@ -110,20 +100,14 @@ class AdaptedDetector(FrozenDetector):
         return self.split.preprocess_fn()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # One trunk pass either way: `trunk_with_taps` returns `(f, None)` on a
-        # split with no taps, so the ladder costs nothing at inference beyond
-        # the tap projections themselves. This is the property that makes the
-        # ladder deployable at all -- the taps are activations the forward pass
-        # already produced.
-        f, taps = self.split.trunk_with_taps(x)
+        f = self.split.trunk(x)
         if self.adapter is None:
             return self.split.head(f)
 
         f = f.float()
-        taps = taps.float() if taps is not None and self.adapter.reads_taps else None
         severity = self.severity_head(f) if self.severity_head is not None else None
 
-        f_adapted = self.adapter(f, severity=severity, taps=taps)
+        f_adapted = self.adapter(f, severity=severity)
         logit = self.split.head(f_adapted)
 
         if self.fused is not None:

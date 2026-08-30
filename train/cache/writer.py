@@ -15,21 +15,15 @@ thing that supports random access and multi-worker reads.
     |   |-- recipes.parquet     index, level, recipe label, transforms, severity
     |   `-- .done
     |-- epoch=001/ ...
-    |-- taps/                   ONLY when the split emits taps
-    |   |-- clean/
-    |   |   |-- feats_00000.npy (rows_in_shard, K, tap_dim) float16
-    |   |   `-- .done
-    |   `-- epoch=000/ ...
     `-- freq/                   ONLY when a freq extractor was passed
         |-- clean/
         |   |-- feats_00000.npy (rows_in_shard, n_cells, n_coeffs) float16
         |   `-- .done
         `-- epoch=000/ ...
 
-Taps and freq are the same mechanism under two names -- a side channel with its
-own `FeatureSpec`, written by the same `ShardWriter` into a nested directory --
-which is why adding the second one touched three lines per file rather than
-duplicating the pathway.
+The frequency view is a named side channel with its own `FeatureSpec`, written
+by the same `ShardWriter` into a nested directory -- a second view family
+alongside the features, rather than a second on-disk format.
 
 `index.npy` is written once and shared: every view holds the same images in the
 same manifest order, so row `r` means the same image in every view. That is what
@@ -94,9 +88,7 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 from train.cache.schedule import EpochSchedule
-from train.cache.spec import (
-    DONE_FILE, INDEX_FILE, CacheSpec, freq_view_name, tap_view_name, view_name,
-)
+from train.cache.spec import DONE_FILE, INDEX_FILE, CacheSpec, freq_view_name, view_name
 from eval.splits.base import SplitDetector
 from preprocessing.dataset import load_normalized
 
@@ -124,10 +116,11 @@ class ShardWriter:
         start_row: int = 0,
         feature=None,
     ):
-        """`feature` overrides `spec.feature` for tap views, whose rows are
-        `(K, tap_dim)` rather than the seam's shape. Everything else -- shards,
-        resume, `.done` -- is identical, which is the point of storing taps as
-        ordinary views instead of inventing a second on-disk format."""
+        """`feature` overrides `spec.feature` for the frequency view, whose rows
+        are `(n_cells, n_coeffs)` rather than the seam's shape. Everything else
+        -- shards, resume, `.done` -- is identical, which is the point of
+        storing it as an ordinary view instead of inventing a second on-disk
+        format."""
         if start_row % spec.shard_size:
             raise ValueError(
                 f"start_row {start_row} is not a multiple of shard_size "
@@ -203,14 +196,12 @@ def is_complete(view_dir: str | Path) -> bool:
 def view_is_complete(root: Path, epoch, spec: CacheSpec) -> bool:
     """A view counts as rendered only when every part of it is.
 
-    With taps and a frequency view, one epoch is three directories. Testing the
-    feature view alone would skip an epoch whose side channels were never
-    finished -- and the ladder, or the enricher, would then train against
-    whatever a half-written shard happens to hold, which is zeros, silently.
+    With a frequency view, one epoch is two directories. Testing the feature
+    view alone would skip an epoch whose side channel was never finished -- and
+    the enricher would then train against whatever a half-written shard happens
+    to hold, which is zeros, silently.
     """
     if not is_complete(root / view_name(epoch)):
-        return False
-    if spec.taps and not is_complete(root / tap_view_name(epoch)):
         return False
     return spec.freq_feature is None or is_complete(root / freq_view_name(epoch))
 
@@ -362,11 +353,11 @@ def build_cache(
     Its identity belongs in `spec.crop_sha`, so features rendered under one
     window protocol can never be read as if they were another's.
 
-    `freq` is an optional `freq_branch.view.FreqExtract`, rendered as a third
-    view family alongside the features and the taps. Pass it whenever
-    `spec.freq_feature` is set; the two are reconciled below rather than trusted
-    to agree, because a spec claiming a frequency view over a directory with none
-    is a cache whose reader fails only when the enricher first asks for it.
+    `freq` is an optional `freq_branch.view.FreqExtract`, rendered as a second
+    view family alongside the features. Pass it whenever `spec.freq_feature` is
+    set; the two are reconciled below rather than trusted to agree, because a
+    spec claiming a frequency view over a directory with none is a cache whose
+    reader fails only when the enricher first asks for it.
     """
     if (freq is not None) != (spec.freq_feature is not None):
         raise ValueError(
@@ -383,8 +374,6 @@ def build_cache(
     pending = [e for e in [None, *epochs] if not view_is_complete(root, e, spec)]
     if pending:
         rendering = [view_name(e) for e in pending]
-        if spec.taps:
-            rendering += [tap_view_name(e) for e in pending]
         if spec.freq_feature is not None:
             rendering += [freq_view_name(e) for e in pending]
         progress = _Progress(root, rendering, spec.shard_size)
@@ -422,23 +411,11 @@ def _render(
         ShardWriter(root / view_name(epoch), spec, start_row=start_row)
         for epoch in pending
     ]
-    # Taps ride along in the same pass. Rendering them separately would mean a
-    # second full decode-degrade-forward over the dataset for activations the
-    # first pass already computed and dropped -- which is the exact cost the
-    # single-pass inversion above exists to avoid.
-    tap_writers = [
-        ShardWriter(
-            root / tap_view_name(epoch), spec, start_row=start_row,
-            feature=spec.tap_feature,
-        )
-        for epoch in pending
-    ] if spec.taps else []
 
-    # The frequency view rides along for the same reason the taps do, with one
-    # difference worth stating: it costs no GPU at all. The DCT runs in the
-    # worker on an image that is already decoded, degraded and cropped, so
-    # rendering it separately would buy a second full decode pass for arithmetic
-    # this pass performs anyway while the trunk is busy.
+    # The frequency view rides along in the same pass, and costs no GPU at all:
+    # the DCT runs in the worker on an image that is already decoded, degraded
+    # and cropped, so rendering it separately would buy a second full decode
+    # pass for arithmetic this pass performs anyway while the trunk is busy.
     freq_writers = [
         ShardWriter(
             root / freq_view_name(epoch), spec, start_row=start_row,
@@ -477,32 +454,21 @@ def _render(
         # item is V preprocessed views, not one.
         flat = views.flatten(0, 1).to(device, non_blocking=True)
         chunks = [
-            split.trunk_with_taps(flat[lo : lo + trunk_batch_size])
+            split.trunk(flat[lo : lo + trunk_batch_size])
             for lo in range(0, len(flat), trunk_batch_size)
         ]
-        features = torch.cat([f for f, _ in chunks]).view(
-            images, n_views, *spec.feature.shape
-        )
-        taps = (
-            torch.cat([t for _, t in chunks]).view(
-                images, n_views, *spec.tap_feature.shape
-            )
-            if tap_writers
-            else None
-        )
+        features = torch.cat(chunks).view(images, n_views, *spec.feature.shape)
 
         for view, writer in enumerate(writers):
             writer.write(features[:, view].to(spec.feature.torch_dtype).cpu().numpy())
-        for view, writer in enumerate(tap_writers):
-            writer.write(taps[:, view].to(spec.tap_feature.torch_dtype).cpu().numpy())
         # Straight from the workers -- the trunk never sees these, so unlike the
-        # features and the taps they never left the CPU.
+        # features they never left the CPU.
         for view, writer in enumerate(freq_writers):
             writer.write(freqs[:, view].to(spec.freq_feature.torch_dtype).numpy())
 
         rows += images
         if rows // spec.shard_size > recorded:
-            for writer in (*writers, *tap_writers, *freq_writers):
+            for writer in (*writers, *freq_writers):
                 writer.flush()
             # `record` floors to whole shards, so a batch that straddles a
             # boundary checkpoints only the shards behind it; the few rows past
@@ -511,7 +477,7 @@ def _render(
             recorded = rows // spec.shard_size
         bar.set_postfix(rows=rows, refresh=False)
 
-    for writer in (*writers, *tap_writers, *freq_writers):
+    for writer in (*writers, *freq_writers):
         writer.finalize()
 
 

@@ -1,26 +1,6 @@
 # Stage 0 under the multi-scale protocol -- the head every later arm loads.
 #
 #   python scripts/train_probe.py configs/probe/dinov3_wildfake_multiscale.yaml
-#
-# Identical to dinov3_wildfake.yaml but for `detector:` and the `crop:` block,
-# which are one change: the detector names the protocol (`input_mode:
-# multiscale`) and the crop block supplies it. Setting one without the other is
-# refused at startup by `probe.train._assert_crop_matches_input_mode`, because a
-# head stamped with a window protocol it was not fit under is exactly the silent
-# failure `_assert_head_matches` exists to stop.
-#
-# WHY REFIT AT ALL. The existing head was fit on whole images. Under this
-# protocol the trunk sees 128-S_MAX px windows at native pixel scale, which is a
-# different feature space -- not a harder version of the same one. Reusing the
-# old head would measure a mismatch.
-#
-# THE 32x32 GATE. After this runs, `scripts/roundtrip_check.py` downscales the
-# validation images to 32x32 and back and re-scores them. A head reading
-# generation traces must fall toward chance; one that does not has learned
-# content. Under `resize` on SID_Set a probe held 0.985 AUC through that round
-# trip, which is what condemned whole-image preprocessing in the first place.
-# This head is expected to FAIL the old way, i.e. to drop. If it does not, the
-# frequency branch has nothing to enrich and that is the finding.
 
 run_id: dinov3_wildfake_multiscale
 
@@ -33,18 +13,15 @@ val_dataset:
 split: eval.splits.dinov3.DINOv3Split
 out: ""             # "" = take it from the detector config's head_checkpoint
 
-# THE SWEPT BLOCK. `s_max` is deliberately absent: enabling the crop without it
-# raises rather than defaulting, because the safe upper bound is a property of
+# `s_max` is deliberately absent because the safe upper bound is a property of
 # the corpus and not of the method. A window larger than a source cannot be
 # taken, so if one class's images are systematically smaller its crops are too,
-# and the realized crop size becomes the label. On wildfake_test a 128-512 range
-# scores E-cropsize 0.9895 all by itself -- almost exactly the shortcut the crop
-# was introduced to remove.
+# and the realized crop size becomes the label.
 #
-# Fill it from the audit, not from this comment:
+# Fill it from the audit:
 #
-#   cd eval_pipeline && python scripts/audit_sizes.py \
-#       --config configs/datasets/wildfake_train.yaml \
+#   python scripts/audit_sizes.py \
+#       --config load_data/configs/datasets/wildfake_train.yaml \
 #       --out results/audit_sizes__wildfake-train.json
 #
 # and use the `recommended_s_max` it prints. `scripts/after_fetch.sh` runs this
@@ -54,7 +31,7 @@ crop:
   s_min: 128
   policy: uniform
   seed: 0
-  s_max: 256          # from results/audit_sizes__wildfake-train.json
+  s_max: 256 # set to recommended_s_max  from audit_sizes__wildfake-train.json
 
 hidden: 512
 n_layers: 2

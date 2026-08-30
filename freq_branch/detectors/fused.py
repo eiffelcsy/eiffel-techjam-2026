@@ -110,8 +110,7 @@ class FusedDetector(FrozenDetector):
         self.name = name
 
         spec = self.split.feature_spec
-        tap_spec = self.split.tap_spec()
-        self.adapter = load_adapter(checkpoint, spec, tap_spec) if checkpoint else None
+        self.adapter = load_adapter(checkpoint, spec) if checkpoint else None
         self.severity_head = None
         if self.adapter is not None and self.adapter.film is not None:
             payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
@@ -200,12 +199,10 @@ class FusedDetector(FrozenDetector):
                 f"bare {type(x).__name__}. The dataset builds them from "
                 f"`detector.aux_fn()` -- see preprocessing.dataset.Inputs."
             )
-        f, taps = self.split.trunk_with_taps(x.x)
-        f = f.float()
+        f = self.split.trunk(x.x).float()
         if self.adapter is None:
             corrected, severity = f, None
         else:
-            taps = taps.float() if taps is not None and self.adapter.reads_taps else None
             severity = self.severity_head(f) if self.severity_head is not None else None
-            corrected = self.adapter(f, severity=severity, taps=taps)
+            corrected = self.adapter(f, severity=severity)
         return self.split.head(self.enricher(corrected, x.aux.float(), severity))

@@ -18,7 +18,7 @@ into an assertion at startup that names *which* input moved.
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -34,25 +34,15 @@ SPEC_FILE = "spec.json"
 INDEX_FILE = "index.npy"
 DONE_FILE = ".done"
 
-TAP_DIR = "taps"
-"""Tap views live in a subdirectory rather than beside the feature views.
-
-A sibling naming like `epoch=000.taps` would be caught by
-`FeatureCache.epochs()`'s `epoch=*` glob and parsed as an epoch number, which
-fails on the `int()` -- and a scheme whose correctness depends on every future
-glob remembering to exclude it is the wrong scheme. Nesting keeps the existing
-directory layout untouched: a cache without taps is byte-identical to one
-rendered before taps existed.
-"""
-
 FREQ_DIR = "freq"
-"""The DCT side-view, nested for exactly the reasons `TAP_DIR` is.
+"""The DCT side-view, nested in a subdirectory rather than beside the feature
+views.
 
-Taps and frequency are the same mechanism -- a named side channel rendered
-alongside the features, one directory per view, its own `FeatureSpec` -- so this
-is a second name in an existing scheme rather than a second scheme. `_gather` and
-`ShardWriter` were already parameterized by `feature`, which is what made
-generalising cheaper than mirroring.
+A sibling naming like `epoch=000.freq` would be caught by
+`FeatureCache.epochs()`'s `epoch=*` glob and parsed as an epoch number, which
+fails on the `int()`. Nesting keeps the existing directory layout untouched: a
+cache without a frequency view is byte-identical to one rendered before the
+frequency branch existed.
 """
 
 
@@ -60,24 +50,12 @@ def view_name(epoch: int | None) -> str:
     return CLEAN_VIEW if epoch is None else f"epoch={epoch:03d}"
 
 
-def tap_view_name(epoch: int | None) -> str:
-    """The tap view paired with `view_name(epoch)` -- `taps/clean`, `taps/epoch=007`.
-
-    Clean taps are rendered alongside the degraded ones so that the two views
-    of a row stay a single lookup at the same offset. Nothing in the objective
-    reads them today; `FeatureCache.clean_taps` is what makes them available to
-    analysis scripts without a re-render.
-    """
-    return f"{TAP_DIR}/{view_name(epoch)}"
-
-
 def freq_view_name(epoch: int | None) -> str:
     """The frequency view paired with `view_name(epoch)` -- `freq/epoch=003`.
 
-    Rendered for the clean view too, and unlike the clean taps this one IS read:
-    `analyze_freq.py` compares clean band energies against degraded ones, and it
-    is the clean view that says what a band looks like before any transform
-    touched it.
+    Rendered for the clean view too, and it IS read: `analyze_freq.py` compares
+    clean band energies against degraded ones, and it is the clean view that
+    says what a band looks like before any transform touched it.
     """
     return f"{FREQ_DIR}/{view_name(epoch)}"
 
@@ -106,25 +84,13 @@ class CacheSpec:
     detector and schedule can hold features of entirely different windows of
     entirely different pixels, and this is the only field that says so.
     """
-    taps: tuple[str, ...] = field(default_factory=tuple)
-    """Names of the intermediate taps rendered alongside the features, in group
-    order -- `("block00", "block02", ...)`, straight from `SplitDetector.taps()`.
-
-    Empty means a cache with no tap views, which is every cache rendered before
-    the ladder existed and every cache for a run that does not want one. The
-    field was reserved from the first render for exactly this: enabling taps
-    *adds views* to the directory layout rather than changing the on-disk format
-    of what is already there.
-    """
-    tap_feature: FeatureSpec | None = None
-    """Shape of one image's stacked taps, `(K, tap_dim)`. Set iff `taps` is."""
     freq_feature: FeatureSpec | None = None
     """Shape of one image's DCT view, `(n_cells, n_coeffs)` -- layout `tokens`.
 
     None means a cache with no frequency views, which is every cache rendered
-    before the frequency branch existed. Presence is the decision, exactly as
-    `taps` is: the field ADDS views to the directory layout and changes nothing
-    about the bytes already there, so an old cache stays readable.
+    before the frequency branch existed. Presence is the decision: the field
+    ADDS views to the directory layout and changes nothing about the bytes
+    already there, so an old cache stays readable.
     """
     freq_sha: str = ""
     """Identity of the extraction protocol -- `FreqExtract.fingerprint()`.
@@ -148,8 +114,6 @@ class CacheSpec:
             "detector_sha": self.detector_sha,
             "preprocess_sha": self.preprocess_sha,
             "crop_sha": self.crop_sha,
-            "taps": list(self.taps),
-            "tap_feature": self.tap_feature.to_dict() if self.tap_feature else None,
             "freq_feature": self.freq_feature.to_dict() if self.freq_feature else None,
             "freq_sha": self.freq_sha,
         }
@@ -167,10 +131,6 @@ class CacheSpec:
             detector_sha=d.get("detector_sha", ""),
             preprocess_sha=d.get("preprocess_sha", ""),
             crop_sha=d.get("crop_sha", ""),
-            taps=tuple(d.get("taps", ())),
-            tap_feature=(
-                FeatureSpec.from_dict(d["tap_feature"]) if d.get("tap_feature") else None
-            ),
             freq_feature=(
                 FeatureSpec.from_dict(d["freq_feature"]) if d.get("freq_feature") else None
             ),
@@ -236,36 +196,6 @@ class CacheSpec:
                 f"changed, so these are features of different windows. Re-render "
                 f"with scripts/build_cache.py, or fix `crop:` in the run config."
             )
-        # Taps are checked only when the *reader* wants them, and the rule is
-        # SUBSET rather than equality: a cache rendering five blocks can serve a
-        # run that reads four of them, because dropping a tap is a column
-        # selection at read time and needs no re-render. Adding one does -- the
-        # bytes are simply not there -- so a requested tap the cache does not
-        # hold is still a hard refusal.
-        #
-        # A plain run against a cache that happens to carry taps is fine and
-        # ignores them, which is why this is gated on `other.taps`.
-        if other.taps:
-            missing = [t for t in other.taps if t not in self.taps]
-            if missing:
-                raise ValueError(
-                    f"tap mismatch: this split wants {list(other.taps)} but the "
-                    f"cache holds {list(self.taps) or 'no taps'} -- {missing} "
-                    f"was never rendered. Taps can be dropped at read time but "
-                    f"not conjured: re-render with scripts/build_cache.py, or "
-                    f"align `split_args.tap_blocks` with the cache."
-                )
-            if (
-                self.tap_feature is not None
-                and other.tap_feature is not None
-                and self.tap_feature.dim != other.tap_feature.dim
-            ):
-                raise ValueError(
-                    f"tap width mismatch: cache holds {self.tap_feature.dim}-d "
-                    f"taps, this split emits {other.tap_feature.dim}-d. Selecting "
-                    f"a subset changes how many taps are read, never how wide "
-                    f"they are -- this is a different detector or pooling."
-                )
 
     def assert_freq_available(self, want: FeatureSpec, want_sha: str = "") -> None:
         """Refuse a cache that cannot serve the frequency branch.
@@ -304,17 +234,13 @@ class CacheSpec:
             )
 
     def bytes_per_view(self) -> int:
-        """One image, one view -- features plus taps and freq if it carries them."""
-        tap = self.tap_feature.bytes_per_image() if self.tap_feature else 0
+        """One image, one view -- features plus the frequency view if it carries one."""
         freq = self.freq_feature.bytes_per_image() if self.freq_feature else 0
-        return self.feature.bytes_per_image() + tap + freq
+        return self.feature.bytes_per_image() + freq
 
     def nbytes(self, n_views: int | None = None) -> int:
         """Total on-disk size. Printed by `build_cache.py --dry-run` before
         committing to a multi-hour render.
-
-        Taps count: they are the reason to run `--dry-run` at all now, since
-        five of them multiply a DINOv3 cache by six.
         """
         views = n_views if n_views is not None else max(len(self.views), 1)
         return self.n * self.bytes_per_view() * views
