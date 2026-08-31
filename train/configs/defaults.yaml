@@ -15,11 +15,8 @@
 #
 #   python scripts/train_probe.py       train/configs/probe/<name>.yaml   # PoC only
 #   python scripts/build_cache.py       train/configs/cache/<name>.yaml [--dry-run]
-#   python scripts/analyze_drift.py     --cache cache_ms/<detector> --dataset <path>
-#                                       ^ E0. NEEDS the cache: it compares the
-#                                         clean view against a degraded one.
 #   python scripts/train_adapter.py     train/configs/train/<name>.yaml
-#   python scripts/train_discrepancy.py train/configs/train/<name>.yaml
+#   python scripts/train_enrich.py      train/configs/train/<name>.yaml
 #   python scripts/run_eval.py --config eval/configs/runs/<name>.yaml
 #   python scripts/compare.py --baseline <json> --adapted <json>
 
@@ -173,8 +170,9 @@ num_workers: 4
 seed: 0
 device: auto
 out_dir: checkpoints/grace/
-checkpoint_every: 0         # >0 writes intermediate checkpoints for experiment
-                            # E4 (the erasure trade-off curve)
+checkpoint_every: 0         # >0 writes intermediate checkpoints at the same
+                            # cadence as val_every, so each can be paired with
+                            # the numbers it scored.
 log_every: 50               # diagnostics cadence in steps: cos(delta, j), the mean
                             # gate and the loss terms. The W&B tracker mirrors these
                             # exact points, so a dashboard and a summary.json can
@@ -205,48 +203,6 @@ loss:
                             # from the degradation sampler, not from annotation
 
 schedule: {}                # must match the cache's, or its fingerprint rejects it
-
-wandb:                      # off by default. summary.json next to the checkpoints
-  enabled: false            # stays the record of every run either way -- this only
-  project: grace-adapter    # mirrors it somewhere a sweep can be sorted.
-  entity: null              # null = your default entity
-  group: ""                 # the experiment id (e3_losses, e4_erasure). Set it and
-                            # every arm of a sweep lands in one comparison.
-  tags: []
-  mode: online              # online | offline | disabled. `offline` writes to
-                            # ./wandb/ and syncs later -- for a node with no
-                            # outbound network.
-
-
-# ---------------------------------------------------------- train, stage 2 ----
-# train/configs/train/<name>_discrepancy.yaml -- the supervised auxiliary head.
-# The adapter is frozen, so GRACE and GRACE-D ship the same weights bit for bit
-# and "the adapter is trained without labels" stays literally true.
-
-run_id: dinov3_disc
-cache_dir: cache/dinov3-wildfake
-adapter_checkpoint: checkpoints/grace/dinov3_clean/ema.pt
-
-detector: eval/configs/detectors/dinov3-wildfake.yaml
-split: eval.splits.dinov3.DINOv3Split
-dataset: load_data/configs/datasets/wildfake_train.yaml
-
-epochs: 4
-batch_size: 256
-lr: 0.001
-weight_decay: 0.01
-num_workers: 4
-seed: 0
-device: auto
-out_dir: checkpoints/grace/
-
-log_every: 50
-
-discrepancy:
-  hidden: 256
-  proj: 64
-  use_severity: true        # "is this drift large *for this much corruption*" --
-                            # a heavily degraded real image drifts a lot too
 
 wandb:                      # off by default. summary.json next to the checkpoints
   enabled: false            # stays the record of every run either way -- this only
@@ -315,9 +271,8 @@ freq:
 
 
 # --------------------------------------------- train, stage 2 (enrichment) ----
-# train/configs/train/<name>_enrich.yaml -- the FREQUENCY branch. A sibling of the
-# discrepancy stage above, not a replacement: both freeze the same adapter and
-# both use labels, and they differ in what they read.
+# train/configs/train/<name>_enrich.yaml -- the FREQUENCY branch. It freezes the
+# same stage-1 adapter and reads the image again in a basis the resize threw away.
 
 run_id: dinov3_enrich
 cache_dir: cache_freq/dinov3-wildfake-multiscale
@@ -326,18 +281,54 @@ adapter_checkpoint: checkpoints/grace/dinov3_multiscale/ema.pt
 epochs: 4
 batch_size: 256
 lr: 0.001
-lam_anchor: 0.1             # weight on ||fused - f_corrected||. 0 is E15. It is
-                            # what keeps this an ENRICHMENT rather than a
-                            # supervised re-fit of the seam: without it nothing
-                            # stops the module walking the features to wherever
-                            # the frozen head separates this corpus.
-finetune_head: false        # E14's second arm. Read `parallel_fraction` from
-                            # analyze_drift.py before choosing: round 1 measured
-                            # 0.0298, meaning 97% of drift lay where the frozen
-                            # head cannot see -- and if that holds, a frozen head
-                            # reduces this whole module to a scalar logit shift.
+lam_anchor: 0.0             # weight on ||fused - f_corrected||. REMOVED from the
+                            # objective: 0 (the default) means the term is not
+                            # even computed. Raising it restores E15's anchor as
+                            # an ablation.
+lam_aux: 1.0                # weight on the aux head's OWN BCE. The aux head
+                            # reads the DCT branch's UN-GATED expert sum and the
+                            # term forces that read to be independently
+                            # label-predictive -- a standalone forensic
+                            # signature. A branch that only rides the main head's
+                            # gradient never learns a signal of its own. 0 drops
+                            # the head entirely.
+lam_orth: 0.1               # weight on the orthogonality term: the DCT read is
+                            # pushed orthogonal to f_corrected, so the frequency
+                            # branch adds directions the spatial feature does
+                            # not already span. Reads the same pre-gate sum as
+                            # lam_aux, so it cannot be gamed by closing a gate.
+orth_target: decision       # what the orth term measures against:
+                            #   "decision" = the head's read direction
+                            #     (proj_j(f) ~ j). Δ may not re-state the part
+                            #     of f the head weighs; free elsewhere. Drives
+                            #     w·Δ->0, so the frequency signal reaches the
+                            #     decision through the fused-logit beta*aux path.
+                            #   "feature"  = all of f (the original target).
+aux_hidden: 128             # hidden width of the training-time aux head (input
+                            # is always the seam width). Travels in the enricher
+                            # checkpoint for the fused-logit arm.
+fuse_aux_logit: true        # logit = head(fused) + beta * aux(update), beta a
+                            # single scalar learned from 0. Sidesteps the
+                            # co-adaptation problem: a scalar never needs the head
+                            # to re-learn how to READ a new feature subspace.
+                            # false = prediction is head(fused), aux is
+                            # training-time only -- the control this arm beats.
+finetune_head: false        # E14's second arm. A frozen head can only read this
+                            # whole module as a scalar logit shift; the fine-tuned
+                            # arm trains a COPY of the head to read the enriched
+                            # features directly.
 head_lr: 0.0001             # an order below the enricher's: the head arrives
                             # trained, and the arm asks whether it can be adjusted
+warmup_steps: 0             # enricher LR warmup, in optimizer steps, before a
+                            # cosine decay to zero over the run. 0 = constant LR,
+                            # the stage's shipped behaviour. One epoch is
+                            # len(manifest) // batch_size steps (~195 on the
+                            # reference 50k/256 config).
+head_warmup_steps: 0        # INDEPENDENT warmup for the head copy, also in steps.
+                            # Set it to ~2-3 epochs (≈390-585 on the reference
+                            # config) to hold the arriving-trained head near
+                            # frozen while the enricher gets its legs, then let
+                            # it co-adapt at head_lr. 0 = constant head_lr.
 
 enricher:
   d_model: 256              # attention width, and almost all the parameters
@@ -369,5 +360,4 @@ args:
   split: eval.splits.dinov3.DINOv3Split
   checkpoint: checkpoints/grace/dinov3_clean/ema.pt  # null = identity, i.e. the
                                                      # untouched base detector
-  discrepancy: null         # a stage-2 checkpoint here makes this GRACE-D
 device: auto

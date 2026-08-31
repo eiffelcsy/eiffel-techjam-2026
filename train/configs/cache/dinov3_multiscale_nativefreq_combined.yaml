@@ -1,0 +1,43 @@
+# The combined-train cache under the multi-scale + native-frequency protocol.
+#
+#   python scripts/append_cache.py train/configs/cache/dinov3_multiscale_nativefreq_combined.yaml
+#
+# This is configs/cache/dinov3_multiscale_nativefreq.yaml with the dataset
+# pointed at the COMBINED manifest and nothing else changed. It resolves to the
+# SAME cache root (out_dir cache_ms_nativefreq/ + the detector name), so
+# `append_cache.py` reuses the already-rendered WildFake shards and renders only
+# the new rows.
+#
+# Every key that feeds a fingerprint must stay identical to the original render:
+# detector, schedule, crop, freq -- `spec.assert_appendable` refuses the run if
+# any of them moved. Do not change n_epochs/n_val_epochs here either; the view
+# set must match the existing cache's.
+
+detector: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
+split: eval.splits.dinov3.DINOv3Split
+dataset: load_data/configs/datasets/wildfake_train_combined.yaml
+
+out_dir: cache_ms_nativefreq/
+n_epochs: 12
+n_val_epochs: 2
+batch_size: 8          # IMAGES per batch; each carries all 15 views
+trunk_batch_size: 64   # lowered from 128: 120-sample chunks OOM'd the GPU
+num_workers: 8
+
+schedule: {}      # the standard training mix: all eleven transforms, default weights
+
+freq:
+  enabled: true
+  patch: 8           # JPEG's block size, so JPEG artefacts land on resolvable coefficients
+  grid: 14           # 196 cells, one per DINOv3 patch token at 224
+  channels: 3
+  radial: true       # a band is then a contiguous slice, which E13's top-k needs
+  norm: log1p
+  source: native     # the whole degraded image, BEFORE the crop, at native resolution
+
+crop:
+  enabled: true
+  s_min: 128
+  policy: uniform
+  seed: 0
+  s_max: 256          # from results/audit_sizes__wildfake-train.json

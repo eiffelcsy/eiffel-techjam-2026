@@ -1,4 +1,4 @@
-"""The PoC path end to end: stage 0, cache, stage 1, stage 2, adapted detector.
+"""The PoC path end to end: stage 0, cache, stage 1, adapted detector.
 
 No gated weights and no network. `facebook/dinov3-vits16-pretrain-lvd1689m` is a
 licence-gated Hub repo, so a test that downloaded it would be a test that never
@@ -12,7 +12,7 @@ What this pins, in order of how quietly each fails:
   * the trunk drops register tokens and pools to the declared width
   * a head trained against a different backbone or pool is REFUSED, not loaded
   * `head(trunk(x)) == detector(x)` -- by construction, and checked anyway
-  * stage 0 -> cache -> stage 1 -> stage 2 runs with no shape surgery between
+  * stage 0 -> cache -> stage 1 runs with no shape surgery between
   * `AdaptedDetector(checkpoint=None)` reproduces the base detector bit for bit,
     which is experiment E1 and the precondition for every number after it
 """
@@ -31,12 +31,11 @@ from train.cache.spec import (                                       # noqa: E40
 )
 from train.cache.writer import build_cache                           # noqa: E402
 from train.config import (                                           # noqa: E402
-    AdapterConfig, DiscrepancyConfig, DiscrepancyTrainConfig, LossConfig,
-    ProbeConfig, TrainConfig,
+    AdapterConfig, LossConfig, ProbeConfig, TrainConfig,
 )
 from train.probe import train_probe                                  # noqa: E402
 from eval.splits.dinov3 import DINOv3Split                          # noqa: E402
-from train.loop import train_adapter, train_discrepancy        # noqa: E402
+from train.loop import train_adapter                          # noqa: E402
 from preprocessing.degrade.conditions import load_grid                    # noqa: E402
 from tests.fixtures import write_images                              # noqa: E402
 
@@ -202,11 +201,11 @@ def test_probe_refuses_to_train_on_a_live_trunk(probe_workspace):
         train_probe(cfg, split, manifest, val)
 
 
-# --------------------------------------------------- cache -> stage 1 -> 2 ----
+# --------------------------------------------------------- cache -> stage 1 ----
 
 @pytest.fixture
 def poc_run(tmp_path, detector_factory):
-    """The whole path once: probe, render, stage 1, stage 2.
+    """The whole path once: probe, render, stage 1.
 
     Rebuilt per test rather than shared: `detector_factory` patches
     `transformers.AutoModel` through `monkeypatch`, which is function-scoped by
@@ -266,7 +265,7 @@ def test_cached_clean_features_match_a_live_trunk_pass(poc_run):
     assert torch.allclose(cached, live, atol=2e-3), (cached - live).abs().max()
 
 
-def test_stage_one_then_stage_two(poc_run):
+def test_stage_one_runs_against_the_cache(poc_run):
     root, manifest, split, schedule, cache_dir = poc_run
 
     cfg = TrainConfig(
@@ -281,20 +280,6 @@ def test_stage_one_then_stage_two(poc_run):
     # The gate must move off its sigmoid(-4) = 0.018 initialization; sitting
     # there means the alignment term produced no usable gradient at all.
     assert s1["history"][-1]["gate"] > 0
-
-    disc = DiscrepancyTrainConfig(
-        run_id="s2", cache_dir=str(cache_dir),
-        adapter_checkpoint=str(root / "ckpt" / "s1" / "ema.pt"),
-        epochs=1, batch_size=8, num_workers=0, out_dir=str(root / "ckpt"),
-        discrepancy=DiscrepancyConfig(hidden=16, proj=8),
-    )
-    s2 = train_discrepancy(disc, split, manifest)
-    assert (root / "ckpt" / "s2" / "discrepancy.pt").exists()
-    # Axis first, then epoch -- see train_discrepancy's `validation`.
-    assert "held_out_degradations" in s2["validation"]
-    for axis in s2["validation"].values():
-        for row in axis.values():
-            assert set(row) == {"auc_main", "auc_aux", "auc_fused"}
 
 
 def test_adapter_parameter_budget_is_small(poc_run):

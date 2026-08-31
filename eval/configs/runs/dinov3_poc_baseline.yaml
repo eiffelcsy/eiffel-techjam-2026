@@ -1,6 +1,5 @@
 # The PoC baseline: the unadapted detector's retention curve on the TEST set.
 #
-# Not E0 -- that is scripts/analyze_drift.py, which reads the rendered cache.
 # This is the denominator every GRACE arm is compared against.
 #
 # This is the number every GRACE run is compared against, so it comes out of this
@@ -28,7 +27,7 @@
 
 run_id: dinov3_poc_baseline
 
-detector: eval/configs/detectors/dinov3-wildfake.yaml
+detector: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
 
 datasets:
   - load_data/configs/datasets/wildfake_coco_dalle3.yaml

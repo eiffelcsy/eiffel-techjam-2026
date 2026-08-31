@@ -16,6 +16,8 @@ __pycache__/
 /data/
 /cache_ms/
 /cache_ms_val/
+/cache_ms_nativefreq/
+/cache_ms_nativefreq_val/
 /checkpoints/
 /results/*
 !/results/.gitkeep

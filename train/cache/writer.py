@@ -115,13 +115,22 @@ class ShardWriter:
         spec: CacheSpec,
         start_row: int = 0,
         feature=None,
+        keep_before: int = 0,
     ):
         """`feature` overrides `spec.feature` for the frequency view, whose rows
         are `(n_cells, n_coeffs)` rather than the seam's shape. Everything else
         -- shards, resume, `.done` -- is identical, which is the point of
         storing it as an ordinary view instead of inventing a second on-disk
-        format."""
-        if start_row % spec.shard_size:
+        format.
+
+        `keep_before` is the append path's answer to the resume-boundary rule:
+        the first `keep_before` rows are already on disk (copied, not rendered),
+        so `start_row` may land mid-shard -- the shard that straddles it is
+        opened read-write instead of truncating, preserving those copied rows.
+        """
+        if start_row < 0 or start_row > spec.n:
+            raise ValueError(f"start_row {start_row} out of range for n={spec.n}")
+        if keep_before == 0 and start_row % spec.shard_size:
             raise ValueError(
                 f"start_row {start_row} is not a multiple of shard_size "
                 f"{spec.shard_size}; resuming mid-shard would leave a hole."
@@ -131,6 +140,7 @@ class ShardWriter:
         self.spec = spec
         self.feature = feature if feature is not None else spec.feature
         self.row = start_row
+        self.keep_before = keep_before
         self._shard_id = -1
         self._shard = None
 
@@ -141,9 +151,12 @@ class ShardWriter:
     def _ensure(self, shard_id: int):
         if shard_id != self._shard_id:
             self.flush()
+            # A shard that holds already-copied rows must be opened read-write so
+            # the copy survives; a fresh shard is truncated, as on the plain path.
+            mode = "r+" if self.keep_before > shard_id * self.spec.shard_size else "w+"
             self._shard = np.lib.format.open_memmap(
                 self.dir / f"feats_{shard_id:05d}.npy",
-                mode="w+",
+                mode=mode,
                 dtype=np.dtype(self.feature.dtype),
                 shape=(self._rows_in(shard_id), *self.feature.shape),
             )
@@ -280,16 +293,20 @@ class MultiViewDataset(Dataset):
         self.preprocess = preprocess
         self.crop = crop
         self.freq = freq
-        """Optional `freq_branch.view.FreqExtract`, run on the SAME cropped
-        degraded image the 224 preprocess sees -- not on the source, and not on
-        the preprocessed tensor.
+        """Optional `freq_branch.view.FreqExtract`, run on the degraded image the
+        224 preprocess sees -- not on the source, and not on the preprocessed
+        tensor.
 
-        Not on the source, because the two branches must read one window or the
-        enricher is attending over a different picture than it is correcting.
-        Not on the tensor, because preprocessing has already squashed it to 224
-        and normalized it, which destroys the native pixel scale the DCT exists
-        to read. So this runs here, in the worker, between the two -- which is
-        also where it is free: the image is decoded and degraded already.
+        Which pixels it runs on depends on `freq.source`. `"window"` hands it
+        the SAME cropped window the spatial branch reads, so the enricher is
+        attending over the same picture it is correcting. `"native"` hands it
+        the degraded image BEFORE the crop, so the DCT reads the whole scene at
+        native resolution -- the complementarity premise's strongest test, at
+        the cost of cell-for-cell alignment. Either way it runs here, in the
+        worker, between the two: not on the source, because the branches must
+        read one degraded picture; not on the tensor, because preprocessing has
+        already squashed it to 224 and normalized it, which destroys the native
+        pixel scale the DCT exists to read.
         """
 
     def __len__(self) -> int:
@@ -303,15 +320,18 @@ class MultiViewDataset(Dataset):
             # Degrade, then crop. The recipe keeps acting at native resolution,
             # so the parameter grid keeps the calibration every earlier number
             # was measured at; the crop is a view selection applied afterwards.
-            view = image if epoch is None else self.schedule.apply(image, index, epoch)[0]
+            degraded = image if epoch is None else self.schedule.apply(image, index, epoch)[0]
             # The same window for the clean view and every degraded epoch --
             # `preprocessing.degrade.crop.SAMPLE_EPOCH` explains why the pairing
             # stage 1 trains on requires it.
-            if self.crop is not None:
-                view = self.crop(view, index)
-            views.append(self.preprocess(view))
+            spatial = degraded if self.crop is None else self.crop(degraded, index)
+            views.append(self.preprocess(spatial))
             if self.freq is not None:
-                freqs.append(self.freq(view))
+                # `source` decides which picture the DCT reads. The native arm
+                # reads the pre-crop degraded image, so its 196 cells tile the
+                # whole image rather than the spatial branch's window.
+                freq_img = degraded if self.freq.source == "native" else spatial
+                freqs.append(self.freq(freq_img))
         # An empty (V, 0) stand-in rather than None when the frequency view is
         # off: the item shape is then the same in both cases, so `collate_views`
         # and `_render` need no branch and a cache rendered without frequency
@@ -401,14 +421,109 @@ def build_cache(
     return spec
 
 
+def _reshard(view_dir: Path, spec: CacheSpec, old_n: int) -> None:
+    """Re-shape the old cache's partial last shard into the new (larger) layout.
+
+    Complete shards are reused untouched, but the shard that straddles `old_n`
+    was sized for the OLD manifest (fewer rows). Re-create it at the new size,
+    copying its existing rows, so the newly rendered rows land in the shard
+    beyond it. A no-op when `old_n` is a shard boundary.
+    """
+    shard_id = old_n // spec.shard_size
+    offset = old_n % spec.shard_size
+    if offset == 0:
+        return
+    shard_path = view_dir / f"feats_{shard_id:05d}.npy"
+    old = np.load(shard_path, mmap_mode="r")
+    data = old[:offset].copy()
+    del old
+    new_rows = min(spec.shard_size, spec.n - shard_id * spec.shard_size)
+    new = np.lib.format.open_memmap(
+        shard_path, mode="w+", dtype=data.dtype, shape=(new_rows, *data.shape[1:])
+    )
+    new[:offset] = data
+    new.flush()
+    del data, new
+
+
+def append_cache(
+    split, manifest, root, spec, schedule, epochs, old_n,
+    batch_size: int = 8, trunk_batch_size: int = 128, num_workers: int = 8,
+    device=None, crop=None, freq=None,
+) -> CacheSpec:
+    """Grow a rendered cache by appending the new rows of a grown manifest.
+
+    The first `old_n` rows are already on disk, rendered from an identical
+    manifest prefix (enforced by `spec.assert_appendable`). Their features are
+    REUSED -- copied, never re-computed -- and only the `spec.n - old_n` new rows
+    are rendered, into the shard(s) beyond `old_n`.
+
+    `old_n % shard_size == 0` is the fast case: complete shards stay byte-identical
+    and rendering starts at a shard boundary. Otherwise the partial last shard is
+    re-shaped first (`_reshard`), copying its rows, so the new rows land after
+    them without re-running the trunk on a single reused row.
+
+    This is a one-way operation: it overwrites `index.npy` and `spec.json` with
+    the grown versions, so the cache can no longer be read against the old
+    manifest. Copy the old cache directory first if the pre-append numbers must
+    stay reproducible.
+    """
+    if old_n <= 0 or old_n >= spec.n:
+        raise ValueError(
+            f"old_n {old_n} must lie between 0 and {spec.n} (exclusive of {spec.n})"
+        )
+    if (freq is not None) != (spec.freq_feature is not None):
+        raise ValueError(
+            f"freq extractor {'given' if freq is not None else 'missing'} but "
+            f"spec.freq_feature is {'set' if spec.freq_feature else 'None'}. The "
+            f"spec is what a reader trusts, so the two must agree at render time."
+        )
+    split.assert_frozen()
+    root = Path(root)
+    device = device or next(split.parameters()).device
+    np.save(root / INDEX_FILE, np.asarray(manifest.index, dtype=np.int64))
+
+    views = [None, *epochs]
+    # Re-shape each view's partial last shard (a no-op when old_n is a boundary)
+    # so the reused rows survive and the new rows land beyond them.
+    for epoch in views:
+        _reshard(root / view_name(epoch), spec, old_n)
+        if spec.freq_feature is not None:
+            _reshard(root / freq_view_name(epoch), spec, old_n)
+
+    _render(
+        split, manifest, root, spec, schedule, views,
+        progress=None, start_row=old_n, keep_before=old_n,
+        batch_size=batch_size, trunk_batch_size=trunk_batch_size,
+        num_workers=num_workers, device=device, crop=crop, freq=freq,
+    )
+
+    # Rebuild each degraded view's recipe table over the FULL manifest. The
+    # schedule is a pure function of (index, epoch), so the reused rows' recipes
+    # come out identical; the new rows' are what let `CachedPairDataset` look up
+    # their severity. `_write_recipes` short-circuits on an existing file, so
+    # delete it first rather than leaving the new rows without an entry.
+    for epoch in epochs:
+        recipe_path = root / view_name(epoch) / RECIPE_FILE
+        recipe_path.unlink(missing_ok=True)
+        _write_recipes(root / view_name(epoch), manifest, schedule, epoch)
+
+    (root / PROGRESS_FILE).unlink(missing_ok=True)
+    spec = replace(spec, views=tuple(view_name(e) for e in views))
+    spec.save(root)
+    return spec
+
+
 def _render(
     split, manifest, root: Path, spec: CacheSpec, schedule, pending,
-    progress: _Progress, start_row: int, batch_size: int, trunk_batch_size: int,
-    num_workers: int, device, crop=None, freq=None,
+    progress: _Progress | None, start_row: int, batch_size: int,
+    trunk_batch_size: int, num_workers: int, device, crop=None, freq=None,
+    keep_before: int = 0,
 ) -> None:
     """The single pass: decode each image once, render every pending view of it."""
     writers = [
-        ShardWriter(root / view_name(epoch), spec, start_row=start_row)
+        ShardWriter(root / view_name(epoch), spec, start_row=start_row,
+                    keep_before=keep_before)
         for epoch in pending
     ]
 
@@ -419,7 +534,7 @@ def _render(
     freq_writers = [
         ShardWriter(
             root / freq_view_name(epoch), spec, start_row=start_row,
-            feature=spec.freq_feature,
+            feature=spec.freq_feature, keep_before=keep_before,
         )
         for epoch in pending
     ] if spec.freq_feature is not None else []
@@ -470,10 +585,11 @@ def _render(
         if rows // spec.shard_size > recorded:
             for writer in (*writers, *freq_writers):
                 writer.flush()
-            # `record` floors to whole shards, so a batch that straddles a
-            # boundary checkpoints only the shards behind it; the few rows past
-            # it are simply re-rendered on resume.
-            progress.record(rows)
+            # `progress` is None on the append path, which checkpoints nowhere:
+            # it is an offline render of a suffix and resume granularity buys less
+            # than the complexity of reasoning about a half-appended cache.
+            if progress is not None:
+                progress.record(rows)
             recorded = rows // spec.shard_size
         bar.set_postfix(rows=rows, refresh=False)
 

@@ -6,7 +6,7 @@ rebuilds a stage-1 module with `AdapterConfig(**payload["adapter_cfg"])`, so
 every field on that dataclass is a checkpoint-compatibility surface: a new one
 there breaks every adapter checkpoint already on disk. The enricher is a
 separate module trained in a separate stage against a separate objective, so it
-gets a separate checkpoint -- following `discrepancy.pt`, for the same reason.
+gets a separate checkpoint.
 """
 
 import torch

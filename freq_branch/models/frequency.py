@@ -277,19 +277,104 @@ class FrequencyEnricher(nn.Module):
         instead would make it a second restorer trained with labels, which is a
         different method and not this one.
         """
-        tokens = self.tokens(freq)
-        pos = self.pos()
+        reads = self.reads(f, freq)
         gates = self.gates(severity)
         out = f
-        for b, expert in enumerate(self.experts):
+        for b in range(self.n_bands):
             # Unconditioned gates are `(dim,)` and already broadcast; only the
             # FiLM-conditioned `(B, dim)` needs singleton axes inserted, and only
             # then against a seam wider than a vector. Same rule as the adapter's.
             gate = gates[b]
             if gates.ndim == 3:
                 gate = _expand(gates[:, b], f)
-            out = out + gate * expert(tokens, f, pos)
+            out = out + gate * reads[:, b]
         return out
+
+    def reads(
+        self, f: torch.Tensor, freq: torch.Tensor
+    ) -> torch.Tensor:
+        """`(B, n_bands, dim)`: each expert's UN-GATED read of the DCT cells.
+
+        The experts' own output, before the gate decides how much of it reaches
+        the seam. Training-time objectives that want to shape the DCT branch
+        itself -- not the gate -- read this (or its sum), because a loss on the
+        gated sum could be satisfied by shutting a gate, and a shut gate teaches
+        the experts nothing.
+        """
+        tokens = self.tokens(freq)
+        pos = self.pos()
+        return torch.stack(
+            [expert(tokens, f, pos) for expert in self.experts], dim=1
+        )
+
+    def update(
+        self, f: torch.Tensor, freq: torch.Tensor
+    ) -> torch.Tensor:
+        """`(B, dim)`: the DCT branch's read summed over experts, pre-gate.
+
+        This is the "frequency update" the aux head and the orthogonality term
+        are trained against: the signature the DCT branch is actually learning,
+        independent of how much of it the gate happens to let through.
+        """
+        return self.reads(f, freq).sum(dim=1)
+
+
+class EnricherAuxHead(nn.Module):
+    """A classification head on the DCT branch's own read -- training-time only.
+
+    Reads `enricher.update(f, freq)` (the un-gated expert sum, in seam space)
+    and produces one logit. Trained with BCE against the labels alongside the
+    fused objective, it forces the frequency branch to carry forensic content
+    that is readable STANDALONE, rather than directions the main head happens to
+    be able to use once they are fused in.
+
+    Deliberately a training scaffold, not an artifact: it never ships in the
+    enricher checkpoint (the fused detector reads the enricher through the main
+    head), so it is rebuilt fresh per run and its geometry lives on
+    `EnrichTrainConfig`, not on `EnricherConfig`.
+    """
+
+    def __init__(self, dim: int, hidden: int = 128):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, hidden),
+            nn.GELU(),
+            nn.Linear(hidden, 1),
+        )
+
+    def forward(self, update: torch.Tensor) -> torch.Tensor:
+        return self.net(update).squeeze(-1)
+
+
+class EnricherFusedLogit(nn.Module):
+    """logit = logit_main + beta * aux(update), beta initialized to 0.
+
+    The fused-logit mechanism applied to the frequency branch: the aux head's
+    logit is added to the main head's at the LOGIT level with a single learned
+    scalar beta. beta starts at zero, so at initialization the prediction is
+    exactly the main logit -- the step-0 identity survives -- and a beta that
+    stays at zero is direct evidence the DCT signal carries no decision
+    information the fused objective can use.
+
+    Why this exists alongside feature-level enrichment: the head has to be able
+    to READ a feature-space update to benefit from it, and with the head frozen
+    or only lightly fine-tuned that read is the bottleneck. A scalar beta has no
+    such requirement -- it is one number, and it either helps the metric or it
+    does not. It is the cheapest possible test of whether the frequency branch
+    learned anything a decision can use, and it is how the enricher is scored at
+    inference when `fuse_aux_logit` is on.
+    """
+
+    def __init__(self, dim: int, hidden: int = 128):
+        super().__init__()
+        self.aux = EnricherAuxHead(dim, hidden=hidden)
+        self.beta = nn.Parameter(torch.tensor(1e-3)) # warm-start beta at a small positive value to avoid dead gradient in early training
+
+    def forward(
+        self, logit_main: torch.Tensor, update: torch.Tensor
+    ) -> torch.Tensor:
+        return logit_main + self.beta * self.aux(update)
 
 
 def _top_k_index(patch: int, channels: int, top_k: int | None) -> torch.Tensor | None:

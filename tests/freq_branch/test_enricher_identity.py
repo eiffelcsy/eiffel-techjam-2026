@@ -88,6 +88,60 @@ def test_the_gates_start_shut():
     assert torch.allclose(gates, torch.sigmoid(torch.tensor(-4.0)), atol=1e-6)
 
 
+def test_update_is_zero_at_init():
+    """The UN-GATED expert sum is identically zero too -- the aux and
+    orthogonality terms therefore start at zero, and every later number is a
+    delta from a DCT branch that contributed nothing."""
+    enricher = _enricher()
+    f, freq, _ = _inputs()
+    assert torch.equal(enricher.update(f, freq), torch.zeros_like(f))
+
+
+def test_fused_is_f_plus_the_gated_expert_sum():
+    """The read/update/forward refactor must preserve the fusion exactly:
+    `update` is the pre-gate sum of the reads, and `forward` adds the GATED
+    reads to f."""
+    enricher = _enricher(severity_film=False)
+    f, freq, _ = _inputs(seed=2)
+    with torch.no_grad():
+        for expert in enricher.experts:
+            expert.out.weight.normal_()
+            expert.out.bias.normal_()
+    reads = enricher.reads(f, freq)
+    assert reads.shape == (f.shape[0], enricher.n_bands, f.shape[1])
+    assert torch.equal(enricher.update(f, freq), reads.sum(dim=1))
+    gates = enricher.gates()
+    manual = f + sum(gates[b] * reads[:, b] for b in range(enricher.n_bands))
+    assert torch.allclose(enricher(f, freq), manual, atol=1e-6)
+
+
+def test_aux_head_reads_the_un_gated_update():
+    """The aux head's input is the DCT branch's own read, so its logit depends
+    on the experts and not on the gate or the fusion -- which is what makes
+    `auc_aux` a measurement of the frequency signatures alone."""
+    from freq_branch.models.frequency import EnricherAuxHead
+
+    enricher = _enricher()
+    head = EnricherAuxHead(SPEC.dim, hidden=8)
+    f, freq, _ = _inputs()
+    logit = head(enricher.update(f, freq))
+    assert logit.shape == (f.shape[0],)
+    assert not torch.isnan(logit).any()
+
+
+def test_fused_logit_is_identity_at_init():
+    """`logit_main + beta * aux(update)` with beta=0 is exactly `logit_main` --
+    the step-0 identity the fused-logit arm relies on (beta leaves zero only if
+    the frequency signal has no decision value)."""
+    from freq_branch.models.frequency import EnricherFusedLogit
+
+    fused = EnricherFusedLogit(SPEC.dim, hidden=8)
+    assert float(fused.beta.detach()) == 0.0
+    update = torch.randn(6, SPEC.dim)
+    logit_main = torch.randn(6)
+    assert torch.equal(fused(logit_main, update), logit_main)
+
+
 def test_the_two_bands_decompose_the_spectrum_at_init():
     """`sigmoid(+4) + sigmoid(-4) == 1` exactly, so the HF and LF masks still sum
     to one at every coefficient. The band split is therefore a decomposition of

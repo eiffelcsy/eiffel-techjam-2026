@@ -33,8 +33,11 @@ def predict_dir(
     """
     detector = build_detector(detector_cfg)
     device = resolve_device(detector_cfg.device)
-    # preprocess_fn(), never detector.preprocess -- see FrozenDetector.preprocess_fn
-    dataset = ImageFolderDataset(image_dir, preprocess=detector.preprocess_fn())
+    # preprocess_fn(), never detector.preprocess -- see FrozenDetector.preprocess_fn.
+    # `aux_fn()` is the second read a fused detector needs; None for every other.
+    dataset = ImageFolderDataset(
+        image_dir, preprocess=detector.preprocess_fn(), aux=detector.aux_fn()
+    )
     loader = DataLoader(
         dataset, batch_size=batch_size, num_workers=num_workers,
         shuffle=False, collate_fn=collate,

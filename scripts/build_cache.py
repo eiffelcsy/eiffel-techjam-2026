@@ -13,16 +13,10 @@ the new ones.
 
 import argparse
 
-from train.cache.schedule import EpochSchedule, val_epochs
-from train.cache.spec import CacheSpec, sha_detector, sha_manifest, sha_preprocess
+from train.cache.build import resolve_cache_inputs
 from train.cache.writer import build_cache
 from train.config import load_cache_config
-from eval.splits import build_split
-from load_data.config import load_dataset_config
-from eval.config import load_detector_config
-from load_data.manifest import load_manifest, sample_eval_subset
-from preprocessing.degrade.conditions import load_grid
-from eval.detectors import build_detector, resolve_device
+from eval.detectors import resolve_device
 
 
 def parse_args():
@@ -39,45 +33,8 @@ def main():
     if args.epochs is not None:
         cfg.n_epochs = args.epochs
 
-    detector_cfg = load_detector_config(cfg.detector)
-    dataset_cfg = load_dataset_config(cfg.dataset)
-    manifest = sample_eval_subset(
-        load_manifest(dataset_cfg.manifest, dataset_cfg.split),
-        cfg.max_images,
-        seed=cfg.schedule.seed,
-    )
+    detector_cfg, root, manifest, split, schedule, epochs, spec = resolve_cache_inputs(cfg)
 
-    detector = build_detector(detector_cfg)
-    split = build_split(detector, cfg.split, **cfg.split_args)
-    schedule = EpochSchedule(
-        grid=load_grid(cfg.schedule.grid_file, cfg.schedule.transforms),
-        level_weights={int(k): v for k, v in cfg.schedule.level_weights.items()},
-        seed=cfg.schedule.seed,
-    )
-
-    epochs = [*range(cfg.n_epochs), *val_epochs(cfg.n_val_epochs)]
-    spec = CacheSpec(
-        detector=detector_cfg.name,
-        feature=split.feature_spec,
-        n=len(manifest),
-        shard_size=cfg.shard_size,
-        manifest_sha=sha_manifest(manifest),
-        schedule_sha=schedule.fingerprint(),
-        detector_sha=sha_detector(detector_cfg),
-        preprocess_sha=sha_preprocess(split.preprocess_fn()),
-        # Empty unless `crop.enabled`, and empty is a claim -- "whole images" --
-        # not a missing value. `preprocess_sha` cannot cover this: the window is
-        # drawn in the dataset, before preprocessing, so that it can be seeded on
-        # the image index without making the transform stochastic.
-        crop_sha=cfg.crop.fingerprint(),
-        # None unless `freq.enabled`. Set and cleared together with
-        # `freq_sha` -- `build_cache` refuses a spec that claims a view no
-        # extractor is going to write.
-        freq_feature=cfg.freq.feature(),
-        freq_sha=cfg.freq.fingerprint(),
-    )
-
-    root = f"{cfg.out_dir.rstrip('/')}/{detector_cfg.name}"
     gb = spec.nbytes(len(epochs) + 1) / 1e9
     print(f"detector   {detector_cfg.name}")
     print(

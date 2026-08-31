@@ -1,0 +1,61 @@
+# The spatial cache under the MULTI-SCALE protocol, with the FREQUENCY branch
+# reading the image at NATIVE resolution -- the complementarity premise's
+# strongest test.
+#
+#   python scripts/build_cache.py train/configs/cache/dinov3_multiscale_nativefreq.yaml
+#
+# One key from configs/cache/dinov3_multiscale.yaml: `freq.source: native`.
+#
+# WHAT CHANGES, AND WHY. The default (`source: window`) renders the DCT of the
+# SAME 128-256px window the trunk reads -- the status quo, and the arm whose
+# fusion has now been falsified on held-out images. This arm reads the degraded
+# image at its full native resolution, BEFORE the crop, so the frequency branch
+# sees scene content and high-frequency detail the window the trunk reads threw
+# away. If the premise -- "the frequency information contains information the
+# spatial branch does not, and that information is useful to the classifier" --
+# is true anywhere, it is true here.
+#
+# THE COST IS ALIGNMENT. The 196 cells now tile the WHOLE image while the trunk
+# reads a 128-256px window, so the two branches are no longer aligned
+# cell-for-cell. The enricher's cross-attention must learn the correspondence
+# itself, and it has no input that says where the window sits in the image. If
+# this arm fails, that ambiguity is a confound -- and the fix (conditioning the
+# enricher on the crop geometry) is noted in scripts/probe_concat.py's sibling
+# notes, not silently ignored here.
+#
+# `source` is part of `freq_sha`, so a `window`-source cache and a `native`-source
+# cache can never be read interchangeably -- same shape, different pixels, and
+# `assert_freq_available` refuses the mismatch.
+#
+# ~75 KB/image/view against the spatial features' 1.5 KB, so this is what makes
+# the cache ~57 GB rather than 1.2 GB. The coefficient set is a render-time
+# commitment -- views resume, `patch`/`grid`/`radial`/`source` do not.
+
+detector: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
+split: eval.splits.dinov3.DINOv3Split
+dataset: load_data/configs/datasets/wildfake_train.yaml
+
+out_dir: cache_ms_nativefreq/
+n_epochs: 12
+n_val_epochs: 2
+batch_size: 8          # IMAGES per batch; each carries all 15 views
+trunk_batch_size: 128
+num_workers: 8
+
+schedule: {}      # the standard training mix: all eleven transforms, default weights
+
+freq:
+  enabled: true
+  patch: 8           # JPEG's block size, so JPEG artefacts land on resolvable coefficients
+  grid: 14           # 196 cells, one per DINOv3 patch token at 224
+  channels: 3
+  radial: true       # a band is then a contiguous slice, which E13's top-k needs
+  norm: log1p
+  source: native     # the whole degraded image, BEFORE the crop, at native resolution
+
+crop:
+  enabled: true
+  s_min: 128
+  policy: uniform
+  seed: 0
+  s_max: 256          # from results/audit_sizes__wildfake-train.json

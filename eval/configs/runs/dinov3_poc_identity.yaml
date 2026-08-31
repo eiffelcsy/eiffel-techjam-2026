@@ -7,8 +7,7 @@
 # is wrong and every adapted number afterwards is measured against a model nobody
 # benchmarked -- which makes E1 a GATE on the whole project. A gate has to fire
 # before the work it guards, and it cannot do that from inside
-# dinov3_poc_grace.yaml, because that run needs a trained adapter and a trained
-# discrepancy head to exist first.
+# dinov3_poc_grace.yaml, because that run needs a trained adapter to exist first.
 #
 # So: baseline, then this, then the cache render and everything downstream. It
 # costs one pass over the eval set (13,841 images x 26 conditions) and it is the

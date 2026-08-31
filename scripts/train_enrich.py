@@ -3,11 +3,10 @@
     python scripts/train_enrich.py train/configs/train/dinov3_enrich.yaml
     python scripts/train_enrich.py train/configs/train/dinov3_enrich.yaml --finetune-head --run-id dinov3_enrich_ft
 
-A sibling of `train_discrepancy.py`, not a replacement. Both freeze the same
-adapter and both use labels; they differ in what they read. GRACE-D reads the
-drift the adapter already computed. This reads the image a second time, in a
-basis the trunk's resize threw away -- which is why it can exceed the
-restoration ceiling, and why it needs a cache rendered with `freq.enabled`.
+The adapter stays frozen; only the enricher trains. This reads the image a
+second time, in a basis the trunk's resize threw away -- which is why it can
+exceed the restoration ceiling, and why it needs a cache rendered with
+`freq.enabled`.
 
 `validation.step_0` is scored before the first optimizer
 step, when every expert's output projection is still zero. `auc_fused` there must
@@ -17,10 +16,8 @@ it is a measurement.
 
 `--finetune-head` trains a copy of the detector's head
 alongside the enricher. Run BOTH and report both. Which one is the honest
-headline depends on `parallel_fraction` from `analyze_drift.py`: round 1 measured
-0.0298 on NTIRE, meaning 97% of feature drift lay in directions the frozen head
-cannot read -- and if that holds here, a frozen head collapses this entire
-cross-attention module into a scalar logit shift.
+headline depends on how much of the enrichment lies in directions the frozen
+head can read.
 """
 
 import argparse
@@ -104,17 +101,21 @@ def main():
 
     summary = train_enrich(cfg, split, manifest)
     gates = ", ".join(f"{g:.3f}" for g in summary["gates"])
+    beta = summary.get("beta")
+    beta_s = f"  beta={beta:.4f}" if beta is not None else ""
     print(
         f"{cfg.run_id}: gates=[{gates}]  "
-        f"head={'fine-tuned' if summary['finetune_head'] else 'frozen'}"
+        f"head={'fine-tuned' if summary['finetune_head'] else 'frozen'}{beta_s}"
     )
     for axis, rows in summary["validation"].items():
         print(f"  {axis}:")
         for name, row in rows.items():
             delta = row["auc_fused"] - row["auc_corrected"]
+            aux = row.get("auc_aux")
+            aux_s = f"  aux={aux:.4f}" if aux is not None else ""
             print(
                 f"    {name}: +grace={row['auc_corrected']:.4f}  "
-                f"+grace-freq={row['auc_fused']:.4f}  ({delta:+.4f})  "
+                f"+grace-freq={row['auc_fused']:.4f}  ({delta:+.4f}){aux_s}  "
                 f"|enrichment|={row['enrichment_norm']:.3f}"
             )
     _assert_identity_at_step_0(summary)

@@ -1,4 +1,4 @@
-"""The two training stages.
+"""The training stages.
 
 **Stage 1 -- the adapter.** Label-free. In `source: cache` mode a step is:
 
@@ -12,12 +12,8 @@ the point of pre-rendering: the seed sweep, the geometry grid and the weight sou
 that normally get cut for time become affordable, and any ablation can be re-run
 whenever a question about it arises.
 
-**Stage 2 -- the discrepancy head.** Supervised, adapter frozen. Seconds, because
-Δ is deterministic given cached features and a frozen adapter. That cheapness is
-what makes experiment E4 possible: run stage 2 against every stage-1 checkpoint
-and watch whether the auxiliary head's standalone AUC *falls* as the adapter
-improves. If it does, the adapter is provably erasing forensic evidence, and the
-retention-versus-drift-preservation curve is the figure.
+**Stage 2 -- the frequency enricher.** Supervised, adapter frozen. Reads the
+image again in a basis the trunk's resize threw away (see `train_enrich` below).
 
 Invariants asserted every step, not once at startup:
 
@@ -39,16 +35,15 @@ from tqdm import tqdm
 from train.cache.reader import FeatureCache
 from train.cache.spec import CacheSpec
 from train.cache.schedule import val_epochs
-from grace_adapter.models.discrepancy import FusedHead
 from grace_adapter.models.factory import (
-    build_adapter, build_discrepancy_head, build_severity_head, load_adapter,
-    save_adapter,
+    build_adapter, build_severity_head, load_adapter, save_adapter,
 )
 from freq_branch.models.factory import build_enricher, save_enricher
+from freq_branch.models.frequency import EnricherFusedLogit
 from train import diagnostics as D
 from train.data import build_loader
 from train.ema import EMA
-from train.losses import supervised_bce, total_loss
+from train.losses import orthogonality_loss, supervised_bce, total_loss
 from train.tracker import build_tracker, flatten, flatten_config
 from train.weighting import head_gradient
 from load_data.config import load_dataset_config
@@ -67,6 +62,40 @@ def cosine_with_warmup(opt, warmup: int, total: int) -> LambdaLR:
         return 0.5 * (1 + math.cos(math.pi * min(progress, 1.0)))
 
     return LambdaLR(opt, fn)
+
+
+def _warmup_lambda(warmup: int, total: int):
+    """A `step -> lr multiplier` for ONE param group, or a constant 1.0 when the
+    group opts out.
+
+    The shape is `cosine_with_warmup`'s -- linear ramp from ~1/warmup to 1, then
+    a cosine decay to zero over the run -- but exposed per group so two modules
+    can warm up at different rates from different base LRs. `warmup <= 0` means
+    "no schedule", returning exactly the constant-LR multiplier that reproduces
+    the stage's pre-scheduler behaviour rather than a decay it never asked for.
+    """
+    if warmup <= 0:
+        return lambda step: 1.0
+
+    def fn(step: int) -> float:
+        if step < warmup:
+            return (step + 1) / warmup
+        progress = (step - warmup) / max(total - warmup, 1)
+        return 0.5 * (1 + math.cos(math.pi * min(progress, 1.0)))
+
+    return fn
+
+
+def differential_warmup(opt, warmups: list[int], total: int) -> LambdaLR:
+    """`LambdaLR` over the optimizer's param groups, one `warmups` entry each.
+
+    `LambdaLR` with a list of functions applies the i-th to the i-th group, so
+    the base LR each group was created with (enricher `lr`, head `head_lr`) is
+    preserved and only its multiplier differs. A group with a warmup of 0 keeps a
+    constant LR. The caller is responsible for a length match, which is
+    `len(opt.param_groups)`.
+    """
+    return LambdaLR(opt, [_warmup_lambda(w, total) for w in warmups])
 
 
 def _to_float(t: torch.Tensor, device) -> torch.Tensor:
@@ -113,8 +142,8 @@ def _load_val_sets(cfg, spec, expect: CacheSpec | None = None) -> list:
     than after the full training run, at the one moment its result is wanted.
 
     Shared by both stages: stage 2 scores the same held-out images as stage 1,
-    against the same integrity checks, so an E4 sweep and the stage-1 retention
-    curve are read off the same axis rather than two that merely look alike.
+    against the same integrity checks, so the two are read off the same axis
+    rather than two that merely look alike.
     """
     val_sets = []
     for ds_path, cache_dir in zip(
@@ -310,9 +339,8 @@ def train_adapter(cfg, split, manifest, schedule) -> dict:
                                  if k != "step"}, step=step)
             step += 1
 
-        # Intermediate checkpoints exist for experiment E4: stage 2 is trained
-        # against each of them, and a falling auxiliary AUC as stage 1 improves
-        # is direct evidence that restoring features erases forensic evidence.
+        # Intermediate checkpoints, written at the same cadence as `val_every`,
+        # so each can be paired with the numbers it scored.
         if cfg.checkpoint_every and epoch % cfg.checkpoint_every == 0:
             save_adapter(
                 out_dir / f"step_{step:06d}.pt", adapter, spec, cfg.adapter,
@@ -521,163 +549,9 @@ def validate(cfg, adapter, split, cache, manifest, severity_head=None, val_sets=
     return out
 
 
-def train_discrepancy(cfg, split, manifest) -> dict:
-    """Stage 2. Adapter frozen; only the auxiliary head and β train.
-
-    Reports the fused AUC *and* the auxiliary head's standalone AUC. The second
-    is the one that matters for experiment E4: run this against a series of
-    stage-1 checkpoints and the trend answers whether restoring features destroys
-    the drift signal.
-    """
-    seed_everything(cfg.seed)
-    device = next(split.parameters()).device
-    spec = split.feature_spec
-
-    # Stage 2 never rebuilds the adapter, it scores the one stage 1 shipped.
-    adapter = load_adapter(cfg.adapter_checkpoint, spec).to(device).eval()
-    adapter.requires_grad_(False)
-
-    expect = _expect_spec(split, cfg.crop.fingerprint())
-    cache = FeatureCache(cfg.cache_dir, expect=expect)
-    val_sets = _load_val_sets(cfg, spec, expect)
-
-    fused = FusedHead(build_discrepancy_head(spec, cfg.discrepancy)).to(device)
-    opt = torch.optim.AdamW(fused.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-
-    # `adapter_checkpoint` in the config is what makes an E4 sweep readable: the
-    # runs table then sorts stage-2 runs by which stage-1 checkpoint they were
-    # trained against, which is the x-axis of the erasure figure.
-    tracker = build_tracker(
-        cfg.wandb, run_id=cfg.run_id, job_type="stage2",
-        config={**flatten_config(cfg), "detector_name": split.name,
-                "feature_layout": spec.layout, "feature_dim": spec.dim},
-    )
-
-    train_epochs = [e for e in cache.epochs() if e < min(val_epochs(1))][: cfg.epochs]
-    held = [e for e in cache.epochs() if e >= min(val_epochs(1))]
-
-    loader_cfg = _cache_loader_cfg(cfg)
-
-    step = 0
-    for epoch in train_epochs:
-        loader = build_loader(loader_cfg, cache, manifest, None, epoch)
-        for batch in tqdm(loader, desc=f"disc epoch {epoch}", leave=False):
-            split.assert_frozen()
-            f_deg = _to_float(batch["f_deg"], device)
-            sev = batch["severity"].to(device).float()
-            with torch.no_grad():
-                f_adapted = adapter(f_deg, severity=sev)
-                delta = f_adapted - f_deg
-                logit_main = split.head(f_adapted)
-            labels = batch["label"].to(device)
-            aux_logit = fused.aux(delta, sev)
-            bce_fused = supervised_bce(logit_main + fused.beta * aux_logit, labels)
-            # The aux head's own objective. See DiscrepancyConfig.lam_aux: with
-            # beta starting at 0 the fused term hands it exactly zero gradient,
-            # so without this the branch bootstraps off its own random init and
-            # the learned sign is arbitrary.
-            bce_aux = (
-                supervised_bce(aux_logit, labels)
-                if cfg.discrepancy.lam_aux > 0
-                else torch.zeros((), device=device)
-            )
-            loss = bce_fused + cfg.discrepancy.lam_aux * bce_aux
-            loss.backward()
-            opt.step()
-            opt.zero_grad(set_to_none=True)
-            if step % cfg.log_every == 0:
-                tracker.log(
-                    {"train/bce": float(bce_fused.detach()),
-                     "train/bce_aux": float(bce_aux.detach()),
-                     "train/loss": float(loss.detach()),
-                     "train/beta": float(fused.beta.detach()),
-                     "train/epoch": epoch},
-                    step=step,
-                )
-            step += 1
-
-    out_dir = Path(cfg.out_dir) / cfg.run_id
-    out_dir.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "state_dict": fused.state_dict(),
-            "feature_spec": spec.to_dict(),
-            "discrepancy_cfg": vars(cfg.discrepancy),
-            "adapter_checkpoint": cfg.adapter_checkpoint,
-        },
-        out_dir / "discrepancy.pt",
-    )
-
-    # Both axes, named as stage 1 names them. `held_out_degradations` alone is
-    # not enough for E4: the base head sits at ~0.9999 AUC there, so `fused`
-    # cannot exceed `main` by more than rounding and the branch looks inert
-    # whatever it learned. The held-out IMAGE sets are where the main head has
-    # room (~0.85 on the hard split), and therefore the only place a
-    # discrepancy signal could show up as a gain.
-    validation = {
-        "held_out_degradations": _score_discrepancy(
-            fused, adapter, split, cache, manifest, held or train_epochs, cfg, device
-        )
-    }
-    for name, val_cache, val_manifest in val_sets:
-        validation[f"held_out_images/{name}"] = _score_discrepancy(
-            fused, adapter, split, val_cache, val_manifest,
-            list(val_cache.epochs()), cfg, device,
-        )
-
-    summary = {
-        "run_id": cfg.run_id,
-        "adapter_checkpoint": cfg.adapter_checkpoint,
-        "beta": float(fused.beta.detach()),
-        "validation": validation,
-    }
-    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-
-    # `auc_aux` is the E4 number: track it across a sweep over stage-1
-    # checkpoints and a falling curve is the erasure result.
-    tracker.summary({"validation": summary["validation"], "beta": summary["beta"]})
-    tracker.finish()
-    return summary
-
-
-@torch.no_grad()
-def _score_discrepancy(fused, adapter, split, cache, manifest, epochs, cfg, device) -> dict:
-    """Main / auxiliary / fused AUC on held-out degradations.
-
-    Three numbers because the interesting result is the *relationship* between
-    them: aux alone above chance means drift carries signal; fused above main
-    means it carries signal the main head was not already using.
-    """
-    loader_cfg = _cache_loader_cfg(cfg)
-    out = {}
-    for epoch in epochs:
-        main, aux, fuse, labels = [], [], [], []
-        for batch in build_loader(loader_cfg, cache, manifest, None, epoch, shuffle=False):
-            f_deg = _to_float(batch["f_deg"], device)
-            sev = batch["severity"].to(device).float()
-            delta = adapter(f_deg, severity=sev) - f_deg
-            m = split.head(f_deg + delta)
-            a = fused.aux(delta, sev)
-            main.append(m.cpu().numpy())
-            aux.append(a.cpu().numpy())
-            fuse.append((m + fused.beta * a).cpu().numpy())
-            labels.append(batch["label"].numpy())
-        y = np.concatenate(labels)
-        if len(np.unique(y)) < 2:
-            continue
-        out[f"epoch_{epoch}"] = {
-            "auc_main": float(roc_auc_score(y, np.concatenate(main))),
-            "auc_aux": float(roc_auc_score(y, np.concatenate(aux))),
-            "auc_fused": float(roc_auc_score(y, np.concatenate(fuse))),
-        }
-    return out
-
-
 # =============================================================================
-# Stage 2, the frequency branch. A sibling of `train_discrepancy`, not a
-# replacement: both freeze the same adapter and both use labels, and they differ
-# in what they read. GRACE-D reads the drift the adapter computed; this reads the
-# image again, in a basis the trunk's resize threw away.
+# Stage 2, the frequency branch. Reads the image again, in a basis the trunk's
+# resize threw away, against the same frozen adapter stage 1 shipped.
 # =============================================================================
 
 
@@ -688,26 +562,40 @@ def train_enrich(cfg, split, manifest) -> dict:
     `severity`. `f_clean` is not read -- there is no restoration target here.
     The objective is
 
-        BCE(head(fused), label)  +  lam_anchor * ||fused - f_corrected||
+        BCE(head(fused) + beta * aux(delta), label)          # fused logit
+      + lam_aux * BCE(aux(delta), label)                     # standalone DCT read
+      + lam_orth * orthogonality(delta, f_corrected)         # complementarity
 
-    and the anchor is the term that keeps this an ENRICHMENT rather than a
-    supervised re-fit of the seam. Without it nothing stops the enricher walking
-    the features to wherever the frozen head happens to separate this corpus,
-    which is a content classifier that starts from the adapter's output. E15 is
-    the arm with `lam_anchor: 0`, and it is meant to be read as what the anchor
-    costs and what it buys.
+    where `fused = f_corrected + sum_b gate_b * expert_b(...)` is the feature
+    enrichment and `delta = sum_b expert_b(tokens, f, pos)` is the DCT branch's
+    UN-GATED read. The prediction is the first line -- the main head's read of
+    the fused features plus a learned scalar beta times the aux logit. beta
+    starts at 0, so at step 0 the
+    prediction is exactly `head(fused)` and the identity survives; a beta that
+    leaves zero is direct evidence the frequency signal has no decision value the
+    fused objective can use, independent of whether the head can read the
+    enriched FEATURES. `fuse_aux_logit: false` drops the beta term and scores
+    `head(fused)` alone, which is the control this arm exists to beat.
+
+    The aux and orth terms both read the UN-GATED expert sum, on purpose: a loss
+    on the gated sum could be satisfied by closing a gate, and a closed gate
+    teaches the experts nothing. The aux head forces the frequency read to be
+    label-predictive on its own -- an independently readable forensic signature
+    -- and the orthogonality term forces it to point where the spatial feature
+    does not already span. The anchor term (`lam_anchor`) is removed from the
+    objective: it is off by default and the field survives only as the E15
+    ablation.
 
     THE IDENTITY IS MEASURED, NOT ASSUMED. Validation runs once before the first
     optimizer step, and at that point every expert's output projection is still
-    zero, so `fused` equals `f_corrected` bit for bit and `auc_fused` must equal
-    `auc_corrected` -- the `+grace` arm -- exactly. It is recorded as
-    `validation.step_0`, and it is the cheapest possible check that the module is
-    wired where it claims to be.
+    zero (so `fused` equals `f_corrected`), and beta is 0, so the prediction is
+    exactly the `+grace` arm's and `auc_fused` must equal `auc_corrected`. It is
+    recorded as `validation.step_0`, and it is the cheapest possible check that
+    the module is wired where it claims to be.
 
     E14 ships as `finetune_head`. Frozen is the default and the one whose
-    provenance is worth something; the fine-tuned arm exists because round 1
-    measured `parallel_fraction = 0.0298`, and if that holds here a frozen head
-    can only read this whole cross-attention module as a scalar logit shift.
+    provenance is worth something; the fine-tuned arm exists because a frozen
+    head can only read this whole cross-attention module as a scalar logit shift.
     """
     seed_everything(cfg.seed)
     device = next(split.parameters()).device
@@ -735,10 +623,36 @@ def train_enrich(cfg, split, manifest) -> dict:
     # arm is scored with, so the fine-tuned arm cannot quietly change what the
     # baseline means.
     head = _enrich_head(split, cfg, device)
-    groups = [{"params": list(enricher.parameters()), "lr": cfg.lr}]
+    # The fused-logit module (aux head + beta) is a training scaffold on the DCT
+    # branch's own read, so it is trained in the enricher's group and at the
+    # enricher's LR -- the same ramp as the module it is shaping, not a schedule
+    # of its own. It is built only when one of the terms that read it is on.
+    fused_logit = (
+        _enrich_fused_logit(spec, cfg, device)
+        if (cfg.lam_aux or cfg.lam_orth or cfg.fuse_aux_logit) else None
+    )
+    enricher_params = list(enricher.parameters())
+    if fused_logit is not None:
+        enricher_params = enricher_params + list(fused_logit.parameters())
+    groups = [{"params": enricher_params, "lr": cfg.lr}]
     if head is not None:
         groups.append({"params": list(head.parameters()), "lr": cfg.head_lr})
     opt = torch.optim.AdamW(groups, lr=cfg.lr, weight_decay=cfg.weight_decay)
+
+    train_epochs = [e for e in cache.epochs() if e < min(val_epochs(1))][: cfg.epochs]
+    held = [e for e in cache.epochs() if e >= min(val_epochs(1))]
+    # Differential warmup: each group gets its own `step -> multiplier`, so the
+    # arriving-trained head can be held near frozen (its LR ramps from ~1/N)
+    # while the enricher trains at full rate, then released to co-adapt at
+    # `head_lr`. `0` means constant LR, which is exactly the behaviour every
+    # stage-2 run shipped before this field existed.
+    sched = None
+    if cfg.warmup_steps or (head is not None and cfg.head_warmup_steps):
+        warmups = [cfg.warmup_steps]
+        if head is not None:
+            warmups.append(cfg.head_warmup_steps)
+        total = (len(manifest) // cfg.batch_size) * len(train_epochs)
+        sched = differential_warmup(opt, warmups, total)
 
     def logit_of(f):
         return (head if head is not None else split.head)(f)
@@ -750,15 +664,13 @@ def train_enrich(cfg, split, manifest) -> dict:
                 "freq_shape": list(freq_spec.shape)},
     )
 
-    train_epochs = [e for e in cache.epochs() if e < min(val_epochs(1))][: cfg.epochs]
-    held = [e for e in cache.epochs() if e >= min(val_epochs(1))]
     loader_cfg = _cache_loader_cfg(cfg)
 
     # Before any step, with the enricher still exactly the identity. Everything
     # after this is read as a delta from it.
     validation = {
         "step_0": _score_enrich(
-            enricher, adapter, severity_head, logit_of, cache, manifest,
+            enricher, adapter, severity_head, logit_of, fused_logit, cache, manifest,
             held or train_epochs, cfg, device,
         )
     }
@@ -781,28 +693,75 @@ def train_enrich(cfg, split, manifest) -> dict:
             labels = batch["label"].to(device)
 
             fused = enricher(f_corrected, freq, pred_sev)
-            bce = supervised_bce(logit_of(fused), labels)
-            # Mean over the batch of the per-sample L2, so the term does not
-            # scale with batch size and `lam_anchor` means the same thing at 64
-            # and at 256.
-            anchor = (fused - f_corrected).norm(dim=-1).mean()
-            loss = bce + cfg.lam_anchor * anchor
+            # The main objective reads the FUSED LOGIT: `head(fused)` plus, when
+            # `fuse_aux_logit`, a learned scalar beta times the aux logit. beta
+            # starts at 0, so early steps are exactly the feature-fusion loss.
+            # The DCT branch's own read, before the gate, is what the aux and
+            # orth terms read -- a loss on the gated sum could be satisfied by
+            # closing a gate, and a closed gate teaches the experts nothing. Only
+            # one `update()` call even when several terms use it.
+            delta_freq = None
+            if fused_logit is not None:
+                delta_freq = enricher.update(f_corrected, freq)
+            if fused_logit is not None and cfg.fuse_aux_logit:
+                bce = supervised_bce(fused_logit(logit_of(fused), delta_freq), labels)
+            else:
+                bce = supervised_bce(logit_of(fused), labels)
+            bce_aux = torch.zeros((), device=device)
+            orth = torch.zeros((), device=device)
+            if delta_freq is not None:
+                if cfg.lam_aux:
+                    bce_aux = supervised_bce(fused_logit.aux(delta_freq), labels)
+                if cfg.lam_orth:
+                    if cfg.orth_target == "decision":
+                        # The head's per-sample decision direction. The orth term
+                        # normalizes its inputs, so passing j is exactly
+                        # orthogonalizing Δ against the decision-weighted
+                        # projection of f (proj_j(f) ∝ j): Δ may not re-state
+                        # the part of the spatial read the head weighs, but is
+                        # free everywhere else. `head_gradient` runs on its own
+                        # graph and detaches, so this never leaks into the
+                        # enricher's or the head's.
+                        orth = orthogonality_loss(
+                            delta_freq, head_gradient(logit_of, f_corrected)
+                        )
+                    else:
+                        orth = orthogonality_loss(delta_freq, f_corrected)
+            # The E15 anchor, off by default. Kept behind `lam_anchor > 0` so a
+            # default run never pays for a term it does not train on.
+            anchor = torch.zeros((), device=device)
+            if cfg.lam_anchor:
+                anchor = (fused - f_corrected).norm(dim=-1).mean()
+            loss = (bce + cfg.lam_aux * bce_aux + cfg.lam_orth * orth
+                    + cfg.lam_anchor * anchor)
             loss.backward()
             opt.step()
+            if sched is not None:
+                sched.step()
             opt.zero_grad(set_to_none=True)
 
             if step % cfg.log_every == 0:
                 gates = enricher.gates().detach()
-                tracker.log(
-                    {"train/bce": float(bce.detach()),
-                     "train/anchor": float(anchor.detach()),
-                     "train/loss": float(loss.detach()),
-                     "train/severity_recipe": float(sev.mean()),
-                     "train/epoch": epoch,
-                     **{f"train/gate_band{b}": float(gates[b].mean())
-                        for b in range(enricher.n_bands)}},
-                    step=step,
-                )
+                log = {
+                    "train/bce": float(bce.detach()),
+                    "train/bce_aux": float(bce_aux.detach()),
+                    "train/orth": float(orth.detach()),
+                    "train/anchor": float(anchor.detach()),
+                    "train/loss": float(loss.detach()),
+                    "train/severity_recipe": float(sev.mean()),
+                    "train/epoch": epoch,
+                    # Effective LRs AFTER this step's scheduler update: the
+                    # head's is the one a differential warmup is about, so it
+                    # has to be on the dashboard and not just in the config.
+                    "train/lr_enricher": float(opt.param_groups[0]["lr"]),
+                    **{f"train/gate_band{b}": float(gates[b].mean())
+                       for b in range(enricher.n_bands)},
+                }
+                if fused_logit is not None and cfg.fuse_aux_logit:
+                    log["train/beta"] = float(fused_logit.beta.detach())
+                if head is not None:
+                    log["train/lr_head"] = float(opt.param_groups[1]["lr"])
+                tracker.log(log, step=step)
             step += 1
 
     out_dir = Path(cfg.out_dir) / cfg.run_id
@@ -818,28 +777,45 @@ def train_enrich(cfg, split, manifest) -> dict:
             # exists to stop, one stage later.
             "head_state_dict": None if head is None else head.state_dict(),
             "finetune_head": head is not None,
+            # The fused logit (aux head + beta) travels too, for the same reason:
+            # when `fuse_aux_logit`, the prediction is `head(fused) + beta * aux`,
+            # so the detector scoring the enricher must reconstruct the module
+            # that beta multiplies. `aux_cfg` is the geometry that rebuilding
+            # needs (input is always `spec.dim`, only `hidden` varies).
+            "fused_logit_state_dict": (
+                None if fused_logit is None or not cfg.fuse_aux_logit
+                else fused_logit.state_dict()
+            ),
+            "aux_cfg": {"hidden": cfg.aux_hidden},
+            "fuse_aux_logit": cfg.fuse_aux_logit,
         },
     )
 
     validation["held_out_degradations"] = _score_enrich(
-        enricher, adapter, severity_head, logit_of, cache, manifest,
+        enricher, adapter, severity_head, logit_of, fused_logit, cache, manifest,
         held or train_epochs, cfg, device,
     )
     for name, val_cache, val_manifest in val_sets:
         validation[f"held_out_images/{name}"] = _score_enrich(
-            enricher, adapter, severity_head, logit_of, val_cache, val_manifest,
-            list(val_cache.epochs()), cfg, device,
+            enricher, adapter, severity_head, logit_of, fused_logit, val_cache,
+            val_manifest, list(val_cache.epochs()), cfg, device,
         )
 
     summary = {
         "run_id": cfg.run_id,
         "adapter_checkpoint": cfg.adapter_checkpoint,
         "finetune_head": head is not None,
+        "fuse_aux_logit": cfg.fuse_aux_logit,
+        "beta": None if fused_logit is None or not cfg.fuse_aux_logit
+                else float(fused_logit.beta.detach()),
         "gates": [float(g.mean()) for g in enricher.gates().detach()],
         "validation": validation,
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    tracker.summary({k: summary[k] for k in ("validation", "gates", "finetune_head")})
+    tracker.summary(
+        {k: summary[k] for k in ("validation", "gates", "finetune_head",
+                                 "fuse_aux_logit", "beta")}
+    )
     tracker.finish()
     return summary
 
@@ -863,6 +839,22 @@ def _enrich_head(split, cfg, device):
     return head
 
 
+def _enrich_fused_logit(spec, cfg, device):
+    """The aux head + learned beta (logit-level fusion) on the DCT read.
+
+    Built fresh rather than deep-copied: the aux head is a training scaffold that
+    shares the enricher's optimizer group and LR. Its `beta` is the scalar that
+    decides, at the logit level, whether the frequency signal is used at all --
+    the one number whose size is the experiment. Trained in the enricher's group
+    so the differential warmup schedules it exactly as it schedules the module it
+    is shaping.
+    """
+    module = EnricherFusedLogit(spec.dim, hidden=cfg.aux_hidden).to(device)
+    module.requires_grad_(True)
+    module.train()
+    return module
+
+
 def _load_severity_head(checkpoint: str, adapter, spec, device):
     """Stage 1's severity head, if the checkpoint carries one.
 
@@ -882,21 +874,32 @@ def _load_severity_head(checkpoint: str, adapter, spec, device):
 
 
 @torch.no_grad()
-def _score_enrich(enricher, adapter, severity_head, logit_of, cache, manifest,
-                  epochs, cfg, device) -> dict:
+def _score_enrich(enricher, adapter, severity_head, logit_of, fused_logit, cache,
+                  manifest, epochs, cfg, device) -> dict:
     """Corrected / fused AUC per epoch, plus how far the fusion moved.
 
     `auc_corrected` is the `+grace` arm computed on the same rows in the same
     pass, so the comparison is paired rather than read across two runs -- and at
     step 0 the two columns must agree to the last decimal, which is E10 measured
     instead of asserted.
+
+    `auc_fused` is the actual prediction: `head(fused)` when `fuse_aux_logit` is
+    off (or no aux head exists), else `head(fused) + beta * aux(update)`. That is
+    the one number the β-fusion arm is about -- whether the scalar can use the
+    frequency signal even when the head cannot read the enriched FEATURES.
+
+    `auc_aux` is the aux head scored ALONE on the DCT branch's un-gated read --
+    the number that says whether the frequency signatures are readable
+    standalone. It is absent (not 0) when the head is off or its logits are
+    constant, so a random-init step-0 row does not report a number that means
+    nothing.
     """
     was_training = enricher.training
     enricher.eval()
     loader_cfg = _cache_loader_cfg(cfg)
     out = {}
     for epoch in epochs:
-        base, fuse, drift, labels = [], [], [], []
+        base, fuse, drift, labels, aux_logits = [], [], [], [], []
         for batch in build_loader(
             loader_cfg, cache, manifest, None, epoch, shuffle=False, with_freq=True,
         ):
@@ -906,16 +909,29 @@ def _score_enrich(enricher, adapter, severity_head, logit_of, cache, manifest,
             f_corrected = adapter(f_deg, severity=sev)
             fused = enricher(f_corrected, freq, sev)
             base.append(logit_of(f_corrected).cpu().numpy())
-            fuse.append(logit_of(fused).cpu().numpy())
             drift.append((fused - f_corrected).norm(dim=-1).cpu().numpy())
             labels.append(batch["label"].numpy())
+            if fused_logit is not None:
+                update = enricher.update(f_corrected, freq)
+                if cfg.fuse_aux_logit:
+                    fuse.append(fused_logit(logit_of(fused), update).cpu().numpy())
+                else:
+                    fuse.append(logit_of(fused).cpu().numpy())
+                aux_logits.append(fused_logit.aux(update).cpu().numpy())
+            else:
+                fuse.append(logit_of(fused).cpu().numpy())
         y = np.concatenate(labels)
         if len(np.unique(y)) < 2:
             continue
-        out[f"epoch_{epoch}"] = {
+        row = {
             "auc_corrected": float(roc_auc_score(y, np.concatenate(base))),
             "auc_fused": float(roc_auc_score(y, np.concatenate(fuse))),
             "enrichment_norm": float(np.concatenate(drift).mean()),
         }
+        if len(aux_logits):
+            a = np.concatenate(aux_logits)
+            if len(np.unique(a)) > 1:
+                row["auc_aux"] = float(roc_auc_score(y, a))
+        out[f"epoch_{epoch}"] = row
     enricher.train(was_training)
     return out

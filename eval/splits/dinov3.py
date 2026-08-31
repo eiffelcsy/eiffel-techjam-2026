@@ -1,12 +1,4 @@
-"""DINOv3 split -- the proof-of-concept seam, and the only one that runs today.
-
-The only one at all, now that the zoo splits are gone. They each reconstructed
-a seam inside a vendored repo that was never in this tree, and RINE's head
-composition carried a standing warning that it must be checked against its
-clone. That is the right design for adapting somebody else's published
-detector, and it was a bad way to find out whether GRACE works at all: a
-retention number from a wrongly composed head is a comparison against a model
-that was never benchmarked, and there is no way to tell that from the curve.
+"""DINOv3 split
 
 `eval.detectors.dinov3.DINOv3MLPDetector` is built with the seam already in
 it, so this class delegates rather than reconstructs:
@@ -17,21 +9,6 @@ it, so this class delegates rather than reconstructs:
 `head(trunk(x)) == detector(x)` is then true by construction -- `forward` on the
 detector is literally `self.head(self.trunk(x))`. `verify_split` still runs,
 because "true by construction" is a claim about code that someone will edit.
-
-Layout is `vector`, deliberately
---------------------------------
-The pooled descriptor is one embedding per image, so the adapter's gate is a
-single `(D,)` vector and there is no per-block damage profile to plot. That
-forfeits the per-layer interpretability figure a `layers` seam would give, and
-it is the right trade for a PoC: it makes the cache 768 bytes per image per view instead of 48 KB (a factor
-of 64), which is what lets the whole pipeline -- render, stage 1, stage 2, eval --
-run end to end in minutes on a laptop with no GPU.
-
-The `layers` variant is a small change when it is wanted: emit the per-block CLS
-tokens from `output_hidden_states=True` as `(B, 12, 384)` and give the head a
-RINE-style importance weighting over them. Everything downstream of the split
-already handles that layout -- `grace_adapter.models.factory` picks the `(L, D)` gate off
-`FeatureSpec.layout` alone.
 """
 
 import torch

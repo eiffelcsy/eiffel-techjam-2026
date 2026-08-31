@@ -1,45 +1,5 @@
 """DINOv3 ViT-S/16 + a linear-probe MLP head -- the detector GRACE's PoC adapts.
 
-The ONLY detector in this package now, and it is built here rather than
-downloaded, for one reason: **GRACE needs a detector whose trunk/head seam is
-not in dispute.**
-
-The published zoo (B-Free, GAPL, RINE) each reconstructed a seam inside a repo
-cloned by hand under `third_party/`, and RINE's head composition was never
-verified against its clone. All of it has been removed. What that costs is the
-cross-detector evidence: GRACE can now only be demonstrated on this one seam,
-so "the method generalizes across detectors" is no longer a claim this tree can
-support. What it buys is that everything here runs end to end with no clone.
-
-Here the seam is a construction rather than a reconstruction:
-
-    trunk = frozen DINOv3 ViT-S/16, pooled     -> (B, D)   layout "vector"
-    head  = LayerNorm -> MLP -> one logit      -> (B,)
-
-so `head(trunk(x)) == detector(x)` holds by definition, `DINOv3Split` has nothing
-to guess, and E1 (the identity adapter reproducing the baseline exactly) is a
-tautology instead of a nail-biter. It is also small: 21M frozen parameters and a
-768-dim feature, so the whole cache for a 200-image PoC is under 3 MB and stage 1
-trains on a laptop in seconds.
-
-**The backbone is the distilled ViT-S/16.** `facebook/dinov3-vits16-pretrain-
-lvd1689m` is the model distilled from the ViT-7B teacher on LVD-1689M, which is
-why a 21M-parameter trunk carries features worth correcting in the first place.
-
-**The head is trained on CLEAN images only**, by `grace_adapter/scripts/train_probe.py`.
-That is not a shortcut, it is the premise: GRACE's whole claim is about a
-detector that was fit on clean data and whose accuracy collapses under
-degradation. A head trained with degradation augmentation would have already
-solved the problem GRACE is trying to solve, and its retention curve would say
-nothing.
-
-The trunk never sees the head, so a cache rendered from this detector stays valid
-across probe retrainings -- `train.cache.spec` hashes the detector's *config*,
-and the head checkpoint path in it names weights the cached features do not
-depend on.
-
-Gated weights
--------------
 `facebook/dinov3-*` is a gated Hub repo. Accept the licence on the model page and
 `hf auth login` once; or point `backbone_id` at any mirror you already have.
 Nothing else in this file assumes the official id.
@@ -180,14 +140,7 @@ def _pool_width(pool: str, hidden: int) -> int:
 
 
 class ProbeHead(nn.Module):
-    """Pooled features -> one logit. Fake-positive, like every `forward` here.
-
-    Deliberately plain. The head is the thing GRACE holds frozen and
-    differentiates through, and every extra inductive bias in it is one more
-    explanation for a retention number that is not "the adapter did it". An MLP
-    rather than a bare linear layer only because `train.weighting` claims
-    one Jacobian implementation covers both cases, and a linear head would let
-    that claim go untested on a real model.
+    """Pooled features -> one logit. Fake images are positive, like every `forward` here.
 
     Gradient must flow to the *input*: the decision-weighted objective takes
     ∇_f head(f) at the clean features. Parameters are frozen by
@@ -276,9 +229,8 @@ class DINOv3MLPDetector(FrozenDetector):
         self.freeze()
 
     # -- the seam ------------------------------------------------------------
-    # `trunk` and `head` are public API here rather than an afterthought:
-    # `eval.splits.dinov3.DINOv3Split` is a two-line delegation to them, which
-    # is the entire point of building this detector.
+    # `trunk` and `head` are public API: `eval.splits.dinov3.DINOv3Split` is a two-line
+    # delegation to them, which is the entire point of building this detector.
 
     def trunk(self, x: torch.Tensor) -> torch.Tensor:
         """(B, 3, H, W) -> (B, feature_dim). Registers dropped; see POOLS."""
@@ -344,10 +296,6 @@ def _assert_head_matches(payload, path, backbone_id, pool, feature_dim, input_mo
     a head trained against a *different backbone* of the same width does not, and
     neither does one trained on crops and handed resized images.
     """
-    # `input_mode` predates no checkpoint -- it was added after the first heads
-    # were trained, and `resize` is the only thing those can have been fit on.
-    # Defaulting to it (rather than skipping the check, as the optional keys
-    # below do) is what makes an old head refuse a `crop` detector.
     stored_mode = payload.get("input_mode", "resize")
     allowed = HEAD_COMPATIBILITY.get(stored_mode, {stored_mode})
     if input_mode not in allowed:

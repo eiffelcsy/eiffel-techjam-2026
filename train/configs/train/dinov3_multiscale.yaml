@@ -2,20 +2,20 @@
 # re-pointed at windowed pixels. Every ablation in this family is this file
 # with one key changed, and every detector config loads this run's `ema.pt`.
 #
-#   python scripts/train_adapter.py configs/train/dinov3_multiscale.yaml
+#   python scripts/train_adapter.py train/configs/train/dinov3_multiscale.yaml
 
 run_id: dinov3_multiscale
 
 detector: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
 split: eval.splits.dinov3.DINOv3Split
-dataset: load_data/configs/datasets/wildfake_train.yaml
+dataset: load_data/configs/datasets/wildfake_train_combined.yaml
 
 val_datasets:
-  - load_data/configs/datasets/wildfake_train_val.yaml
+  - load_data/configs/datasets/wildfake_train_val_combined.yaml
 val_cache_dirs:
-  - cache_ms_val/dinov3-wildfake-multiscale
+  - cache_ms_nativefreq_val/dinov3-wildfake-multiscale
 
-cache_dir: cache_ms/dinov3-wildfake-multiscale
+cache_dir: cache_ms_nativefreq/dinov3-wildfake-multiscale
 epochs: 12
 seed: 0
 target_view: clean
@@ -25,6 +25,7 @@ val_every: 4
 
 batch_size: 256
 warmup_steps: 10
+lr: 0.005
 
 adapter:
   bottleneck: 128

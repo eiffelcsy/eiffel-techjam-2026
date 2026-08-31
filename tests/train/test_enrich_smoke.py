@@ -165,6 +165,85 @@ def test_an_unanchored_arm_runs(workspace):
     assert summary["validation"]["held_out_degradations"]
 
 
+def test_the_aux_and_orth_terms_train_a_standalone_dct_signature(workspace):
+    """`lam_aux`/`lam_orth` are on by default, so a default run must produce an
+    `auc_aux`: the DCT read is being trained to be label-predictive on its own,
+    not merely useful once fused. The aux head lives inside the checkpoint's
+    `fused_logit_state_dict` -- NOT in the enricher's own weights."""
+    root, manifest, split, adapter, cache_dir = workspace
+    summary = train_enrich(_cfg(root, cache_dir, adapter, run_id="aux"), split, manifest)
+
+    rows = summary["validation"]["held_out_degradations"]
+    assert any("auc_aux" in row for row in rows.values()), "no standalone auc_aux"
+
+    payload = torch.load(
+        root / "ckpt" / "aux" / "enricher.pt", map_location="cpu", weights_only=False
+    )
+    assert payload["fuse_aux_logit"] is True
+    assert payload["fused_logit_state_dict"] is not None
+    assert not any("aux" in k for k in payload["state_dict"]), "aux head leaked into enricher weights"
+
+
+def test_beta_fusion_reports_and_ships_the_scalar(workspace):
+    """The whole point of the fused-logit arm is one number: `beta`. A default
+    run must log it, report it in summary.json, and ship it with the enricher so
+    the fused detector scores `head(fused) + beta * aux(update)` at eval."""
+    root, manifest, split, adapter, cache_dir = workspace
+    summary = train_enrich(_cfg(root, cache_dir, adapter, run_id="betafuse"), split, manifest)
+
+    assert summary["fuse_aux_logit"] is True
+    assert isinstance(summary["beta"], float)
+    payload = torch.load(
+        root / "ckpt" / "betafuse" / "enricher.pt", map_location="cpu", weights_only=False
+    )
+    assert payload["aux_cfg"] == {"hidden": 128}
+    assert payload["fused_logit_state_dict"] is not None
+
+
+def test_the_aux_and_orth_terms_can_be_turned_off(workspace):
+    """`lam_aux: 0` and `lam_orth: 0` must drop the head and the terms entirely,
+    and `fuse_aux_logit: false` must make the prediction plain `head(fused)` --
+    the old fused-only objective stays reachable as an ablation."""
+    root, manifest, split, adapter, cache_dir = workspace
+    summary = train_enrich(
+        _cfg(root, cache_dir, adapter, run_id="naux",
+             lam_aux=0.0, lam_orth=0.0, fuse_aux_logit=False),
+        split, manifest,
+    )
+    assert summary["fuse_aux_logit"] is False and summary["beta"] is None
+    rows = summary["validation"]["held_out_degradations"]
+    assert all("auc_aux" not in row for row in rows.values())
+
+
+def test_the_orth_target_can_revert_to_all_of_f(workspace):
+    """`orth_target: decision` is the default; `feature` (the original target,
+    against the whole spatial vector) must still run -- it is the control the
+    decision target is measured against."""
+    root, manifest, split, adapter, cache_dir = workspace
+    summary = train_enrich(
+        _cfg(root, cache_dir, adapter, run_id="orthfeat", orth_target="feature"),
+        split, manifest,
+    )
+    assert summary["validation"]["held_out_degradations"]
+
+
+def test_differential_warmup_holds_the_head_near_frozen(workspace):
+    """The head_warmup_steps arm. In the fixture (32 rows, batch 8) an epoch is
+    4 steps, so head_warmup_steps=4 is one epoch of the head's LR being a
+    fraction of head_lr while the enricher trains at full rate -- and the head
+    must still reach its base LR once the ramp completes and co-adapt."""
+    root, manifest, split, adapter, cache_dir = workspace
+    summary = train_enrich(
+        _cfg(
+            root, cache_dir, adapter, run_id="dwarm",
+            finetune_head=True, warmup_steps=1, head_warmup_steps=4,
+        ),
+        split, manifest,
+    )
+    assert summary["finetune_head"] is True
+    assert summary["validation"]["held_out_degradations"]
+
+
 @pytest.mark.parametrize(
     "kwargs", [{"n_bands": 1}, {"top_k": 2}, {"pos_emb": False}],
     ids=["e11-single", "e13-topk", "e13-nopos"],

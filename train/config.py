@@ -126,6 +126,18 @@ class FreqConfig:
     slice of the coefficient axis. The enricher's band masks and E13's top-k
     both assume it."""
     norm: str = "log1p"
+    source: str = "window"
+    """Which pixels the render path's DCT reads.
+
+        "window"  the same cropped window the spatial branch reads -- the status
+                  quo, and the default.
+        "native"  the whole degraded image at native resolution, BEFORE the
+                  crop -- the complementarity premise's strongest test. The freq
+                  cells then tile the whole image while the trunk reads a
+                  128-256px window, so cell-for-cell alignment is gone; the
+                  enricher must learn the correspondence itself. Fingerprinted
+                  into `freq_sha`, so the two renderings are never mixed.
+    """
 
     def __post_init__(self):
         if not self.enabled:
@@ -145,6 +157,10 @@ class FreqConfig:
                 f"a field rather than a constant because it is fingerprinted -- "
                 f"adding a second one must invalidate every rendered view."
             )
+        if self.source not in ("window", "native"):
+            raise ValueError(
+                f"freq.source must be 'window' or 'native', got {self.source!r}"
+            )
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -162,7 +178,9 @@ class FreqConfig:
         """The `(image) -> tensor` the render path applies in its workers."""
         if not self.enabled:
             return None
-        return FreqExtract(patch=self.patch, grid=self.grid, radial=self.radial)
+        return FreqExtract(
+            patch=self.patch, grid=self.grid, radial=self.radial, source=self.source
+        )
 
     def fingerprint(self) -> str:
         """`CacheSpec.freq_sha`. Empty when disabled, which pairs with a
@@ -351,36 +369,6 @@ class LossConfig:
 
 
 @dataclass
-class DiscrepancyConfig:
-    hidden: int = 256
-    proj: int = 64
-    use_severity: bool = True
-    lam_aux: float = 1.0
-    """Weight on the auxiliary head's OWN supervised loss. 0 restores the
-    fused-only objective.
-
-    Without it the aux head is trained solely through `beta * aux`, which has
-    two consequences. `beta` initializes to 0, so the aux head receives exactly
-    zero gradient on step one and the branch bootstraps off `beta` reacting to
-    aux's random initialization -- making the learned sign a coin flip per run
-    (E4 produced 4 negative and 2 positive). And `loss` depends on the pair only
-    through the product, so `(beta, aux)` and `(-beta, -aux)` are exactly
-    equivalent: nothing breaks the tie.
-
-    Supervising the aux head directly pins the sign to the labels, gives it
-    gradient regardless of `beta`, and -- the reason it matters for E4 -- makes
-    `auc_aux` measure the question the experiment asks. Trained fused-only, the
-    aux head learns whatever residual helps a main head that is already at
-    ~0.9999 AUC on held-out degradations, which is nearly no signal at all. E4
-    asks how much forensic evidence the drift carries *standalone*, and only a
-    standalone objective measures that.
-
-    `beta` is left unconstrained: the sign degeneracy is broken by supervision
-    here, not by reparameterizing the fusion.
-    """
-
-
-@dataclass
 class TrainConfig:
     """One stage-1 run. `run_id` names its checkpoints and its log."""
 
@@ -407,18 +395,16 @@ class TrainConfig:
     device: str = "auto"
     out_dir: str = "checkpoints/grace/"
     checkpoint_every: int = 0
-    """>0 writes intermediate stage-1 checkpoints. Experiment E4 trains the
-    discrepancy head against each of them to see whether the adapter erases
-    forensic evidence as it improves."""
+    """>0 writes intermediate stage-1 checkpoints at the same cadence as
+    `val_every`, so each checkpoint can be paired with the numbers it scored."""
     val_every: int = 0
     """>0 runs the held-out validation block every N epochs during training,
     rather than only once at the end.
 
     Same `epoch % N == 0` convention as `checkpoint_every`, over the same cache
     epoch ids, so setting both to the same value pairs every intermediate
-    checkpoint with the numbers it scored -- which is what an E4 curve wants.
-    The final validation is unconditional either way, so `val_every: 0` (the
-    default) is exactly the old behaviour.
+    checkpoint with the numbers it scored. The final validation is unconditional
+    either way, so `val_every: 0` (the default) is exactly the old behaviour.
 
     Not free: each pass scores every held-out degradation epoch and every row of
     every `val_datasets` cache once through. Seconds on the PoC
@@ -488,66 +474,15 @@ class TrainConfig:
 
 
 @dataclass
-class DiscrepancyTrainConfig:
-    """Stage 2. The adapter is frozen; only the aux head and β train.
-
-    Separate from `TrainConfig` because the separation is the scientific claim:
-    the label-free adapter is a finished artifact before this stage begins, and
-    GRACE and GRACE-D ship the same weights.
-    """
-
-    run_id: str
-    cache_dir: str
-    adapter_checkpoint: str
-    epochs: int = 4
-    batch_size: int = 256
-    lr: float = 1e-3
-    weight_decay: float = 0.01
-    num_workers: int = 4
-    seed: int = 0
-    device: str = "auto"
-    out_dir: str = "checkpoints/grace/"
-    detector: str = ""
-    """Needed to score the main logit that the auxiliary logit is fused with."""
-    split: str = ""
-    split_args: dict = field(default_factory=dict)
-    """Keyword arguments for the split. The split is named by dotted path and
-    built with no arguments by default, so anything that varies *per run*
-    rather than per detector has to arrive here."""
-    dataset: str = ""
-    val_datasets: list[str] = field(default_factory=list)
-    """Held-out IMAGE sets, same field as TrainConfig's and scored the same way.
-
-    E4 is unreadable without them: on `held_out_degradations` the base head is
-    already at ~0.9999 AUC, so `auc_fused` cannot beat `auc_main` by more than
-    rounding regardless of what the discrepancy branch learned. These sets are
-    where the main head has headroom.
-    """
-    val_cache_dirs: list[str] = field(default_factory=list)
-    log_every: int = 50
-    discrepancy: DiscrepancyConfig = field(default_factory=DiscrepancyConfig)
-    crop: CropConfig = field(default_factory=CropConfig)
-    """Stage 2 never decodes an image -- it reads cached features throughout --
-    but it still has to name the window protocol, because `crop_sha` is what
-    stops it reading a whole-image cache as though the stage-1 adapter it is
-    freezing had been trained on one. Set it to whatever stage 1 used."""
-    wandb: WandbConfig = field(default_factory=WandbConfig)
-
-    def __post_init__(self):
-        if self.log_every < 1:
-            raise ValueError(f"log_every must be >= 1, got {self.log_every}")
-
-
-@dataclass
 class EnricherConfig:
     """The frequency enricher's geometry. Its OWN config, not `AdapterConfig`'s.
 
-    Deliberately a separate dataclass with a separate checkpoint, following
-    `DiscrepancyConfig`. `load_adapter` rebuilds a stage-1 module with
-    `AdapterConfig(**payload["adapter_cfg"])`, so every field on that dataclass
-    is a checkpoint-compatibility surface: adding one there would brick all 25
-    existing adapter checkpoints the same way `noise_dim` did. Adding one here
-    costs nothing, because nothing has been trained against it yet.
+    Deliberately a separate dataclass with a separate checkpoint. `load_adapter`
+    rebuilds a stage-1 module with `AdapterConfig(**payload["adapter_cfg"])`, so
+    every field on that dataclass is a checkpoint-compatibility surface: adding
+    one there would brick all 25 existing adapter checkpoints the same way
+    `noise_dim` did. Adding one here costs nothing, because nothing has been
+    trained against it yet.
     """
 
     d_model: int = 256
@@ -608,13 +543,10 @@ class EnricherConfig:
 
 @dataclass
 class EnrichTrainConfig:
-    """Stage 2 for the frequency branch. The adapter is frozen, as in GRACE-D.
+    """Stage 2 for the frequency branch. The adapter stays frozen throughout.
 
-    Separate from `DiscrepancyTrainConfig` because they train different modules
-    against different inputs, and sharing one dataclass would put every field of
-    each on the other. What they DO share is the invariant: the label-free
-    adapter is a finished artifact before either begins, and both ship it
-    unchanged.
+    The label-free adapter is a finished artifact before this stage begins, and
+    the enricher ships it unchanged.
     """
 
     run_id: str
@@ -624,27 +556,90 @@ class EnrichTrainConfig:
     batch_size: int = 256
     lr: float = 1e-3
     weight_decay: float = 0.01
-    lam_anchor: float = 0.1
-    """Weight on `||fused - f_corrected||`. 0 is E15's unanchored arm.
+    lam_anchor: float = 0.0
+    """Weight on `||fused - f_corrected||`. 0 -- the default -- means the term is
+    not even computed.
 
-    The enricher is trained supervised against labels, so nothing in the
-    objective otherwise stops it from walking the features somewhere the frozen
-    head happens to separate on this corpus -- which is a content classifier
-    wearing the adapter's output as a starting point. The anchor says the
-    enrichment is a correction to the corrected features, not a replacement for
-    them.
+    The anchor was the stage's original objective alongside the BCE, and E15 is
+    the arm that made 0 a shipped value. It has since been REMOVED from the
+    objective: the enricher now trains on the aux-head BCE (`lam_aux`) and the
+    orthogonality term (`lam_orth`) instead. The field survives so the old
+    objective stays runnable as an ablation -- raising it restores the anchor
+    exactly as E15's control ran it.
+    """
+    lam_aux: float = 1.0
+    """Weight on the aux head's OWN supervised BCE.
+
+    The aux head reads `sum_b expert(tokens, f, pos)` -- the DCT branch's
+    UN-GATED read (`FrequencyEnricher.update`) -- and this term forces that read
+    to be independently label-predictive. Without it nothing obliges the experts
+    to carry forensic content on their own: the fused head could do all the
+    classification while the frequency branch contributes arbitrary directions.
+    It reads the pre-gate sum precisely so it cannot be satisfied by shutting a
+    gate. `0` drops the head entirely. A branch that only ever rides the main
+    head's gradient never learns a standalone signal.
+    """
+    lam_orth: float = 0.1
+    """Weight on the orthogonality term between the frequency update and the
+    spatial feature.
+
+    The un-gated expert sum is pushed orthogonal to `f_corrected`, so the DCT
+    branch adds directions the spatial feature does not already span -- a
+    complementary read rather than a re-statement of the seam. Same pre-gate
+    read as `lam_aux`, so it cannot be gamed by closing a gate either. `0` turns
+    it off.
+    """
+    orth_target: str = "decision"
+    """What the orthogonality term measures Δ against: the full feature or the
+    head's decision direction.
+
+        "feature"   penalize (Δ · f_corrected)² -- the old target. Δ is pushed
+                    orthogonal to ALL of the spatial feature, which is a strong
+                    constraint: most of 768-d is irrelevant to the decision, and
+                    forcing Δ away from it can discard directions the head would
+                    actually use.
+        "decision"  penalize (Δ · ĵ)² where ĵ = ∇_f head(f_corrected) is the
+                    head's per-sample decision direction. Since proj_j(f) ∝ j,
+                    this is exactly orthogonalizing Δ against the
+                    decision-weighted projection of f. It keeps Δ from re-stating
+                    the decision-relevant part of the spatial read, while leaving
+                    it free in every direction the head does not weigh.
+
+    The trade-off: "decision" drives w·Δ toward 0 for a near-linear head, so the
+    feature-level update stops moving the main logit on its own -- the frequency
+    signal then reaches the decision through the fused-logit path (`beta * aux`)
+    instead. That is coherent with `fuse_aux_logit`, and it is the reason the
+    target is a knob rather than a rewrite.
+    """
+    aux_hidden: int = 128
+    """Hidden width of the training-time aux head. Its input is always the seam
+    width (`spec.dim`), so this is the head's only free knob. Training-only: the
+    aux head never ships in the enricher checkpoint."""
+    fuse_aux_logit: bool = True
+    """Fuse the aux logit into the prediction at the LOGIT level:
+
+        logit = head(fused) + beta * aux(update)
+
+    `beta` is a single learned scalar initialized at 0, so the step-0 identity
+    survives and a beta that leaves zero is direct evidence the DCT signal has
+    no transferable decision value. This is the fused-logit mechanism applied to
+    the frequency branch, and it sidesteps the co-adaptation problem the
+    feature-level fusion has: a scalar never needs the head to re-learn how to
+    READ a new feature subspace. The aux head and beta travel in the enricher
+    checkpoint and the fused detector scores with them.
+
+    False keeps the old behaviour -- prediction is `head(fused)`, the aux head
+    is training-time only -- which is the control this arm exists to beat.
     """
     finetune_head: bool = False
     """Train a COPY of the detector's head alongside the enricher. E14's second
     arm.
 
-    Not a default, and shipped as a first-class arm rather than an afterthought,
-    because round 1 measured `parallel_fraction = 0.0298`: 97% of feature drift
-    lay in directions the frozen head does not read. If that holds here, a frozen
-    head reduces the whole cross-attention enricher to a scalar logit shift --
-    the same function class as GRACE-D's aux logit, at a thousand times the
-    parameter count. Read E0-drift on this corpus BEFORE choosing, and read
-    `parallel_fraction` as the predicted ceiling on the frozen arm.
+    Not a default, and shipped as a first-class arm rather than an afterthought:
+    if the bulk of the feature-level enrichment lies in directions the frozen
+    head does not read, a frozen head reduces the whole cross-attention enricher
+    to a scalar logit shift at a thousand times the parameter count of a plain
+    scalar fusion.
 
     What the frozen arm buys is the head's provenance: it is the head the
     baseline was measured with, so a gain is attributable to the features. The
@@ -654,6 +649,23 @@ class EnrichTrainConfig:
     """Learning rate for the head copy when `finetune_head`. An order below the
     enricher's: the head arrives trained, and the arm is asking whether it can be
     *adjusted* to read enriched features, not re-fit from scratch."""
+    warmup_steps: int = 0
+    """Warmup for the ENRICHER's learning rate, in optimizer steps, before a
+    cosine decay to zero over the run. 0 means a constant LR -- exactly what the
+    stage shipped with, so every pre-existing enrich config keeps its behaviour.
+
+    In the reference config (`batch_size: 256` on the 50k-image wildfake_train
+    split) one epoch is 50000 // 256 = 195 steps, so a couple of hundred steps is
+    a warmup that sits inside the first epoch."""
+    head_warmup_steps: int = 0
+    """Warmup for the HEAD copy's learning rate when `finetune_head`.
+
+    Independent of `warmup_steps`, and it is the differential knob: the head's
+    LR is multiplied by a ramp that starts at ~1/`head_warmup_steps`, so setting
+    it to ~2-3 epochs of steps holds the arriving-trained head near frozen while
+    the enricher gets its legs, then releases it to co-adapt at `head_lr` (which
+    the cosine then decays to zero along with the enricher's). 0 means a constant
+    `head_lr`."""
     num_workers: int = 4
     seed: int = 0
     device: str = "auto"
@@ -699,6 +711,26 @@ class EnrichTrainConfig:
             )
         if self.lam_anchor < 0:
             raise ValueError(f"lam_anchor must be >= 0, got {self.lam_anchor}")
+        if self.lam_aux < 0:
+            raise ValueError(f"lam_aux must be >= 0, got {self.lam_aux}")
+        if self.lam_orth < 0:
+            raise ValueError(f"lam_orth must be >= 0, got {self.lam_orth}")
+        if self.orth_target not in ("feature", "decision"):
+            raise ValueError(
+                f"orth_target must be 'feature' or 'decision', got {self.orth_target!r}"
+            )
+        if self.aux_hidden < 1:
+            raise ValueError(f"aux_hidden must be >= 1, got {self.aux_hidden}")
+        if self.warmup_steps < 0:
+            raise ValueError(
+                f"warmup_steps must be >= 0, got {self.warmup_steps}. 0 means "
+                f"constant LR -- the stage's shipped behaviour."
+            )
+        if self.head_warmup_steps < 0:
+            raise ValueError(
+                f"head_warmup_steps must be >= 0, got {self.head_warmup_steps}. "
+                f"0 means a constant head_lr."
+            )
 
 
 def read_yaml(path: str | Path) -> Any:
@@ -736,10 +768,6 @@ def load_cache_config(path: str | Path) -> CacheConfig:
 
 def load_train_config(path: str | Path) -> TrainConfig:
     return _build(TrainConfig, read_yaml(path))
-
-
-def load_discrepancy_config(path: str | Path) -> DiscrepancyTrainConfig:
-    return _build(DiscrepancyTrainConfig, read_yaml(path))
 
 
 def load_enrich_config(path: str | Path) -> EnrichTrainConfig:

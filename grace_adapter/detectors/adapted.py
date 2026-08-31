@@ -1,38 +1,12 @@
-"""The adapted detector -- how GRACE re-enters the evaluation harness.
-
-    GRACE     logit = head(adapter(trunk(x)))
-    GRACE-D   logit = head(adapter(trunk(x))) + β · aux(Δ, severity)
-
-`AdaptedDetector` is a `FrozenDetector`, so it is named in a run config by dotted
-import path like any other model and the Day-1 harness scores it with no change
-whatsoever: same conditions, same threshold rule, same retention denominator,
-same JSON schema, same report table. The baseline and the adapted model differ by
-one config file, which is the plug-and-play claim in concrete form.
-
-Three configurations, all the same class:
-
-    checkpoint: null                    the null adapter -- must reproduce the
-                                        baseline to the last decimal (E1)
-    checkpoint: .../ema.pt              GRACE, label-free
-    + discrepancy: .../discrepancy.pt   GRACE-D, the supervised variant
-
-Preprocessing is delegated to the base detector unchanged, `preprocess_fn`
-included: the dataset is forked into DataLoader workers and must not carry the
-model, and standardising preprocessing across the zoo would break the baselines
-being compared against.
-"""
-
 import torch
 from PIL import Image
 
-from grace_adapter.models.discrepancy import FusedHead
-from grace_adapter.models.factory import build_discrepancy_head, load_adapter
+from grace_adapter.models.factory import load_adapter
 from grace_adapter.models.severity import SeverityHead
 from eval.splits import build_split
 from eval.config import load_detector_config
 from eval.detectors import build_detector
 from eval.detectors.base import FrozenDetector
-
 
 class AdaptedDetector(FrozenDetector):
     """A frozen detector with a trained GRACE adapter spliced at its seam.
@@ -40,13 +14,9 @@ class AdaptedDetector(FrozenDetector):
     Parameters
     ----------
     base        : path to the base detector's config (or the same mapping inline)
-    split       : dotted path to the SplitDetector for that base
+    split       : dotted relative path to the SplitDetector for that base
     checkpoint  : trained adapter weights; None = identity, i.e. exactly the base
-                  detector. Run that first -- it should reproduce the Day-1
-                  numbers exactly, and if it does not, the split is wrong and
-                  every comparison downstream is against a model that was never
-                  benchmarked.
-    discrepancy : stage-2 checkpoint. Present = GRACE-D.
+                  detector.
     """
 
     def __init__(
@@ -54,7 +24,6 @@ class AdaptedDetector(FrozenDetector):
         base,
         split: str,
         checkpoint: str | None = None,
-        discrepancy: str | None = None,
         name: str = "grace",
         split_args: dict | None = None,
     ):
@@ -66,30 +35,14 @@ class AdaptedDetector(FrozenDetector):
         spec = self.split.feature_spec
         self.adapter = load_adapter(checkpoint, spec) if checkpoint else None
         self.severity_head = None
-        self.fused = None
 
         if self.adapter is not None and self.adapter.film is not None:
             # The severity head ships inside the stage-1 checkpoint; without it
-            # the FiLM path has no input and conditioning silently reverts to the
-            # unconditioned gate.
+            # the FiLM path has no input.
             payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
             if "severity_state_dict" in payload:
                 self.severity_head = SeverityHead(spec.dim)
                 self.severity_head.load_state_dict(payload["severity_state_dict"])
-
-        if discrepancy is not None:
-            if self.adapter is None:
-                raise ValueError("a discrepancy head needs an adapter to produce Δ")
-            payload = torch.load(discrepancy, map_location="cpu", weights_only=False)
-            cfg = type("_C", (), payload["discrepancy_cfg"])()
-            self.fused = FusedHead(build_discrepancy_head(spec, cfg))
-            self.fused.load_state_dict(payload["state_dict"])
-            if self.fused.aux.use_severity and self.severity_head is None:
-                raise ValueError(
-                    f"{discrepancy} was trained with use_severity=True but "
-                    f"{checkpoint} carries no severity head. Retrain stage 1 with "
-                    f"lam_sev > 0, or stage 2 with use_severity: false."
-                )
 
         self.freeze()
 
@@ -108,8 +61,4 @@ class AdaptedDetector(FrozenDetector):
         severity = self.severity_head(f) if self.severity_head is not None else None
 
         f_adapted = self.adapter(f, severity=severity)
-        logit = self.split.head(f_adapted)
-
-        if self.fused is not None:
-            logit = self.fused(logit, f_adapted - f, severity)
-        return logit
+        return self.split.head(f_adapted)

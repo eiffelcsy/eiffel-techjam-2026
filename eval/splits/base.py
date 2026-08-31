@@ -6,13 +6,6 @@ tensor it can cache, correct, and feed back. `SplitDetector` is that seam, added
 *around* a detector rather than inside it, so the harness stays model-agnostic
 and the zoo adapters stay untouched.
 
-The contract is one equation, and `tests/test_split_consistency.py` enforces it:
-
-    head(trunk(x)) == detector(x)      for every x, to float tolerance
-
-Break it and every number downstream is measuring a different model than the
-Day-1 baseline it is compared against.
-
 `head` must be differentiable with respect to its *input*. GRACE takes the
 gradient of the logit at the clean features to find the head's sensitive
 subspace (see `train.weighting`), so a head wrapped in `no_grad` or
@@ -190,8 +183,7 @@ class SplitDetector(nn.Module, ABC):
 
         A BatchNorm-containing detector left in train mode updates its running
         statistics on degraded data and adapts itself, contaminating the exact
-        comparison being made -- and anything can call `.train()` on a parent
-        module between one step and the next.
+        comparison being made.
         """
         if self.detector.training:
             raise RuntimeError(

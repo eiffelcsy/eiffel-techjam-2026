@@ -61,3 +61,22 @@ def sample_eval_subset(df: pd.DataFrame, n_per_class: int | None, seed: int) -> 
         for _, g in df.groupby("label", sort=True)
     ]
     return pd.concat(picked).sort_index()
+
+
+def manifest_rel_paths(df: pd.DataFrame, root: str | Path, label: int | None = None) -> list[str]:
+    """Absolute manifest paths (for `label`, when given) in the metadata tables'
+    relative form.
+
+    The metadata tables name images by relative path (`./Real/laion5b/...`); a
+    manifest stores `(root / rel).resolve()`. Undo that, so an added-reals source
+    can skip exactly the images already sampled. Shared by the combined-manifest
+    builder and the extra-reals fetcher, so both plan against the same exclusion
+    set.
+    """
+    root = Path(root).resolve()
+    if label is not None:
+        df = df[df["label"] == label]
+    return [
+        Path(p).relative_to(root).as_posix().removeprefix("./")
+        for p in df["path"]
+    ]

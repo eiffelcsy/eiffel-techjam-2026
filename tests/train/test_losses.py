@@ -4,7 +4,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from train.losses import alignment_loss, head_kl
+from train.losses import alignment_loss, head_kl, orthogonality_loss
 from train.weighting import decision_weighted_error, head_gradient
 from tests.fixtures import SPECS, LinearHead, MLPHead, features
 
@@ -84,3 +84,41 @@ def test_head_kl_is_zero_when_features_match():
         float(head_kl(head, f, f)), abs=1e-9
     )
     assert float(head_kl(head, f, f)) >= 0.0
+
+
+def test_orthogonality_loss_is_zero_for_orthogonal_updates():
+    """An update that points exactly orthogonal to the spatial feature carries
+    the minimum possible redundancy -- the term must vanish."""
+    spec = SPECS["vector"]
+    spatial = torch.randn(8, spec.dim)
+    s = F.normalize(spatial, dim=1)
+    orth = torch.randn(8, spec.dim)
+    orth = orth - (orth * s).sum(-1, keepdim=True) * s       # project out
+    orth = F.normalize(orth, dim=1)
+    assert float(orthogonality_loss(orth, spatial)) < 1e-6
+
+
+def test_orthogonality_loss_is_maximal_for_parallel_updates():
+    """A copy of the spatial direction is exactly the redundancy the term is
+    there to price -- correlation one, so the penalty is one."""
+    spec = SPECS["vector"]
+    spatial = torch.randn(8, spec.dim)
+    parallel = F.normalize(spatial, dim=1) * 3.0              # same direction
+    assert float(orthogonality_loss(parallel, spatial)) == pytest.approx(1.0)
+
+    # and an anti-parallel copy is just as redundant as a parallel one
+    anti = -parallel
+    assert float(orthogonality_loss(anti, spatial)) == pytest.approx(1.0)
+
+
+def test_orthogonality_loss_ignores_update_magnitude():
+    """The term must price DIRECTION, not size -- the gate owns magnitude, and a
+    term that rewarded small updates would let the branch 'satisfy' it by
+    shrinking instead of by learning."""
+    spec = SPECS["vector"]
+    spatial = torch.randn(8, spec.dim)
+    s = F.normalize(spatial, dim=1)
+    orth = torch.randn(8, spec.dim)
+    orth = orth - (orth * s).sum(-1, keepdim=True) * s
+    assert float(orthogonality_loss(orth * 1e-4, spatial)) < 1e-6
+    assert float(orthogonality_loss(orth * 1e4, spatial)) < 1e-6

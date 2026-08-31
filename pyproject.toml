@@ -28,21 +28,6 @@ dev = ["pytest"]
 # asked -- and a run with tracking off writes exactly the same files.
 wandb = ["wandb"]
 
-# The detector zoo's dependencies, kept out of the base install: nothing in
-# `eval`/`load_data`/`preprocessing`/`train` imports them, only a vendored-repo
-# detector adapter would, and any such adapter defers its imports so the
-# harness runs without any of this.
-#   timm  -- a ViT-with-registers backbone; >=1.0.12 for set_input_size
-#   peft  -- LoRA-wrapped checkpoints will not load without it
-#   clip  -- OpenAI's CLIP, not open_clip; ftfy and regex are its deps
-zoo = [
-    "timm>=1.0.12",
-    "peft",
-    "ftfy",
-    "regex",
-    "clip @ git+https://github.com/openai/CLIP.git",
-]
-
 [tool.pytest.ini_options]
 # grace_adapter/tests/ and the root tests/ are both packages named `tests`
 # (transitional -- grace_adapter/tests merges into tests/ in a later reorg

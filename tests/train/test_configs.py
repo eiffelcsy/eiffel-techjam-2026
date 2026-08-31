@@ -11,8 +11,7 @@ import pytest
 import yaml
 
 from train.config import (
-    load_cache_config, load_discrepancy_config, load_enrich_config, load_probe_config,
-    load_train_config,
+    load_cache_config, load_enrich_config, load_probe_config, load_train_config,
 )
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -51,12 +50,16 @@ CROP_CONFIGS = {
     "probe/dinov3_wildfake_multiscale.yaml",
     "cache/dinov3_multiscale.yaml",
     "cache/dinov3_multiscale_val.yaml",
+    "cache/dinov3_multiscale_nativefreq.yaml",
+    "cache/dinov3_multiscale_nativefreq_val.yaml",
+    "cache/dinov3_multiscale_nativefreq_combined.yaml",
+    "cache/dinov3_multiscale_nativefreq_val_combined.yaml",
     "cache/wildfake_freq.yaml",
     "cache/wildfake_freq_val.yaml",
     "train/dinov3_multiscale.yaml",
     "train/dinov3_degraded.yaml",
-    "train/dinov3_discrepancy.yaml",
     "train/dinov3_enrich.yaml",
+    "train/dinov3_enrich_nativefreq.yaml",
     "train/dinov3_gate_nodecay.yaml",
     "train/dinov3_live.yaml",
     "train/dinov3_plain_mse.yaml",
@@ -93,9 +96,9 @@ EMPTIED 2026-08-30, when `audit_sizes.py` measured the training corpus and
 and still separate from CROP_CONFIGS: the next corpus needs the same forcing
 function, and re-populating this set is how it gets one."""
 
-STAGE_TWO = {"discrepancy", "enrich"}
-"""Filename markers for the two stage-2 families, which load through their own
-dataclasses. `train/` holds three kinds of run now, not two."""
+STAGE_TWO = {"enrich"}
+"""Filename markers for the stage-2 family, which loads through its own
+dataclass. `train/` holds two kinds of run now, not three."""
 
 
 def _audited(subdir, path) -> bool:
@@ -130,7 +133,7 @@ def test_the_crop_range_must_be_audited(name):
     subdir, filename = name.split("/")
     loader = LOADERS[subdir]
     if subdir == "train" and any(m in filename for m in STAGE_TWO):
-        loader = load_enrich_config if "enrich" in filename else load_discrepancy_config
+        loader = load_enrich_config
     with pytest.raises(ValueError, match="audit_sizes"):
         loader(CONFIGS / subdir / filename)
 
@@ -184,13 +187,6 @@ def test_stage_one_configs_load(path):
     assert cfg.source in ("cache", "live")
     assert cfg.loss.weighting in ("none", "jacobian")
     assert 0.0 <= cfg.loss.eps_iso <= 1.0
-
-
-@pytest.mark.parametrize(
-    "path", [p for p in _paths("train") if "discrepancy" in p.name], ids=lambda p: p.name
-)
-def test_stage_two_configs_load(path):
-    assert load_discrepancy_config(path).adapter_checkpoint
 
 
 @pytest.mark.parametrize(
@@ -291,23 +287,12 @@ def test_identity_config_has_no_checkpoint(family):
 
 
 @pytest.mark.parametrize("family", FAMILIES)
-def test_grace_and_grace_d_share_an_adapter(family):
-    """Stage 2 never touches the adapter, so the two variants must name the same
-    checkpoint -- otherwise the comparison confounds two changes."""
-    grace = yaml.safe_load((DETECTORS / f"{family}+grace.yaml").read_text())
-    graced = yaml.safe_load((DETECTORS / f"{family}+grace-d.yaml").read_text())
-    assert grace["args"]["checkpoint"] == graced["args"]["checkpoint"]
-    assert grace["args"]["discrepancy"] is None
-    assert graced["args"]["discrepancy"] is not None
-
-
-@pytest.mark.parametrize("family", FAMILIES)
-def test_all_three_arms_wrap_the_same_base_detector(family):
-    """identity / grace / grace-d must differ in the adapter alone. A different
+def test_both_arms_wrap_the_same_base_detector(family):
+    """identity / grace must differ in the adapter alone. A different
     `base` or `split` between them makes the comparison meaningless."""
     raws = [
         yaml.safe_load((DETECTORS / f"{family}+{arm}.yaml").read_text())
-        for arm in ("identity", "grace", "grace-d")
+        for arm in ("identity", "grace")
     ]
     assert len({r["args"]["base"] for r in raws}) == 1
     assert len({r["args"]["split"] for r in raws}) == 1
@@ -376,9 +361,8 @@ def test_adapted_detectors_reference_a_real_base(path):
     "loader,body",
     [
         (load_train_config, "run_id: x\ncache_dir: y\n"),
-        (load_discrepancy_config, "run_id: x\ncache_dir: y\nadapter_checkpoint: z\n"),
     ],
-    ids=["stage1", "stage2"],
+    ids=["stage1"],
 )
 def test_log_every_zero_is_rejected_at_load(tmp_path, loader, body):
     """`step % 0` would be a ZeroDivisionError several minutes into a run, and 0
@@ -433,7 +417,7 @@ def test_crop_configs_load_once_audited(name):
     subdir, filename = name.split("/")
     loader = LOADERS[subdir]
     if subdir == "train" and any(m in filename for m in STAGE_TWO):
-        loader = load_enrich_config if "enrich" in filename else load_discrepancy_config
+        loader = load_enrich_config
     cfg = loader(CONFIGS / subdir / filename)
     assert cfg.crop.enabled
     assert cfg.crop.s_max is not None and cfg.crop.s_max >= cfg.crop.s_min

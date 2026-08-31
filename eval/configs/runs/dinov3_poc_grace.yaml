@@ -1,11 +1,10 @@
-# The PoC comparison: the same detector two ways, against the baseline.
+# The PoC comparison: the adapted detector against the baseline.
 #
 #   +grace      the label-free adapter (stage 1)
-#   +grace-d    stage 1 plus the supervised discrepancy branch (stage 2)
 #
-# The third arm, +identity, is NOT here. It is E1, the gate on everything else,
+# The identity arm, +identity, is NOT here. It is E1, the gate on everything else,
 # and it lives in eval/configs/runs/dinov3_poc_identity.yaml so it can be scored right
-# after the baseline -- before the cache render, before stage 1, before stage 2.
+# after the baseline -- before the cache render, before stage 1.
 # Bundling it here would have meant the check that decides whether any of this is
 # measurable could not run until all of it had been trained. It also saves a full
 # pass over the eval set, since the identity arm is scored once instead of twice.
@@ -21,11 +20,12 @@
 #
 # THE DATASET MUST MATCH dinov3_poc_baseline.yaml's, and that is a hard
 # requirement rather than a convention. Every headline number in this project is
-# produced by grace_adapter/scripts/compare.py, which normalizes retention by the
+# produced by scripts/compare.py, which normalizes retention by the
 # BASELINE's clean AUC -- the harness's own retention divides by each detector's
-# own clean AUC, which for GRACE-D would hide exactly the effect being claimed.
-# compare.py refuses two result files from different eval sets, because
-# retention is only comparable on one. So: baseline and arms, same datasets list.
+# own clean AUC, which for the frequency branch would hide exactly the effect
+# being claimed. compare.py refuses two result files from different eval sets,
+# because retention is only comparable on one. So: baseline and arms, same
+# datasets list.
 #
 # The benchmark and not wildfake_train_val, for the reason dinov3_poc_baseline.yaml
 # gives at length -- that split is a SELECTION set here (stage 0 picks the head's
@@ -37,8 +37,7 @@
 run_id: dinov3_poc_grace
 
 detectors:
-  - grace_adapter/configs/detectors/dinov3+grace.yaml
-  - grace_adapter/configs/detectors/dinov3+grace-d.yaml
+  - eval/configs/detectors/dinov3+grace.yaml
 
 datasets:
   - load_data/configs/datasets/wildfake_coco_dalle3.yaml

@@ -4,7 +4,7 @@
 
 DECISION 0. If band energies do not separate the classes by more than spectral
 rolloff alone does, the frequency branch's mechanism has failed and no amount of
-cross-attention rescues it -- re-scope to a band-energy discrepancy input, or
+cross-attention rescues it -- re-scope to a simpler band-energy input, or
 abandon, BEFORE a byte of the frequency cache is rendered. This script exits
 non-zero when that happens, so it can be a hard stop in a driver script.
 
@@ -330,7 +330,7 @@ def main():
             "more than spectral rolloff alone does, so whatever the spectrum "
             "carries here is resampling history rather than generation traces. "
             "The enricher would be attending over that channel. Re-scope to a "
-            "band-energy discrepancy input, or drop the frequency branch -- "
+            "simpler band-energy input, or drop the frequency branch -- "
             "before rendering the cache, which is what this gate is for."
         )
 

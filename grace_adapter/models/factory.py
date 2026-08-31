@@ -14,7 +14,6 @@ import torch
 import torch.nn as nn
 
 from grace_adapter.models.adapter import GatedResidualAdapter
-from grace_adapter.models.discrepancy import DiscrepancyHead
 from grace_adapter.models.severity import SeverityHead
 from eval.splits.base import FeatureSpec
 
@@ -47,12 +46,6 @@ def build_adapter(spec: FeatureSpec, cfg) -> GatedResidualAdapter:
 
 def build_severity_head(spec: FeatureSpec, hidden: int = 256) -> SeverityHead:
     return SeverityHead(dim=spec.dim, hidden=hidden)
-
-
-def build_discrepancy_head(spec: FeatureSpec, cfg) -> DiscrepancyHead:
-    return DiscrepancyHead(
-        spec=spec, hidden=cfg.hidden, proj=cfg.proj, use_severity=cfg.use_severity,
-    )
 
 
 def save_adapter(path, adapter: nn.Module, spec: FeatureSpec, cfg, extra: dict | None = None):

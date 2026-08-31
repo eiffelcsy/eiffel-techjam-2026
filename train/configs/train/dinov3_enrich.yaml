@@ -1,8 +1,8 @@
-# Stage 2, the frequency enricher, against the FROZEN multiscale adapter. A
-# sibling of dinov3_discrepancy.yaml: both freeze the same adapter and use
-# labels, but this one reads the image again in a basis the resize destroyed.
+# Stage 2, the frequency enricher, against the FROZEN multiscale adapter. It
+# freezes the same adapter and reads the image again in a basis the resize
+# destroyed.
 #
-#   python scripts/train_enrich.py configs/train/dinov3_enrich.yaml
+#   python scripts/train_enrich.py train/configs/train/dinov3_enrich.yaml
 
 run_id: dinov3_enrich
 cache_dir: cache_ms/dinov3-wildfake-multiscale
@@ -21,19 +21,27 @@ val_datasets:
 val_cache_dirs:
   - cache_ms_val/dinov3-wildfake-multiscale
 
-epochs: 4
+epochs: 12
 batch_size: 256
 lr: 0.001
 seed: 0
+warmup_steps: 10
 
-lam_anchor: 0.1     # ||fused - f_corrected||; 0.0 is E15
-finetune_head: false # THE swept key for E14
+lam_anchor: 0.0     # removed from the objective; >0 restores E15's anchor
+lam_aux: 0.1        # aux head BCE on the DCT branch's un-gated read
+lam_orth: 0.02       # orthogonality between the DCT read and the spatial features
+orth_target: decision # "decision" = against the head's read direction; "feature" = against all of f
+aux_hidden: 128     # hidden width of the aux head (travels in the checkpoint)
+fuse_aux_logit: true # logit = head(fused) + beta*aux(update); beta learned from 0
+finetune_head: true
+head_lr: 0.00075
+head_warmup_steps: 390
 
 enricher:
   d_model: 256
   n_heads: 4
   n_bands: 2        # HF and LF; 1 is E11
-  gate_init: -4.0
+  gate_init: -2.0
   severity_film: true
   pos_emb: true
   top_k: null       # all 64 coefficients per channel; an int is E13

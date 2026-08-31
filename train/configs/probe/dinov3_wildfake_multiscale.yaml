@@ -1,14 +1,14 @@
 # Stage 0 under the multi-scale protocol -- the head every later arm loads.
 #
-#   python scripts/train_probe.py configs/probe/dinov3_wildfake_multiscale.yaml
+#   python scripts/train_probe.py train/configs/probe/dinov3_wildfake_multiscale.yaml
 
 run_id: dinov3_wildfake_multiscale
 
 detector: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
-dataset: load_data/configs/datasets/wildfake_train.yaml       # split: train, 50,000
+dataset: load_data/configs/datasets/wildfake_train_combined.yaml  # split: train, 58,656 (49,999 WildFake + 6k FLUX + 200 Seedream + 2,457 reals)
 
 val_dataset:
-  - load_data/configs/datasets/wildfake_train_val.yaml        # 10,000, balanced 5k/5k
+  - load_data/configs/datasets/wildfake_train_val_combined.yaml   # 14,000, balanced 7k/7k
 
 split: eval.splits.dinov3.DINOv3Split
 out: ""             # "" = take it from the detector config's head_checkpoint

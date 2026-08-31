@@ -1,0 +1,45 @@
+# Held-out-image validation cache, multi-scale protocol, frequency read at
+# NATIVE resolution.
+#
+#   python scripts/build_cache.py train/configs/cache/dinov3_multiscale_nativefreq_val.yaml
+#
+# configs/cache/dinov3_multiscale_nativefreq.yaml with the dataset and out_dir
+# swapped, for the reason the pre-crop pair had: `build_cache.py` derives its
+# root from the DETECTOR name alone, so two datasets rendered for one detector
+# under one out_dir collide -- and the second render is rejected on
+# `manifest_sha` rather than silently mixing rows from both. One out_dir per
+# dataset.
+#
+# 10,000 images, balanced 5k real / 5k generated, disjoint from the training
+# split by construction. The crop range MUST match the training cache's, and so
+# must the freq `source` -- a val set whose frequency branch read different
+# pixels would be measuring a protocol shift, not generalization.
+
+detector: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
+split: eval.splits.dinov3.DINOv3Split
+dataset: load_data/configs/datasets/wildfake_train_val.yaml
+
+out_dir: cache_ms_val_nativefreq/
+n_epochs: 12
+n_val_epochs: 2
+batch_size: 8
+trunk_batch_size: 128
+num_workers: 8
+
+schedule: {}
+
+freq:
+  enabled: true
+  patch: 8           # JPEG's block size, so JPEG artefacts land on resolvable coefficients
+  grid: 14           # 196 cells, one per DINOv3 patch token at 224
+  channels: 3
+  radial: true       # a band is then a contiguous slice, which E13's top-k needs
+  norm: log1p
+  source: native     # the whole degraded image, BEFORE the crop, at native resolution
+
+crop:
+  enabled: true
+  s_min: 128
+  policy: uniform
+  seed: 0
+  s_max: 256          # from results/audit_sizes__wildfake-train.json

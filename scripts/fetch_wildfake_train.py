@@ -105,7 +105,7 @@ PARTIAL = {
     "SD|0": "Images/Diffusion_based/SD/originalSD/Typical/part_3.zip",
 }
 
-ROOT = Path(__file__).resolve().parents[2] / "data" / "wildfake_train"
+ROOT = Path(__file__).resolve().parents[1] / "data" / "wildfake_train"
 IMAGES, ZIPS, AVAIL = ROOT / "images", ROOT / "_zips", ROOT / "available"
 CONFIG = "load_data/configs/datasets/wildfake_train.yaml"
 

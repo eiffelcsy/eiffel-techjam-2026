@@ -19,5 +19,4 @@ args:
   base: eval/configs/detectors/dinov3-wildfake-crop200.yaml
   split: eval.splits.dinov3.DINOv3Split
   checkpoint: checkpoints/grace/dinov3_multiscale/ema.pt
-  discrepancy: null
 device: auto

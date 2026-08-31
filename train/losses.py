@@ -4,7 +4,7 @@
 
 Every term above is **label-free**: the targets are the detector's own clean-view
 features and the degradation sampler's own metadata. `supervised_bce` is the one
-exception and belongs to stage 2 (`grace_adapter.models.discrepancy`), not here.
+label-using exception and belongs to stage 2 (the frequency branch), not here.
 
 Every term is also logged separately. A retention gain from the head-KL term is a
 different result than a gain from the alignment term, and the aggregate number
@@ -81,6 +81,24 @@ def severity_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
 def supervised_bce(logit: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     """Stage 2 only. The one place GRACE uses image labels."""
     return F.binary_cross_entropy_with_logits(logit.squeeze(-1), labels.float())
+
+
+def orthogonality_loss(update: torch.Tensor, spatial: torch.Tensor) -> torch.Tensor:
+    """Squared cosine similarity between the frequency update and the spatial
+    feature -- the complementarity term for the DCT branch.
+
+    The enricher's value is that it reads the image in a basis the spatial
+    feature no longer carries. An update that is parallel to `f_corrected`
+    mostly restates the seam; an update orthogonal to it adds directions the
+    head was never given. Squaring the correlation makes it a smooth penalty
+    that is indifferent to sign (a strongly anti-parallel update is just as
+    redundant as a parallel one), and normalising means the term measures
+    *direction* rather than the update's magnitude -- which the gate already
+    controls.
+    """
+    u = F.normalize(update, dim=-1)
+    s = F.normalize(spatial, dim=-1)
+    return (u * s).sum(dim=-1).square().mean()
 
 
 def total_loss(

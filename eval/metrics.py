@@ -31,7 +31,7 @@ the run config's `retention_floor` overrides it.
 
 @dataclass
 class ErrorBreakdown:
-    """Counts and rates at a fixed threshold. `fp` = a real image called AI."""
+    """Counts and rates at a fixed threshold."""
 
     tp: int
     fp: int

@@ -1,0 +1,18 @@
+# The validation half of the combined corpus. Same manifest file as
+# wildfake_train_combined.yaml, other split.
+#
+# Built by wildfake_train_combined.yaml's `build:` block -- there is no
+# `build:` here, and there must not be: the combined manifest is one file built
+# in one pass, and a second build spec is a second place for the two halves to
+# drift apart.
+#
+#   split: validation   18,000   9,000 real / 9,000 generated
+#
+# Balanced 50/50 because this split SELECTS (stage-0 epoch choice, stage-1
+# held-out-image numbers), and a selection metric should not inherit the
+# training corpus's class skew. The new data keeps it balanced: 5,000 WildFake
+# reals + 4,000 new reals against 5,000 WildFake fakes + 4,000 new fakes.
+
+name: wildfake-train-val-combined
+manifest: data/wildfake_plus_sota/manifest.parquet
+split: validation

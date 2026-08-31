@@ -208,15 +208,29 @@ def extract_freq(
     return normalize(pooled.reshape(cells, c * n))
 
 
-def freq_fingerprint(patch: int, grid: int, channels: int, radial: bool, norm: str) -> str:
+def freq_fingerprint(patch: int, grid: int, channels: int, radial: bool, norm: str,
+                     source: str = "window") -> str:
     """Identity of the extraction protocol, for `CacheSpec.freq_sha`.
 
     The coefficient set is a render-time commitment -- unlike the view count,
     which is resumable, changing any of these re-renders the whole frequency
     cache -- so it is asserted on load beside the other fingerprints rather than
     trusted to match.
+
+    `source` is the render path's window selection: `"window"` reads the SAME
+    cropped window the spatial branch reads, `"native"` reads the whole degraded
+    image at native resolution, before the crop. The two are different pixels,
+    so the two must never be read interchangeably -- which is why it is here and
+    not left to `crop_sha`, whose job is the spatial features' window. The
+    default (`"window"`) is deliberately ABSENT from the hash, so a cache
+    rendered before this field existed stays readable: it holds exactly the
+    window-source bytes, and retroactively changing its fingerprint would orphan
+    every cache on disk.
     """
     import hashlib
 
-    payload = repr(("freq", patch, grid, channels, radial, norm)).encode("utf-8")
+    payload = repr(
+        ("freq", patch, grid, channels, radial, norm)
+        + (() if source == "window" else (source,))
+    ).encode("utf-8")
     return hashlib.blake2b(payload, digest_size=8).hexdigest()

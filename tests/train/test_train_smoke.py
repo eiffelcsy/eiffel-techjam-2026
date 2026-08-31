@@ -1,10 +1,9 @@
-"""Both stages, end to end, on a real rendered cache.
+"""Stage 1, end to end, on a real rendered cache.
 
 Small and fast, but not a mock: this renders features to disk, trains an adapter
-against them, checkpoints it, reloads it, and trains the discrepancy head against
-the frozen result. It is the test that would have caught every wiring mistake in
-`loop.py`, and it is the shape of the `max_images: 64, n_epochs: 2` smoke run the
-README prescribes before a real one.
+against them, checkpoints it, and reloads it. It is the test that would have
+caught every wiring mistake in `loop.py`, and it is the shape of the
+`max_images: 64, n_epochs: 2` smoke run the README prescribes before a real one.
 """
 
 import json
@@ -17,12 +16,11 @@ from train.cache.schedule import EpochSchedule, val_epochs
 from train.cache.spec import CacheSpec, sha_manifest, sha_preprocess
 from train.cache.writer import build_cache
 from train.config import (
-    AdapterConfig, DiscrepancyConfig, DiscrepancyTrainConfig, LossConfig,
-    TrainConfig,
+    AdapterConfig, LossConfig, TrainConfig,
 )
 from train.cache.reader import FeatureCache
 from grace_adapter.models.factory import build_adapter, load_adapter
-from train.loop import train_adapter, train_discrepancy, validate
+from train.loop import train_adapter, validate
 from preprocessing.degrade.conditions import load_grid
 from tests.fixtures import SPECS, MLPHead, ToySplit, write_images
 
@@ -239,37 +237,6 @@ def test_accuracy_uses_one_threshold_across_views(workspace):
     import numpy as np
     expected = threshold_from_clean(np.concatenate(scores), np.concatenate(labels))
     assert row["threshold"] == pytest.approx(expected)
-
-
-def test_stage_two_trains_against_a_frozen_adapter(workspace):
-    """The supervised variant, and the E4 measurement it exists to enable."""
-    root, manifest, split, schedule, cache_dir = workspace
-    stage1 = _train_cfg(root, cache_dir, run_id="for_disc")
-    train_adapter(stage1, split, manifest, schedule)
-    checkpoint = root / "ckpt" / "for_disc" / "ema.pt"
-    before = load_adapter(checkpoint, split.feature_spec).state_dict()
-
-    cfg = DiscrepancyTrainConfig(
-        run_id="disc", cache_dir=str(cache_dir), adapter_checkpoint=str(checkpoint),
-        epochs=1, batch_size=8, num_workers=0, out_dir=str(root / "ckpt"),
-        discrepancy=DiscrepancyConfig(hidden=8, proj=4),
-    )
-    summary = train_discrepancy(cfg, split, manifest)
-
-    assert (root / "ckpt" / "disc" / "discrepancy.pt").exists()
-    # `validation` is keyed by AXIS first (`held_out_degradations`, and one
-    # `held_out_images/<name>` per val set), then by epoch -- the same shape
-    # stage 1 writes, so an E4 sweep and the retention curve share an axis.
-    assert "held_out_degradations" in summary["validation"]
-    row = next(iter(summary["validation"]["held_out_degradations"].values()))
-    assert {"auc_main", "auc_aux", "auc_fused"} <= set(row)
-
-    # The claim that makes GRACE and GRACE-D comparable: stage 2 leaves the
-    # adapter bit-identical, so the label-free claim survives the supervised
-    # variant.
-    after = load_adapter(checkpoint, split.feature_spec).state_dict()
-    for key in before:
-        assert torch.equal(before[key], after[key]), key
 
 
 def test_decay_gate_false_exempts_only_the_gate_logits():

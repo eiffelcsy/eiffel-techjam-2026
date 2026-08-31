@@ -1,0 +1,85 @@
+# Stage 2, the frequency enricher, against the FROZEN multiscale adapter -- with
+# the frequency branch reading the image at NATIVE resolution.
+#
+#   python scripts/build_cache.py train/configs/cache/dinov3_multiscale_nativefreq.yaml
+#   python scripts/build_cache.py train/configs/cache/dinov3_multiscale_nativefreq_val.yaml
+#   python scripts/train_enrich.py train/configs/train/dinov3_enrich_nativefreq.yaml
+#
+# Three keys apart from dinov3_enrich.yaml: `cache_dir`, `val_cache_dirs` and
+# `freq.source: native`. The cache must be rebuilt first -- `source` is part of
+# `freq_sha`, so a window-source cache is refused here on a mismatch (assert_freq
+# _available) rather than read by mistake.
+#
+# The objective is the BEST-TRIED recipe from the sweep, not the base file's
+# current values: lam_anchor 0 (anchor>0 hurt), lam_aux 0.1 (0.015 is in the
+# "too weak" regime), head_lr 0.00075 (0.001 was second-best), head_warmup 390.
+# If the native-res premise is true anywhere, this is the setting to show it.
+#
+# ALIGNMENT CAVEAT. The freq cells now tile the whole native image while the
+# trunk reads a 128-256px window, so the two branches are no longer aligned
+# cell-for-cell and the cross-attention must learn the correspondence without
+# being told where the window sits. If fused stays <= corrected, that ambiguity
+# is a confound; the fix is conditioning on the crop geometry.
+
+run_id: dinov3_enrich_nativefreq
+cache_dir: cache_ms_nativefreq/dinov3-wildfake-multiscale
+adapter_checkpoint: checkpoints/grace/dinov3_multiscale/ema.pt
+
+detector: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
+split: eval.splits.dinov3.DINOv3Split
+dataset: load_data/configs/datasets/wildfake_train_combined.yaml
+
+val_datasets:
+  - load_data/configs/datasets/wildfake_train_val_combined.yaml
+val_cache_dirs:
+  - cache_ms_nativefreq_val/dinov3-wildfake-multiscale
+
+epochs: 12
+batch_size: 256
+lr: 0.001
+seed: 0
+warmup_steps: 10
+
+lam_anchor: 0
+lam_aux: 0.15
+lam_orth: 0.02
+orth_target: decision
+aux_hidden: 128
+fuse_aux_logit: true
+finetune_head: true
+head_lr: 0.0015
+head_warmup_steps: 1000
+
+enricher:
+  d_model: 256
+  n_heads: 4
+  n_bands: 2
+  gate_init: -4.0
+  severity_film: true
+  pos_emb: true
+  top_k: null
+  learn_masks: true
+
+# Must match the cache's protocol -- `freq_sha` is checked at startup. `source`
+# here must equal the cache's `freq.source`, or the enricher reads tokens of a
+# different picture than the cache rendered.
+freq:
+  enabled: true
+  patch: 8
+  grid: 14
+  channels: 3
+  radial: true
+  norm: log1p
+  source: native
+
+crop:
+  enabled: true
+  s_min: 128
+  policy: uniform
+  seed: 0
+  s_max: 256
+
+wandb:
+  enabled: true
+  project: grace-adapter
+  group: ""

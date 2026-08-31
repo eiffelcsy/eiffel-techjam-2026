@@ -145,20 +145,30 @@ class AIGCDataset(Dataset):
 
 
 class ImageFolderDataset(Dataset):
-    """Bare directory of images, for inference. No labels, no manifest."""
+    """Bare directory of images, for inference. No labels, no manifest.
 
-    def __init__(self, root: str, preprocess=None):
+    `aux`, when set, is a second read of the same image -- `detector.aux_fn()` --
+    run in the worker beside the preprocessing, so both branches see one image.
+    A detector with no aux (the default, every detector but the fused one) keeps
+    yielding a bare tensor exactly as it always did.
+    """
+
+    def __init__(self, root: str, preprocess=None, aux=None):
         self.paths = list_images(root)
         if not self.paths:
             raise ValueError(f"no images found under {root!r}")
         self.preprocess = preprocess or _to_tensor
+        self.aux = aux
 
     def __len__(self) -> int:
         return len(self.paths)
 
     def __getitem__(self, i: int):
         img = load_normalized(self.paths[i])
-        return self.preprocess(img), {"image_path": str(self.paths[i])}
+        meta = {"image_path": str(self.paths[i])}
+        if self.aux is None:
+            return self.preprocess(img), meta
+        return Inputs(self.preprocess(img), self.aux(img)), meta
 
 
 def collate(batch):

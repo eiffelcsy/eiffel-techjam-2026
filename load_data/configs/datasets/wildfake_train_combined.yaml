@@ -1,0 +1,103 @@
+# The COMBINED training corpus: the existing WildFake manifest plus new
+# single-class sources appended (FLUX, Seedream, and more reals).
+#
+# Built by scripts/build_combined_manifest.py, NOT scripts/build_manifest.py:
+# the combined manifest is the existing wildfake_train manifest read IN PLACE
+# (indices preserved) with the new rows appended after it. That prefix property
+# is what lets scripts/append_cache.py reuse the already-rendered cache shards.
+#
+#   python scripts/build_combined_manifest.py \
+#       load_data/configs/datasets/wildfake_train_combined.yaml
+#
+# Expect one manifest, two splits (existing + new):
+#
+#   split: train        58,656   16,648 real / 42,008 generated
+#   split: validation   14,000    7,000 real /  7,000 generated
+#
+# New fakes: FLUX 6k + Seedream 200 (train), FLUX 2k (val).
+# New reals: 2,457 train + 2,000 val, sampled from laion5b + imagenet (the same
+# broad photographic subsets the existing manifest already uses, and the only
+# non-excluded ones) DISJOINT from the reals already in the manifest.
+#
+# The real counts hold the corpus's real share (~28.38% train, 50/50 val)
+# against the added fakes; adjust n_train/n_val in the reals source if the fake
+# counts change.
+#
+# ------------------------------------------------ why append instead of rebuild
+# Rebuilding WildFake with more reals would re-sample its strata and change the
+# existing rows' indices -- which seed every crop and degradation -- and would
+# therefore invalidate the rendered cache. Appending keeps the old rows
+# byte-identical and adds the new data as a suffix.
+
+name: wildfake-train-combined
+manifest: data/wildfake_plus_sota/manifest.parquet
+split: train
+
+build:
+  base_manifest: data/wildfake_train/manifest.parquet
+  out_manifest: data/wildfake_plus_sota/manifest.parquet
+  # The existing manifest's paths hang off this root; used to map its real rows
+  # back to the metadata tables' relative paths for the exclusion set.
+  reals_root: data/wildfake_train/images
+
+  sources:
+    # --- FLUX-Reason-6M (HF, streaming, all generated, no label column) ---
+    - target: load_data.sources.HFImageDatasetSource
+      args:
+        dataset_id: LucasFang/FLUX-Reason-6M
+        split: train              # the HF split (the only one it has)
+        fake_classes: []          # unused under fixed_label
+        generator: flux
+        image_column: image
+        streaming: true           # 5.9M rows; never download it whole
+        fixed_label: 1            # FAKE
+        skip: 0
+        limit: 6000
+        manifest_split: train     # recorded split, decoupled from the HF split
+        resume: true              # reuse images already saved by an earlier run
+
+    - target: load_data.sources.HFImageDatasetSource
+      args:
+        dataset_id: LucasFang/FLUX-Reason-6M
+        split: train
+        fake_classes: []
+        generator: flux
+        image_column: image
+        streaming: true
+        fixed_label: 1
+        skip: 6000                # disjoint slice after the train range
+        limit: 2000
+        manifest_split: validation
+        resume: true
+
+    # --- SeeDream 4.5 (HF, 200 images, all generated) ---
+    - target: load_data.sources.HFImageDatasetSource
+      args:
+        dataset_id: ash12321/seedream-4.5-generated-2k
+        split: train
+        fake_classes: []
+        generator: seedream-4.5
+        image_column: image
+        streaming: true
+        fixed_label: 1
+        limit: 200                 # the whole dataset
+        manifest_split: train
+        resume: true
+
+    # --- additional reals, disjoint from the manifest's own reals ---
+    - target: load_data.sources.SampledCsvSingleClassSource
+      exclude_from_base: true      # build script injects exclude_paths
+      args:
+        csv_paths:
+          - data/wildfake_train/split_train_test/csv_file/total_split/test_metadata.csv
+          - data/wildfake_train/split_train_test/csv_file/total_split/train_metadata.csv
+        root: data/wildfake_train/images
+        path_column: Image_path
+        label_column: IsFake
+        label_values: ["0"]        # IsFake 0 == real
+        group_column: Architecture
+        where: {Architecture: [laion5b, imagenet]}
+        n_train: 2457
+        n_val: 2000
+        seed: 0
+        on_missing: error

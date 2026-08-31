@@ -11,7 +11,6 @@ alongside the features at render time. See
 
 Consequence worth being explicit about: **severity conditioning does not cost the
 label-free claim.** The labels are the sampler's own metadata, not image labels.
-Only the stage-2 discrepancy head uses real labels.
 
 At inference the severity is *predicted*, never given, so training must not
 always condition on the ground truth or the adapter learns to trust an input it

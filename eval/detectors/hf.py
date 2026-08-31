@@ -4,56 +4,12 @@
 becomes a model input, and `dinov3.DINOv3MLPDetector` selects between them by
 its `input_mode`. They live here rather than in that module because they are
 properties of the Hub processor contract, not of DINOv3.
-
-`resolve_fake_indices` is kept alongside them for the same reason: which output
-index means *generated* cannot be assumed, Hub detectors disagree, and a fair
-number order `id2label` with the fake class at index 0. Guessing wrong yields a
-plausible-looking (1 - AUC), so the index is resolved from the model's own label
-map and the ambiguous cases raise instead of picking. Nothing in the project
-uses it today -- the generic `HFImageClassifier` went with the detector zoo --
-but it is the piece that would be needed again first.
 """
 
 import torch
 from PIL import Image
 
 from preprocessing.degrade.crop import fixed_crop, fixed_resample
-
-DEFAULT_FAKE_LABELS = (
-    "artificial", "fake", "ai", "ai_generated", "aigenerated",
-    "generated", "synthetic",
-)
-# Deliberately excludes bare "0"/"1" and "LABEL_0"/"LABEL_1": a model whose head
-# is unlabelled gives no evidence for which index is which, and raising is the
-# honest outcome there.
-
-
-def resolve_fake_indices(id2label: dict, fake_labels) -> list[int]:
-    """Output indices whose label means *generated*.
-
-    Raises rather than falling back to a positional default: an unrecognised
-    label map is a configuration error the caller must fix with `fake_labels`,
-    not something to paper over with a guess.
-    """
-    wanted = {str(w).lower().replace(" ", "_").replace("-", "_") for w in fake_labels}
-    fake, real = [], []
-    for idx, label in id2label.items():
-        key = str(label).lower().replace(" ", "_").replace("-", "_")
-        (fake if key in wanted else real).append(int(idx))
-
-    shown = {int(k): v for k, v in id2label.items()}
-    if not fake:
-        raise ValueError(
-            f"no output label matched fake_labels={sorted(wanted)}. Model labels are "
-            f"{shown}. Pass the generated-class name(s) explicitly via args.fake_labels."
-        )
-    if not real:
-        raise ValueError(
-            f"every output label matched fake_labels={sorted(wanted)}. Model labels are "
-            f"{shown}. There is no real class left to score against."
-        )
-    return sorted(fake)
-
 
 class _ProcessorPreprocess:
     """Callable holding the image processor and nothing else.

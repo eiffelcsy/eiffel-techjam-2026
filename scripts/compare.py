@@ -6,20 +6,20 @@
 
 The harness normalizes retention by *each detector's own* clean AUC, which is the
 right convention for describing one detector and the wrong one for comparing two.
-GRACE-D changes both the numerator and the denominator: its auxiliary head reads
-Δ, which is ~0 on clean images, so its clean AUC is roughly the baseline's while
-its degraded AUC can be higher. Normalizing by its own clean AUC would hide
-exactly the effect being claimed.
+An adapted detector that adds information absent from the clean image (the
+frequency branch) changes both the numerator and the denominator: its clean AUC
+is roughly the baseline's while its degraded AUC can be higher. Normalizing by
+its own clean AUC would hide exactly the effect being claimed.
 
 So this reports **baseline-normalized retention**:
 
     (auc_adapted_degraded − 0.5) / (auc_baseline_clean − 0.5)
 
 which is > 1.0 exactly when the adapted detector, on a degraded image, beats the
-baseline detector on the clean one. For GRACE that is impossible by construction:
-restoration is bounded above by the clean-feature score. For GRACE-D it is the
-headline claim, because the magnitude of the damage is information the clean
-image does not contain.
+baseline detector on the clean one. For plain GRACE that is impossible by
+construction: restoration is bounded above by the clean-feature score. For the
+frequency branch it is the headline claim, because the information the enricher
+reads is not in the clean image.
 
 Post-hoc and read-only. `eval_pipeline` is untouched, and both inputs are
 ordinary harness result JSONs.
@@ -115,8 +115,9 @@ def main():
         )
     if report["exceeds_clean_ceiling"]:
         print("\nretention > 1.0: the adapted detector beats the baseline's CLEAN score")
-        print("on degraded images. Only the discrepancy branch can do this -- check")
-        print("that this run is GRACE-D and not GRACE before reporting it.")
+        print("on degraded images. Only a branch that reads information the clean")
+        print("image lacks (the frequency branch) can do this -- check that this run")
+        print("is the frequency variant and not plain GRACE before reporting it.")
 
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)

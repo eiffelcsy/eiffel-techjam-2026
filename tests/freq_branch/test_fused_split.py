@@ -27,12 +27,13 @@ import numpy as np
 import pytest
 import torch
 import torch.nn as nn
+from pathlib import Path
 from PIL import Image
 
 from train.config import EnricherConfig, FreqConfig
 from freq_branch.models.factory import build_enricher
 from eval.splits.base import FeatureSpec
-from preprocessing.dataset import AIGCDataset, Inputs, collate
+from preprocessing.dataset import AIGCDataset, ImageFolderDataset, Inputs, collate
 from preprocessing.degrade.crop import fixed_crop, fixed_resample
 from eval.detectors.base import FrozenDetector
 from eval.detectors.hf import _CropResizePreprocess, _ResamplePreprocess
@@ -173,6 +174,34 @@ def test_the_aux_extractor_is_picklable():
 
     extractor = _FusedToy().aux_fn()
     assert len(pickle.dumps(extractor)) < 1024
+
+
+def test_image_folder_dataset_supports_the_aux_pathway(manifest):
+    """`predict.py` scores a bare directory, so its dataset must build the same
+    `Inputs` the manifest-based one does -- the fused detector refuses anything
+    else, which is the bug this pins."""
+    detector = _FusedToy()
+    root = Path(manifest.iloc[0]["path"]).parent
+    dataset = ImageFolderDataset(
+        root, preprocess=detector.preprocess_fn(), aux=detector.aux_fn()
+    )
+    batch, metas = collate([dataset[i] for i in range(4)])
+    assert isinstance(batch, Inputs)
+    assert batch.x.shape == (4, 3, 8, 8)
+    assert batch.aux.shape == (4, *FREQ.shape)
+    assert detector.score(batch).shape == (4,)
+    assert all("image_path" in m for m in metas)
+
+
+def test_image_folder_dataset_defaults_to_a_bare_tensor(manifest):
+    """A detector without `aux_fn` keeps `predict.py` on the original path: a
+    bare stacked tensor, no `Inputs` anywhere."""
+    detector = _PlainDetector()
+    root = Path(manifest.iloc[0]["path"]).parent
+    dataset = ImageFolderDataset(root, preprocess=detector.preprocess_fn())
+    batch, _ = collate([dataset[i] for i in range(4)])
+    assert type(batch) is torch.Tensor
+    assert batch.shape == (4, 3, 8, 8)
 
 
 # --------------------------------------------------- 3. the null enricher IS --

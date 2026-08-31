@@ -1,10 +1,3 @@
-"""The detector contract.
-
-Everything the harness needs from a detector: turn a PIL image into a tensor,
-turn a batch of tensors into per-image logits. Detectors are frozen -- they are
-loaded, evaluated, and never trained here.
-"""
-
 from abc import ABC, abstractmethod
 from typing import Callable
 
@@ -45,16 +38,16 @@ class FrozenDetector(nn.Module, ABC):
         return self.preprocess
 
     def aux_fn(self) -> Callable[[Image.Image], torch.Tensor] | None:
-        """A SECOND read of the same image, or None -- which is the default and
-        the case for every detector but one.
+        """A SECOND read of the same image, or None.
 
         Returning None keeps the harness on its original path exactly: the
         dataset yields a bare tensor, `collate` stacks it, and `forward` receives
-        what it always received. Returning a callable makes `forward` receive a
+        what it always received. 
+        
+        Returning a callable makes `forward` receive a
         `preprocessing.dataset.Inputs` instead.
 
-        It exists because some information cannot be recovered downstream of
-        preprocessing at any cost. `freq_branch.detectors.fused.FusedDetector` needs a
+        It exists because `freq_branch.detectors.fused.FusedDetector` needs a
         patch-DCT at native pixel scale, and the 224px normalized tensor no
         longer contains it. Same picklability contract as `preprocess_fn`: the
         callable is forked into DataLoader workers and must hold no model.

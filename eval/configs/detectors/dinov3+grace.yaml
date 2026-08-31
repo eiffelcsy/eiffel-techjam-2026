@@ -7,7 +7,7 @@
 # the adapted model differ by this one file.
 #
 # Ceiling: restoration cannot exceed the clean-feature score, so retention <= 1.0
-# by construction. Beating that is GRACE-D's job.
+# by construction. Beating that is the frequency branch's job.
 
 name: dinov3+grace
 target: grace_adapter.detectors.adapted.AdaptedDetector
@@ -15,5 +15,4 @@ args:
   base: eval/configs/detectors/dinov3-wildfake.yaml
   split: eval.splits.dinov3.DINOv3Split
   checkpoint: checkpoints/grace/dinov3_clean/ema.pt
-  discrepancy: null
 device: auto

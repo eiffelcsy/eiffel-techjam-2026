@@ -259,6 +259,98 @@ def sha_manifest(manifest) -> str:
     return _blake(rows)
 
 
+def assert_appendable(old: CacheSpec, new: CacheSpec, new_manifest, epochs) -> int:
+    """Refuse to reuse a cache's shards unless the new inputs agree everywhere.
+
+    The append optimization reuses the first `old.n` rows' shards byte-for-byte,
+    so it is only sound when those rows are features of *the same inputs* the new
+    render would produce. That is several things, each checked rather than
+    trusted:
+
+      * the manifest is grown, not changed -- the old manifest must be an exact
+        prefix of the new one (same indices, paths and labels);
+      * the five fingerprints (detector, schedule, preprocess, crop, freq) are
+        unchanged, so a reused feature is identical to what a fresh render would
+        write;
+      * the feature and frequency specs (layout, shape, dtype) are unchanged;
+      * the shard size is unchanged, so a reused shard's row layout still holds;
+      * the rendered view set (clean + every epoch) is identical, because the
+        append renders only the new rows: a view the old cache lacks would be
+        missing its reused rows, and one the new config drops would be missing
+        its appended rows.
+
+    Returns `old.n` -- the number of existing rows the append may reuse. The
+    append copies those rows (re-shaping the partial last shard if `old.n` is
+    not a shard boundary) and renders only the rows beyond them.
+    """
+    if new.n <= old.n:
+        raise ValueError(
+            f"nothing to append: the new manifest has {new.n} rows but the cache "
+            f"already holds {old.n}. The manifest must grow."
+        )
+    if old.shard_size != new.shard_size:
+        raise ValueError(
+            f"cannot append: shard_size changed ({old.shard_size} -> "
+            f"{new.shard_size}); the reused shards' row layout would no longer "
+            f"hold. Re-render with scripts/build_cache.py."
+        )
+
+    if (old.feature.layout, old.feature.shape, old.feature.dtype) != (
+        new.feature.layout, new.feature.shape, new.feature.dtype,
+    ):
+        raise ValueError(
+            f"cannot append: feature spec changed ({old.feature.to_dict()} -> "
+            f"{new.feature.to_dict()}); the reused shards hold different features. "
+            f"Re-render with scripts/build_cache.py."
+        )
+    old_freq, new_freq = old.freq_feature, new.freq_feature
+    if (old_freq is None) != (new_freq is None) or (
+        old_freq is not None
+        and (old_freq.layout, old_freq.shape, old_freq.dtype)
+        != (new_freq.layout, new_freq.shape, new_freq.dtype)
+    ):
+        raise ValueError(
+            "cannot append: the frequency view changed; the reused freq shards "
+            "hold different coefficients. Re-render with scripts/build_cache.py."
+        )
+
+    for name, why in (
+        ("detector_sha", "the detector config (weights or args) changed"),
+        ("schedule_sha", "the degradation grid, level weights or seed changed"),
+        ("preprocess_sha", "the detector's preprocessing changed"),
+        ("crop_sha", "the multi-scale window protocol changed"),
+        ("freq_sha", "the frequency extraction protocol changed"),
+    ):
+        if getattr(old, name) != getattr(new, name):
+            raise ValueError(
+                f"cannot append: {name} differs ({getattr(old, name)} != "
+                f"{getattr(new, name)}) -- {why}. The reused shards would be "
+                f"features of different inputs than the appended ones. Re-render "
+                f"with scripts/build_cache.py."
+            )
+
+    required = {view_name(e) for e in [None, *epochs]}
+    if set(old.views) != required:
+        raise ValueError(
+            f"cannot append: the rendered view set differs -- the cache holds "
+            f"{sorted(old.views)} but the new config needs "
+            f"{sorted(required)}. The append renders only the new rows, so the "
+            f"two must be identical. Re-render with scripts/build_cache.py."
+        )
+
+    prefix = sha_manifest(new_manifest.iloc[: old.n])
+    if prefix != old.manifest_sha:
+        raise ValueError(
+            f"cannot append: the new manifest's first {old.n} rows are not the "
+            f"manifest this cache was rendered from (manifest_sha {prefix} != "
+            f"{old.manifest_sha}). The old rows must be an exact prefix of the "
+            f"new manifest. Rebuild the manifest with the old rows first, or "
+            f"re-render the whole cache with scripts/build_cache.py."
+        )
+
+    return old.n
+
+
 def sha_detector(cfg) -> str:
     """Hash the DetectorConfig target and args."""
     return _blake(json.dumps({"target": cfg.target, "args": cfg.args}, sort_keys=True))

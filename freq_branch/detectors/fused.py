@@ -42,6 +42,9 @@ THREE CONFIGURATIONS, all this one class:
                                         travels inside the enricher checkpoint
                                         because the two are only meaningful
                                         together.
+    + a checkpoint carrying the fused   the logit-level fusion arm: the
+      logit (aux head + beta)           prediction is `head(fused) + beta * aux`,
+                                        beta learned from 0 during stage 2.
 """
 
 import torch
@@ -50,6 +53,7 @@ from PIL import Image
 from train.config import EnricherConfig, FreqConfig
 from grace_adapter.models.factory import load_adapter
 from freq_branch.models.factory import build_enricher, load_enricher
+from freq_branch.models.frequency import EnricherFusedLogit
 from grace_adapter.models.severity import SeverityHead
 from eval.splits import build_split
 from eval.config import load_detector_config
@@ -122,7 +126,9 @@ class FusedDetector(FrozenDetector):
             payload = torch.load(enricher, map_location="cpu", weights_only=False)
             self.freq_cfg = FreqConfig(**payload["freq_cfg"])
             self.enricher = load_enricher(enricher, spec, self.freq_cfg.feature())
+            self.fused_logit = None
             self._load_finetuned_head(payload, enricher)
+            self._load_fused_logit(payload, enricher)
         else:
             # The null arm. A FRESH enricher, not a missing one: skipping the
             # module entirely would test that `FusedDetector` can be bypassed,
@@ -135,11 +141,19 @@ class FusedDetector(FrozenDetector):
                 EnricherConfig(**(enricher_args or {})),
                 patch=self.freq_cfg.patch, channels=self.freq_cfg.channels,
             )
+            self.fused_logit = None
 
+        # The eval arm's geometry pairs the freq window with the spatial branch's
+        # -- unless the enricher was trained on `source: native`, in which case
+        # its cells tile the WHOLE image and the freq read must do the same at
+        # eval, or the enricher is scored on tokens of a window it never saw.
         geometry, size = _freq_geometry(detector)
+        if self.freq_cfg.source == "native":
+            geometry, size = "", 0
         self._aux = FreqExtract(
             patch=self.freq_cfg.patch, grid=self.freq_cfg.grid,
             radial=self.freq_cfg.radial, geometry=geometry, size=size,
+            source=self.freq_cfg.source,
         )
         self.freeze()
 
@@ -170,6 +184,31 @@ class FusedDetector(FrozenDetector):
                 f"name, which is the one comparison E14 exists to make."
             )
         self.split.head_module().load_state_dict(state)
+
+    def _load_fused_logit(self, payload, path: str) -> None:
+        """The aux head + beta (logit-level fusion), when the checkpoint has one.
+
+        When `fuse_aux_logit` was on in training, the prediction this detector
+        ships is `head(fused) + beta * aux(update)`, and beta is the whole
+        experiment: a checkpoint that trained that way must score that way, or
+        the fusion arm is silently reduced to the feature-fusion arm. Rebuilt
+        from `aux_cfg` because the aux head's `hidden` is a training-time knob
+        that lives on `EnrichTrainConfig`, not on `EnricherConfig`.
+        """
+        state = payload.get("fused_logit_state_dict")
+        if state is None:
+            return
+        if not payload.get("fuse_aux_logit"):
+            raise ValueError(
+                f"{path} carries a fused logit but fuse_aux_logit is false. "
+                f"Which prediction this detector makes would be ambiguous."
+            )
+        aux_cfg = payload.get("aux_cfg") or {}
+        module = EnricherFusedLogit(
+            self.split.feature_spec.dim, hidden=aux_cfg.get("hidden", 128)
+        )
+        module.load_state_dict(state)
+        self.fused_logit = module.eval()
 
     def preprocess(self, img: Image.Image) -> torch.Tensor:
         return self.split.detector.preprocess(img)
@@ -205,4 +244,14 @@ class FusedDetector(FrozenDetector):
         else:
             severity = self.severity_head(f) if self.severity_head is not None else None
             corrected = self.adapter(f, severity=severity)
-        return self.split.head(self.enricher(corrected, x.aux.float(), severity))
+        freq = x.aux.float()
+        fused = self.enricher(corrected, freq, severity)
+        if self.fused_logit is not None:
+            # Logit-level fusion: `head(fused) + beta * aux(update)`. The aux
+            # head reads the DCT branch's own (un-gated) update, so beta decides
+            # how much of the frequency signal reaches the decision directly --
+            # the arm that does not depend on the head learning to read enriched
+            # features.
+            update = self.enricher.update(corrected, freq)
+            return self.fused_logit(self.split.head(fused), update)
+        return self.split.head(fused)

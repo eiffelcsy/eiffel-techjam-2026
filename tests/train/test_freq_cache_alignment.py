@@ -27,6 +27,7 @@ from train.cache.writer import build_cache
 from train.config import FreqConfig
 from preprocessing.dataset import load_normalized
 from preprocessing.degrade.conditions import load_grid
+from preprocessing.degrade.crop import SampleCrop
 from freq_branch.dct import extract_freq
 from tests.fixtures import SPECS, ToySplit, write_images
 
@@ -261,6 +262,52 @@ def test_a_render_without_freq_writes_the_original_layout(tmp_path):
     assert json.loads((out / "spec.json").read_text())["freq_feature"] is None
 
 
+def test_native_source_reads_the_pre_crop_image(tmp_path):
+    """`freq.source: native` changes WHICH pixels are rendered, and the
+    fingerprint says so -- a native-source cache is not interchangeable with a
+    window-source one over the same detector, schedule and crop."""
+    manifest = write_images(tmp_path / "images", 12)
+    split = ToySplit(SPECS["vector"])
+    schedule = EpochSchedule(grid=load_grid(GRID_FILE), seed=0)
+    crop = SampleCrop(s_min=16, s_max=24)
+
+    caches = {}
+    for source in ("window", "native"):
+        freq = FreqConfig(enabled=True, patch=2, grid=3, source=source)
+        out = tmp_path / source
+        spec = CacheSpec(
+            detector="toy", feature=split.feature_spec, n=len(manifest),
+            shard_size=10, manifest_sha=sha_manifest(manifest),
+            schedule_sha=schedule.fingerprint(), detector_sha="toy",
+            preprocess_sha=sha_preprocess(split.preprocess_fn()),
+            crop_sha=crop.fingerprint(),
+            freq_feature=freq.feature(), freq_sha=freq.fingerprint(),
+        )
+        build_cache(split, manifest, out, spec, schedule, [0],
+                    batch_size=4, num_workers=0, crop=crop, freq=freq.build())
+        caches[source] = (FeatureCache(out), freq)
+
+    window_cache, window_freq = caches["window"]
+    native_cache, native_freq = caches["native"]
+    assert window_freq.fingerprint() != native_freq.fingerprint()
+
+    picked = manifest.index[:6]
+    for epoch in (None, 0):
+        wc = window_cache.clean_freq(picked) if epoch is None else window_cache.freq(picked, epoch)
+        nc = native_cache.clean_freq(picked) if epoch is None else native_cache.freq(picked, epoch)
+        native_live, window_live = [], []
+        for i in picked:
+            img = load_normalized(manifest.loc[i, "path"])
+            if epoch is not None:
+                img, _ = schedule.apply(img, int(i), epoch)
+            native_live.append(extract_freq(np.asarray(img, dtype=np.uint8), 2, 3))
+            window_live.append(
+                extract_freq(np.asarray(crop(img, int(i)), dtype=np.uint8), 2, 3)
+            )
+        assert torch.allclose(nc.float(), torch.from_numpy(np.stack(native_live)).float(), atol=2e-3)
+        assert torch.allclose(wc.float(), torch.from_numpy(np.stack(window_live)).float(), atol=2e-3)
+        # The two sources are different pictures -- the crop vs the whole image.
+        assert not torch.allclose(nc, wc, atol=1e-2), f"epoch {epoch}"
 def test_a_freq_render_is_larger_by_exactly_the_view(rendered):
     """`bytes_per_view` is what `--dry-run` prints before a multi-hour render
     commits, and the frequency view is ~49x the features on the real detector --

@@ -61,6 +61,21 @@ def _check_split(n_fake: int, n_real: int, fake_classes) -> None:
         )
 
 
+def _check_nonempty(n: int, what: str) -> None:
+    """A fixed-label source needs at least one row, but not both classes.
+
+    `_check_split` insists on both, which is right for an inferred-polarity
+    dataset and wrong for a source that DECLARES every image one class -- an
+    empty result there is still a bug worth failing on, but the failure is
+    "nothing matched", not "you forgot the other class".
+    """
+    if n == 0:
+        raise ValueError(
+            f"the source produced no {what} rows -- every image would be dropped. "
+            "Check the filters, skip/limit, or the dataset itself."
+        )
+
+
 def _save(img: Image.Image, path: Path) -> None:
     """Write pixels and nothing else.
 
@@ -92,6 +107,15 @@ class HFImageDatasetSource:
     streaming    : iterate the dataset over the network instead of downloading
                    it whole. Essential with `limit` on a large repo -- a
                    non-streaming load fetches every shard before the first row.
+    fixed_label  : set (REAL/FAKE) to declare every row one class and skip the
+                   label column -- for a single-class dataset with no label.
+    skip         : skip the first N matched rows, so two sources over the same
+                   dataset slice disjoint train/val ranges.
+    manifest_split : the split recorded per row, decoupled from the HF `split`
+                   (which names the dataset's own split, often just "train").
+    resume       : skip the decode+re-encode for files already on disk from an
+                   earlier run of the same source (same dataset, skip, limit and
+                   out_dir). The row is still yielded.
 
     Class names come from the label column's ClassLabel names when it has them,
     and from `str(value)` when it is a plain integer column -- so an unnamed
@@ -111,7 +135,13 @@ class HFImageDatasetSource:
         revision: str | None = None,
         limit: int | None = None,
         streaming: bool = False,
+        fixed_label: int | None = None,
+        skip: int = 0,
+        manifest_split: str | None = None,
+        resume: bool = False,
     ):
+        if fixed_label is not None and fixed_label not in (REAL, FAKE):
+            raise ValueError(f"fixed_label must be REAL or FAKE, not {fixed_label!r}")
         self.dataset_id = dataset_id
         self.split = split
         self.fake_classes = {str(c).lower() for c in fake_classes}
@@ -123,6 +153,10 @@ class HFImageDatasetSource:
         self.revision = revision
         self.limit = limit
         self.streaming = streaming
+        self.fixed_label = fixed_label
+        self.skip = skip
+        self.manifest_split = manifest_split
+        self.resume = resume
 
     def _label_of(self, class_name: str) -> int | None:
         return _polarity(class_name, self.fake_classes, self.real_classes)
@@ -134,32 +168,61 @@ class HFImageDatasetSource:
             self.dataset_id, self.config_name, split=self.split,
             revision=self.revision, streaming=self.streaming,
         )
-        names = getattr(ds.features[self.label_column], "names", None)
         out_dir = Path(out_dir)
+        names = (
+            getattr(ds.features[self.label_column], "names", None)
+            if self.fixed_label is None
+            else None
+        )
 
         kept = {REAL: 0, FAKE: 0}
+        skipped = 0
         for i, ex in enumerate(ds):
-            raw = ex[self.label_column]
-            class_name = names[raw] if names is not None else str(raw)
-            label = self._label_of(class_name)
-            if label is None:
+            if self.fixed_label is not None:
+                label = self.fixed_label
+                class_name = "fake" if label == FAKE else "real"
+            else:
+                raw = ex[self.label_column]
+                class_name = names[raw] if names is not None else str(raw)
+                label = self._label_of(class_name)
+                if label is None:
+                    continue
+
+            # `skip` counts matched rows, so two sources with the same dataset and
+            # different `skip`/`limit` slice disjoint, ordered ranges -- how a
+            # single split is cut into train and validation.
+            if skipped < self.skip:
+                skipped += 1
                 continue
             if self.limit is not None and kept[label] >= self.limit:
-                if all(v >= self.limit for v in kept.values()):
+                if self.fixed_label is not None or all(
+                    v >= self.limit for v in kept.values()
+                ):
                     break
                 continue
 
             path = out_dir / "images" / f"{i:08d}_{class_name}.png"
-            _save(ex[self.image_column], path)
+            # `resume` reuses a file left by a previous (possibly interrupted)
+            # run of the SAME source: same dataset, same skip/limit, same
+            # out_dir, so `i` names the same image. The row is still counted and
+            # yielded; only the decode+re-encode is skipped.
+            if not (self.resume and path.exists()):
+                _save(ex[self.image_column], path)
             kept[label] += 1
             yield {
                 "path": str(path.resolve()),
                 "label": label,
                 "generator": self.generator if label == FAKE else "REAL",
-                "split": self.split,
+                "split": self.manifest_split or self.split,
             }
 
-        _check_split(kept[FAKE], kept[REAL], self.fake_classes)
+        if self.fixed_label is None:
+            _check_split(kept[FAKE], kept[REAL], self.fake_classes)
+        else:
+            _check_nonempty(
+                kept[self.fixed_label],
+                "generated" if self.fixed_label == FAKE else "real",
+            )
 
 
 class CsvMetadataSource:
@@ -878,6 +941,190 @@ class ImageDirSource:
                 }
 
         _check_split(n[FAKE], n[REAL], self.fake_dirs)
+
+
+class SampledCsvSingleClassSource:
+    """A deterministic sample of ONE class from a metadata CSV, disjoint from a
+    set of already-used paths, split into train and validation.
+
+    For adding MORE of a class to an existing manifest without touching the
+    manifest's own rows: the existing rows' paths are passed in and skipped, and
+    the remainder is sampled deterministically per group so the groups keep
+    their corpus proportions. WildFake reals are the worked example -- laion5b
+    and imagenet are the two groups, `label_values: ["0"]` selects them, and the
+    existing manifest's real paths are the exclusion set.
+
+    Unlike `StratifiedCsvSource` this emits one class only, so it skips the
+    two-class `_check_split` and the tier machinery -- and because it is a
+    *complement* to an existing sample, it takes an explicit exclusion set
+    rather than trusting a seed never to collide.
+
+    Parameters
+    ----------
+    csv_paths     : one table, or several read in order as if concatenated
+    root          : directory the tables' paths resolve against
+    label_values  : values of `label_column` meaning the class to sample
+    group_column  : the stratum (WildFake's `Architecture`), split proportionally
+    where         : {column: [values]} equality filter, applied before sampling
+    n_train / n_val : rows to emit per split; both may be zero, not negative
+    exclude_paths : normalized relative paths already used elsewhere, skipped
+    label         : manifest label emitted for every row (REAL or FAKE)
+    generator     : manifest generator for every emitted row
+    seed          : part of the sample's identity
+    on_missing    : "error" or "skip" for a row whose file is absent
+    """
+
+    def __init__(
+        self,
+        csv_paths,
+        root,
+        label_values,
+        group_column: str = "Architecture",
+        path_column: str = "Image_path",
+        label_column: str = "IsFake",
+        where: dict | None = None,
+        n_train: int = 0,
+        n_val: int = 0,
+        exclude_paths: list[str] | None = None,
+        label: int = REAL,
+        generator: str = "REAL",
+        seed: int = 0,
+        on_missing: str = "error",
+    ):
+        if on_missing not in ("error", "skip"):
+            raise ValueError(f"on_missing must be 'error' or 'skip', not {on_missing!r}")
+        if label not in (REAL, FAKE):
+            raise ValueError(f"label must be REAL or FAKE, not {label!r}")
+        if n_train < 0 or n_val < 0 or (n_train + n_val) <= 0:
+            raise ValueError("n_train + n_val must be positive")
+        self.csv_paths = [csv_paths] if isinstance(csv_paths, str) else list(csv_paths)
+        self.root = root
+        self.label_values = {str(v) for v in label_values}
+        self.group_column = group_column
+        self.path_column = path_column
+        self.label_column = label_column
+        self.where = {k: {str(x) for x in (v if isinstance(v, list) else [v])}
+                      for k, v in (where or {}).items()}
+        self.n_train = int(n_train)
+        self.n_val = int(n_val)
+        self.exclude = {_norm(p) for p in (exclude_paths or [])}
+        self.label = label
+        self.generator = generator
+        self.seed = seed
+        self.on_missing = on_missing
+
+    def _selects(self, row: dict) -> bool:
+        for column, allowed in self.where.items():
+            if str(row[column]) not in allowed:
+                return False
+        return True
+
+    def _reader(self):
+        import csv
+
+        i = 0
+        required = {self.path_column, self.label_column, self.group_column, *self.where}
+        for csv_path in self.csv_paths:
+            with open(csv_path, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for column in required:
+                    if column not in (reader.fieldnames or []):
+                        raise KeyError(
+                            f"{csv_path} has no column {column!r} -- it has {reader.fieldnames}"
+                        )
+                for row in reader:
+                    yield i, row
+                    i += 1
+
+    def _plan(self) -> dict[int, str]:
+        """Choose which rows survive, as `{global_index: "train" | "validation"}`.
+
+        Split from `rows()` so a fetch script can learn the sample before the
+        files exist: the chosen rows' relative paths are the download list. The
+        same `_reader()` order is used by both, so an index here means the same
+        row there.
+        """
+        import hashlib
+        import random
+
+        pools: dict[str, list[int]] = {}
+        sizes: dict[str, int] = {}
+        for i, row in self._reader():
+            if str(row[self.label_column]) not in self.label_values:
+                continue
+            if not self._selects(row):
+                continue
+            group = str(row[self.group_column])
+            sizes[group] = sizes.get(group, 0) + 1
+            if _norm(row[self.path_column]) in self.exclude:
+                continue
+            pools.setdefault(group, []).append(i)
+
+        if not sizes:
+            raise ValueError(
+                f"no row matched label_values={sorted(self.label_values)} and "
+                f"where={self.where or {}}"
+            )
+
+        train_alloc = StratifiedCsvSource._allocate(sizes, self.n_train)
+        val_alloc = StratifiedCsvSource._allocate(sizes, self.n_val)
+
+        assignment: dict[int, str] = {}
+        for group in sorted(set(train_alloc) | set(val_alloc)):
+            t, v = train_alloc.get(group, 0), val_alloc.get(group, 0)
+            idx = pools.get(group, [])
+            if t + v > len(idx):
+                raise ValueError(
+                    f"{group!r} needs {t + v} rows ({t} train + {v} val) but only "
+                    f"{len(idx)} are available after exclusion. Lower n_train/n_val "
+                    f"or widen `where`."
+                )
+            rng = random.Random(
+                int.from_bytes(
+                    hashlib.blake2b(f"{self.seed}:{group}".encode(), digest_size=8).digest(),
+                    "big",
+                )
+            )
+            drawn = rng.sample(idx, t + v) if t + v < len(idx) else list(idx)
+            for k, i in enumerate(drawn):
+                assignment[i] = "train" if k < t else "validation"
+        return assignment
+
+    def rows(self, out_dir: str | Path) -> Iterator[dict]:
+        assignment = self._plan()
+        root = Path(self.root).expanduser()
+        n = 0
+        missing: dict[str, int] = {}
+        for i, row in self._reader():
+            if i not in assignment:
+                continue
+            path = root / _norm(row[self.path_column])
+            if not path.is_file():
+                if self.on_missing == "error":
+                    raise FileNotFoundError(
+                        f"{path} is named by a metadata table but is not on disk "
+                        f"({n} rows resolved before it)."
+                    )
+                missing[str(row[self.group_column])] = (
+                    missing.get(str(row[self.group_column]), 0) + 1
+                )
+                continue
+            n += 1
+            yield {
+                "path": str(path.resolve()),
+                "label": self.label,
+                "generator": self.generator,
+                "split": assignment[i],
+            }
+
+        if missing:
+            total = sum(missing.values())
+            detail = ", ".join(f"{g}:{c}" for g, c in sorted(missing.items()))
+            print(
+                f"{type(self).__name__}: WARNING -- skipped {total} row(s) with no file "
+                f"on disk ({detail})."
+            )
+        _check_nonempty(n, "real" if self.label == REAL else "generated")
 
 
 class ConcatSource:
