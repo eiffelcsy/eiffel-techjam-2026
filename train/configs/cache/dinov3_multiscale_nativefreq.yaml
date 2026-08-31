@@ -20,7 +20,7 @@
 # cell-for-cell. The enricher's cross-attention must learn the correspondence
 # itself, and it has no input that says where the window sits in the image. If
 # this arm fails, that ambiguity is a confound -- and the fix (conditioning the
-# enricher on the crop geometry) is noted in scripts/probe_concat.py's sibling
+# enricher on the crop geometry) is noted in scripts/misc/probe_concat.py's sibling
 # notes, not silently ignored here.
 #
 # `source` is part of `freq_sha`, so a `window`-source cache and a `native`-source

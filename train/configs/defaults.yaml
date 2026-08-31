@@ -16,9 +16,9 @@
 #   python scripts/main/train_probe.py       train/configs/probe/<name>.yaml   # PoC only
 #   python scripts/main/build_cache.py       train/configs/cache/<name>.yaml [--dry-run]
 #   python scripts/main/train_adapter.py     train/configs/train/<name>.yaml
-#   python scripts/main/train_enrich.py.py      train/configs/train/<name>.yaml
+#   python scripts/main/train_enrich.py      train/configs/train/<name>.yaml
 #   python scripts/main/run_eval.py --config eval/configs/runs/<name>.yaml
-#   python scripts/compare.py --baseline <json> --adapted <json>
+#   python scripts/misc/compare.py --baseline <json> --adapted <json>
 
 
 # ---------------------------------------------------------- train, stage 0 ----
@@ -235,7 +235,7 @@ crop:
                             # wildfake_test an unaudited 128-512 range scores
                             # E-cropsize 0.9895 by itself, which is almost exactly
                             # the shortcut the crop was introduced to remove. Run
-                            # eval_pipeline/scripts/audit_sizes.py and write down
+                            # scripts/misc/audit_sizes.py and write down
                             # what it says.
   policy: uniform           # uniform | log_uniform. `uniform` puts most of its
                             # mass at the coarse end -- 3/4 of draws from [128,

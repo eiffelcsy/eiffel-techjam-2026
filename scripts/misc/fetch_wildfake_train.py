@@ -1,8 +1,8 @@
 """Fetch exactly the images load_data/configs/datasets/wildfake_train.yaml samples.
 
-    python scripts/fetch_wildfake_train.py --dry-run     # plan, download nothing
-    python scripts/fetch_wildfake_train.py               # do it
-    python scripts/fetch_wildfake_train.py --resume      # skip finished archives
+    python scripts/misc/fetch_wildfake_train.py --dry-run     # plan, download nothing
+    python scripts/misc/fetch_wildfake_train.py               # do it
+    python scripts/misc/fetch_wildfake_train.py --resume      # skip finished archives
 
 WildFake is 1,199 GB. This manifest needs 100,000 of its 3.57M images. Unpacking
 whole archives to keep 3% of them would need ~194 GB of disk that nothing ever
@@ -105,7 +105,7 @@ PARTIAL = {
     "SD|0": "Images/Diffusion_based/SD/originalSD/Typical/part_3.zip",
 }
 
-ROOT = Path(__file__).resolve().parents[1] / "data" / "wildfake_train"
+ROOT = Path(__file__).resolve().parents[2] / "data" / "wildfake_train"
 IMAGES, ZIPS, AVAIL = ROOT / "images", ROOT / "_zips", ROOT / "available"
 CONFIG = "load_data/configs/datasets/wildfake_train.yaml"
 
@@ -214,7 +214,7 @@ def _metadata_csvs() -> list[Path]:
 
 def plan(available: dict[str, Path]) -> set[str]:
     """The sample's chosen rows, as metadata-relative paths."""
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     import copy
 
     from load_data.config import load_dataset_config

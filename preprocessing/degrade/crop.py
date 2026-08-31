@@ -98,7 +98,7 @@ class CropDraw:
 def draw_size(rng: np.random.Generator, s_min: int, s_max: int, policy: str) -> int:
     """The size draw alone, exposed so the range audit can mirror it exactly.
 
-    `scripts/audit_sizes.py` decides the training range by simulating this over
+    `scripts/misc/audit_sizes.py` decides the training range by simulating this over
     a corpus's header-read sizes, without decoding a pixel. It has to be the
     same draw the renderer performs or the audit certifies a protocol nobody
     runs, so it is one function rather than two that agree by inspection.

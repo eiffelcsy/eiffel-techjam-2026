@@ -1,6 +1,6 @@
 """E-shortcut: what a classifier gets from the FILE, without looking at pixels.
 
-    python scripts/shortcut_baseline.py --dataset load_data/configs/datasets/<ds>.yaml
+    python scripts/misc/shortcut_baseline.py --dataset load_data/configs/datasets/<ds>.yaml
 
 Fits a logistic regression on four numbers per image -- width, height, byte size
 and bits-per-pixel -- and reports its AUC. Nothing here decodes an image; this is

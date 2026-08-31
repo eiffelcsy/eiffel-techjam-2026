@@ -430,7 +430,7 @@ class StratifiedCsvSource:
                        stratum whose archive was downloaded only in part: the
                        group keeps its full proportional COUNT, but is drawn
                        from the listed subset instead of from the whole family.
-                       Written by scripts/fetch_wildfake_train.py from each
+                       Written by scripts/misc/fetch_wildfake_train.py from each
                        archive's own zip index, so the sample and the extraction
                        are planned against exactly the same set of files. A
                        group whose list is shorter than its share raises, rather

@@ -6,7 +6,7 @@
 # benchmark stays load_data/configs/datasets/wildfake_test.yaml, and the two are disjoint
 # by construction -- see "The leakage guard".
 #
-#   python scripts/fetch_wildfake_train.py          # ~289 GB, mines 120k images
+#   python scripts/misc/fetch_wildfake_train.py     # ~289 GB, mines 120k images
 #   python scripts/main/build_manifest.py --config load_data/configs/datasets/wildfake_train.yaml
 #
 # Expect 120,000 rows in ONE manifest, two splits:
@@ -171,8 +171,8 @@
 # COCO is the most permissive subset in the corpus.
 #
 # ------------------------------------------------------------------- download
-#   python scripts/fetch_wildfake_train.py --dry-run
-#   python scripts/fetch_wildfake_train.py
+#   python scripts/misc/fetch_wildfake_train.py --dry-run
+#   python scripts/misc/fetch_wildfake_train.py
 #
 # ~289 GB moves over the wire; each archive is deleted once the images this
 # sample names are mined out of it, so peak disk is one archive plus the

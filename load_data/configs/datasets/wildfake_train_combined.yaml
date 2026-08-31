@@ -4,7 +4,7 @@
 # Built by scripts/main/build_combined_manifest.py, NOT scripts/main/build_manifest.py:
 # the combined manifest is the existing wildfake_train manifest read IN PLACE
 # (indices preserved) with the new rows appended after it. That prefix property
-# is what lets scripts/append_cache.py reuse the already-rendered cache shards.
+# is what lets scripts/misc/append_cache.py reuse the already-rendered cache shards.
 #
 #   python scripts/main/build_combined_manifest.py \
 #       load_data/configs/datasets/wildfake_train_combined.yaml

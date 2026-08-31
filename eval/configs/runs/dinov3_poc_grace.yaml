@@ -20,7 +20,7 @@
 #
 # THE DATASET MUST MATCH dinov3_poc_baseline.yaml's, and that is a hard
 # requirement rather than a convention. Every headline number in this project is
-# produced by scripts/compare.py, which normalizes retention by the
+# produced by scripts/misc/compare.py, which normalizes retention by the
 # BASELINE's clean AUC -- the harness's own retention divides by each detector's
 # own clean AUC, which for the frequency branch would hide exactly the effect
 # being claimed. compare.py refuses two result files from different eval sets,

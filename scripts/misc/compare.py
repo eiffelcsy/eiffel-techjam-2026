@@ -1,6 +1,6 @@
 """Compare an adapted detector against its baseline on a shared denominator.
 
-    python scripts/compare.py \
+    python scripts/misc/compare.py \
         --baseline results/dinov3_poc_baseline__dinov3-wildfake__wildfake-coco-dalle3.json \
         --adapted  results/dinov3_poc_grace__dinov3+grace__wildfake-coco-dalle3.json
 

@@ -1,7 +1,7 @@
 """Append new manifest rows to an already-rendered feature cache.
 
-    python scripts/append_cache.py train/configs/cache/<combined>.yaml --dry-run
-    python scripts/append_cache.py train/configs/cache/<combined>.yaml
+    python scripts/misc/append_cache.py train/configs/cache/<combined>.yaml --dry-run
+    python scripts/misc/append_cache.py train/configs/cache/<combined>.yaml
 
 The cache config names the COMBINED manifest -- the old rows first, the new rows
 appended after them -- and the SAME detector, schedule, crop and freq blocks the

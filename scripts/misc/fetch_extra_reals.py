@@ -1,8 +1,8 @@
 """Fetch exactly the additional reals the combined manifest samples.
 
-    python scripts/fetch_extra_reals.py --dry-run     # plan, download nothing
-    python scripts/fetch_extra_reals.py               # do it
-    python scripts/fetch_extra_reals.py --resume      # skip archives already extracted
+    python scripts/misc/fetch_extra_reals.py --dry-run     # plan, download nothing
+    python scripts/misc/fetch_extra_reals.py               # do it
+    python scripts/misc/fetch_extra_reals.py --resume      # skip archives already extracted
 
 The combined manifest adds reals by sampling laion5b + imagenet DISJOINT from the
 reals already in the base manifest. Those images were never downloaded -- the
@@ -22,10 +22,10 @@ import argparse
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.fetch_wildfake_train import (  # noqa: E402  (imports after sys.path)
+from scripts.misc.fetch_wildfake_train import (  # noqa: E402  (imports after sys.path)
     COMPLETE, IMAGES, download, extract, index, metadata_tails,
 )
 

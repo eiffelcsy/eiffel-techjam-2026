@@ -1,6 +1,6 @@
 # The combined-train cache under the multi-scale + native-frequency protocol.
 #
-#   python scripts/append_cache.py train/configs/cache/dinov3_multiscale_nativefreq_combined.yaml
+#   python scripts/misc/append_cache.py train/configs/cache/dinov3_multiscale_nativefreq_combined.yaml
 #
 # This is configs/cache/dinov3_multiscale_nativefreq.yaml with the dataset
 # pointed at the COMBINED manifest and nothing else changed. It resolves to the

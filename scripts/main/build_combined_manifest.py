@@ -7,7 +7,7 @@ the existing manifest in place -- preserving its row order and indices, which
 are the image identity that seeds every degradation and crop -- and appends the
 new single-class sources with fresh, non-colliding indices. That is what makes
 the feature-cache append safe: the first rows of the combined manifest are
-byte-identical to the existing manifest, so `scripts/append_cache.py` can reuse
+byte-identical to the existing manifest, so `scripts/misc/append_cache.py` can reuse
 the already-rendered shards.
 
 The build spec lives in the dataset config's `build:` block:

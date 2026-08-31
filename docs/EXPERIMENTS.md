@@ -48,7 +48,7 @@ appears in training), over the standard degradation sweep (all four severity
 levels, all eleven transforms), with retention defined as the degraded AUC
 normalised by the detector's *own* clean AUC. See
 `eval/configs/runs/dinov3_poc_baseline.yaml` for the definition and
-`scripts/compare.py` for why retention is normalised against the *baseline's*
+`scripts/misc/compare.py` for why retention is normalised against the *baseline's*
 clean AUC rather than each arm's own.
 
 One evaluation arm is used:
@@ -64,7 +64,7 @@ One evaluation arm is used:
 
 ### `audit_sizes` — the crop range carries no label
 
-`python scripts/audit_sizes.py --config load_data/configs/datasets/wildfake_train.yaml`
+`python scripts/misc/audit_sizes.py --config load_data/configs/datasets/wildfake_train.yaml`
 
 Multi-scale cropping exists to remove the resolution shortcut (every benchmark
 real is 200×200, every fake is 1024px+). But cropping removes it only if the
@@ -82,7 +82,7 @@ largest range that stays at chance.
 
 ### `shortcut_baseline` — the container floor (`E-shortcut`)
 
-`python scripts/shortcut_baseline.py --dataset load_data/configs/datasets/wildfake_coco_dalle3.yaml`
+`python scripts/misc/shortcut_baseline.py --dataset load_data/configs/datasets/wildfake_coco_dalle3.yaml`
 
 Fits a logistic regression on four numbers per image — width, height, byte size,
 bits-per-pixel — without decoding a pixel. It reports what the *file* alone
@@ -152,7 +152,7 @@ the question on its own.)
 ## 4. `dinov3_poc_identity` — the null adapter (E1)
 
 `python scripts/main/run_eval.py --config eval/configs/runs/dinov3_poc_identity.yaml`
-(read with `scripts/compare.py --assert-identity`)
+(read with `scripts/misc/compare.py --assert-identity`)
 
 The null adapter (`checkpoint: null`) — the trunk/head split wired up with no
 trained weights — scored on its own. It must reproduce
@@ -269,7 +269,7 @@ Sweeps the `w_err / w_cos` ratio over 0.25 / 1 / 4, with 16 being
 
 ## 7. Seed variance — `seed_stats`
 
-`python scripts/seed_stats.py dinov3_multiscale_final_s*`
+`python scripts/misc/seed_stats.py dinov3_multiscale_final_s*`
 
 Aggregates repeated runs into mean / std / CI and says whether a gap is real.
 

@@ -47,7 +47,7 @@ class CropConfig:
     if one class's images are systematically smaller its crops are systematically
     smaller too, and the realized crop size becomes the label. On `wildfake_test`
     a 128-512 range scores E-cropsize 0.9895 -- almost exactly the shortcut the
-    crop was introduced to remove. Run `eval_pipeline/scripts/audit_sizes.py`
+    crop was introduced to remove. Run `scripts/misc/audit_sizes.py`
     against the corpus being trained on and write down what it says.
     """
 
@@ -64,7 +64,7 @@ class CropConfig:
             raise ValueError(
                 "crop.enabled is true but crop.s_max is unset. The safe range is a "
                 "property of the corpus, so it has no default: run "
-                "eval_pipeline/scripts/audit_sizes.py --config <the training "
+                "scripts/misc/audit_sizes.py --config <the training "
                 "dataset> and use the s_max it recommends."
             )
         if self.policy not in POLICIES:

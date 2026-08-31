@@ -45,8 +45,8 @@ The training data is a custom-sampled subset of the WildFake dataset
 sampled images:
 
 ```bash
-python scripts/fetch_wildfake_train.py --dry-run     # plan, download nothing
-python scripts/fetch_wildfake_train.py               # download (resumable)
+python scripts/misc/fetch_wildfake_train.py --dry-run     # plan, download nothing
+python scripts/misc/fetch_wildfake_train.py               # download (resumable)
 ```
 
 Each archive is mined for just the sampled members and deleted, so peak disk is

@@ -20,7 +20,7 @@ out: ""             # "" = take it from the detector config's head_checkpoint
 #
 # Fill it from the audit:
 #
-#   python scripts/audit_sizes.py \
+#   python scripts/misc/audit_sizes.py \
 #       --config load_data/configs/datasets/wildfake_train.yaml \
 #       --out results/audit_sizes__wildfake-train.json
 #

@@ -13,7 +13,7 @@
 # costs one pass over the eval set (13,841 images x 26 conditions) and it is the
 # cheapest insurance in the pipeline.
 #
-# READ IT with grace_adapter/scripts/compare.py --assert-identity, which exits
+# READ IT with scripts/misc/compare.py --assert-identity, which exits
 # non-zero unless every level's retention delta is 0. `checkpoint: null` in the
 # detector config means identity, which is not a broken config -- it is the arm.
 #

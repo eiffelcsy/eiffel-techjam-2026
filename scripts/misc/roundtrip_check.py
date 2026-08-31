@@ -1,6 +1,6 @@
 """The 32x32 round trip: does this head read traces, or content?
 
-    python scripts/roundtrip_check.py --detector eval/configs/detectors/<d>.yaml \
+    python scripts/misc/roundtrip_check.py --detector eval/configs/detectors/<d>.yaml \
                                       --dataset  load_data/configs/datasets/<ds>.yaml
 
 Downscale each image to 32x32, scale it back, and re-score. No generation trace

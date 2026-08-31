@@ -3,7 +3,7 @@
 #
 #   python scripts/main/build_cache.py train/configs/cache/dinov3_multiscale_nativefreq.yaml
 #   python scripts/main/build_cache.py train/configs/cache/dinov3_multiscale_nativefreq_val.yaml
-#   python scripts/main/train_enrich.py.py train/configs/train/dinov3_enrich_nativefreq.yaml
+#   python scripts/main/train_enrich.py train/configs/train/dinov3_enrich_nativefreq.yaml
 #
 # Three keys apart from dinov3_enrich.yaml: `cache_dir`, `val_cache_dirs` and
 # `freq.source: native`. The cache must be rebuilt first -- `source` is part of

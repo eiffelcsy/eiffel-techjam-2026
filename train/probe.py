@@ -102,7 +102,7 @@ def _assert_crop_matches_input_mode(cfg, split) -> None:
             "the detector config says input_mode: multiscale but crop.enabled is "
             "false, so no window would ever be drawn and the head would be fit on "
             "whole images under a name that promises otherwise. Set crop.enabled "
-            "and its range (see eval_pipeline/scripts/audit_sizes.py)."
+            "and its range (see scripts/misc/audit_sizes.py)."
         )
 
 

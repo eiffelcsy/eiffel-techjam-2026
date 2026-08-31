@@ -1,6 +1,6 @@
 """E0-freq: does the DCT spectrum separate real from generated, ABOVE the floor?
 
-    python scripts/analyze_freq.py --dataset load_data/configs/datasets/wildfake_train_val.yaml
+    python scripts/misc/analyze_freq.py --dataset load_data/configs/datasets/wildfake_train_val.yaml
 
 DECISION 0. If band energies do not separate the classes by more than spectral
 rolloff alone does, the frequency branch's mechanism has failed and no amount of

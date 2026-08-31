@@ -1,6 +1,6 @@
 """Native image sizes per class, and the crop range that carries no label.
 
-    python scripts/audit_sizes.py --config load_data/configs/datasets/<name>.yaml
+    python scripts/misc/audit_sizes.py --config load_data/configs/datasets/<name>.yaml
 
 Why this is a gate rather than a diagnostic. Multi-scale cropping exists to
 remove the resolution shortcut: on `wildfake_test`, every real is exactly

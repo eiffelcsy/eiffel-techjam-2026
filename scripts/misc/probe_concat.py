@@ -1,6 +1,6 @@
 """Does the DCT read carry decision info the spatial features already have?
 
-    python scripts/probe_concat.py
+    python scripts/misc/probe_concat.py
 
 Fits two heads on the SAME cached clean features (same window, same images):
 

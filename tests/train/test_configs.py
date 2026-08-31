@@ -57,11 +57,8 @@ CROP_CONFIGS = {
     "cache/wildfake_freq.yaml",
     "cache/wildfake_freq_val.yaml",
     "train/dinov3_multiscale.yaml",
-    "train/dinov3_degraded.yaml",
-    "train/dinov3_enrich.yaml",
     "train/dinov3_enrich_nativefreq.yaml",
     "train/dinov3_gate_nodecay.yaml",
-    "train/dinov3_live.yaml",
     "train/dinov3_plain_mse.yaml",
     "train/dinov3_sweep_bottleneck_256.yaml",
     "train/dinov3_sweep_gate_-3.yaml",
@@ -77,7 +74,7 @@ multiscale reference arm, dinov3_multiscale.yaml (the pre-multiscale resize arm
 and its detectors were dropped). The number has to be restated
 wherever the protocol is: stage 0 fits the head on those windows, four caches
 render them, and every stage-1/stage-2 run below fingerprints them.
-`after_fetch.sh --write-range` writes every entry from one audit;
+`scripts/misc/audit_sizes.py --write-range` writes every entry from one audit;
 `test_every_crop_config_agrees_on_the_range` is what stops them drifting apart
 afterwards."""
 
@@ -91,8 +88,9 @@ becomes a classifier and the augmentation hands back the shortcut it was added t
 remove. On wildfake_test an unaudited 128-512 range scores 0.9895 that way. So
 these ship with `s_max` absent and raise on load -- the refusal IS the feature.
 
-EMPTIED 2026-08-30, when `audit_sizes.py` measured the training corpus and
-`--write-range` wrote s_max: 256 into all seven. It is deliberately still here
+EMPTIED 2026-08-30, when `scripts/misc/audit_sizes.py` measured the training
+corpus and `--write-range` wrote s_max: 256 into every crop config. It is
+deliberately still here
 and still separate from CROP_CONFIGS: the next corpus needs the same forcing
 function, and re-populating this set is how it gets one."""
 
@@ -127,7 +125,7 @@ LOADERS = {
 def test_the_crop_range_must_be_audited(name):
     """The forcing function, tested rather than trusted.
 
-    Once `scripts/after_fetch.sh --write-range` writes the audited `s_max` in,
+    Once `scripts/misc/audit_sizes.py --write-range` writes the audited `s_max` in,
     this test starts failing -- and that failure is the signal to empty
     AWAITING_AUDIT, not to soften the check."""
     subdir, filename = name.split("/")
@@ -139,7 +137,7 @@ def test_the_crop_range_must_be_audited(name):
 
 
 def test_every_crop_config_agrees_on_the_range():
-    """One measurement, restated in seven files, and they must not drift.
+    """One measurement, restated in every crop config, and they must not drift.
 
     The crop range is a property of the CORPUS, so a stage-0 head fit at 128-448
     and a cache rendered at 128-512 are not two settings of a knob -- they are a
@@ -148,7 +146,7 @@ def test_every_crop_config_agrees_on_the_range():
     is caught before anything runs.
 
     Reads the YAML rather than the dataclass so it still says something while
-    `s_max` is unset: seven files with no `s_max` agree, vacuously and correctly.
+    `s_max` is unset: all files with no `s_max` agree, vacuously and correctly.
 
     Ranges over CROP_CONFIGS, not AWAITING_AUDIT. Those were one set until the
     audit landed, at which point iterating the empty one would have quietly
@@ -243,7 +241,7 @@ else appearing here is a config pointed at a class the harness cannot build."""
 
 @pytest.mark.parametrize("path", _adapted_detector_paths(), ids=lambda p: p.name)
 def test_detector_configs_are_in_the_harness_shape(path):
-    """These are read by eval_pipeline, not by grace, so they must match its
+    """These are read by the eval harness, not by grace, so they must match its
     DetectorConfig rather than anything defined here."""
     from eval.config import load_detector_config
 
@@ -296,23 +294,6 @@ def test_both_arms_wrap_the_same_base_detector(family):
     ]
     assert len({r["args"]["base"] for r in raws}) == 1
     assert len({r["args"]["split"] for r in raws}) == 1
-
-
-@pytest.mark.parametrize("family", FAMILIES)
-def test_arms_differ_only_in_target_view(family):
-    """Arm A and arm B must be one key apart, or the ablation is not an ablation.
-
-    Arm B is dinov3_multiscale.yaml, the multiscale reference arm the ablation
-    family was re-pointed at; the pre-multiscale resize arm was dropped with the
-    detectors it trained on.
-    """
-    a = yaml.safe_load((CONFIGS / f"train/{family}_degraded.yaml").read_text())
-    b = yaml.safe_load((CONFIGS / f"train/{family}_multiscale.yaml").read_text())
-    ignored = {"run_id", "target_view", "checkpoint_every", "loss"}
-    assert {k: v for k, v in a.items() if k not in ignored} == {
-        k: v for k, v in b.items() if k not in ignored
-    }
-    assert (a["target_view"], b["target_view"]) == ("degraded", "clean")
 
 
 def test_defaults_yaml_is_documentation_only():
