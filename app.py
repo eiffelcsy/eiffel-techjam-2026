@@ -5,6 +5,7 @@ Run from the repo root:
     streamlit run app.py
 """
 
+import json
 import os
 import sys
 import tempfile
@@ -50,7 +51,8 @@ def score_dir(detector, image_dir, batch_size: int = 16, num_workers: int = 0):
         for batch, metas in loader:
             preds = detector.score(batch.to(device)).float().cpu().numpy()
             rows.extend(
-                (Path(m["image_path"]).name, float(p)) for m, p in zip(metas, preds)
+                {"image_path": m["image_path"], "pred": float(p)}
+                for m, p in zip(metas, preds)
             )
     return rows
 
@@ -106,14 +108,24 @@ def main():
             return
         st.dataframe(
             [
-                {"image": name, "P(AI-generated)": p, "verdict": "AI" if p > 0.5 else "Real"}
-                for name, p in rows
+                {
+                    "image": Path(r["image_path"]).name,
+                    "P(AI-generated)": r["pred"],
+                    "verdict": "AI" if r["pred"] > 0.5 else "Real",
+                }
+                for r in rows
             ],
             hide_index=True,
         )
-        for name, p in rows:
-            st.caption(f"**{name}**")
-            st.progress(p, text=f"P(AI-generated) = {p:.3f}")
+        st.download_button(
+            "Download predictions (.json)",
+            data=json.dumps(rows, indent=2),
+            file_name="preds.json",
+            mime="application/json",
+        )
+        for r in rows:
+            st.caption(f"**{Path(r['image_path']).name}**")
+            st.progress(r["pred"], text=f"P(AI-generated) = {r['pred']:.3f}")
 
 
 if __name__ == "__main__":
