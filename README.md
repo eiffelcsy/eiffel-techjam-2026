@@ -30,6 +30,7 @@ Optional extras:
 
 ```bash
 pip install -e ".[wandb]"      # training-run tracking (otherwise off by default)
+pip install -e ".[dashboard]"  # Streamlit dashboard (app.py)
 ```
 
 ### Model access
@@ -73,9 +74,26 @@ disk is tens of GB rather than hundreds; the SOTA images stream on demand. See
 
 Run the tests with `pytest`.
 
+## Dashboard
+
+A minimal Streamlit app wraps the inference path (`eval.inference.predict_dir`)
+for interactively scoring images with any detector config:
+
+```bash
+pip install -e ".[dashboard]"   # if not installed above
+streamlit run app.py
+```
+
+From the sidebar you can pick a detector config (`eval/configs/detectors/*.yaml`),
+the device, batch size, and see the model's end-to-end parameter count. Then
+either upload one or more images or paste a path to a folder of images, and hit
+**Run inference** to get P(AI-generated) per image. The model loads once and is
+cached across reruns.
+
 ## Future work (in order of triviality and importance)
 
-1. **Clean up the data loading pipeline**: Remove the need for appending the SOTA rows, it should fetch and build manifest together with the WildFake data.
-2. **Assess detector invariance**: GRACE is detector-agnostic by construction and should be evaluated to other frozen backbones and heads to see how much the observed robustness gain transfers.
-3. **Broader benchmark**: Span more generators, real-world capture-and-redistribution pipelines to more accurately assess deployment impact.
-4. **Methodology ideas**: Scalar severity estimate could be replaced by richer self-supervised degradation description, frequency branch improvements like learnable band structures, top-k coefficient selection etc.
+1. **Hyperparameter Sweeps**: To find optimal hyperparameters for a wider range of input training data, better generalization to held-out images.
+2. **Clean up the data loading pipeline**: Remove the need for appending the SOTA rows, it should fetch and build manifest together with the WildFake data.
+3. **Assess detector invariance**: GRACE is detector-agnostic by construction and should be evaluated to other frozen backbones and heads to see how much the observed robustness gain transfers.
+4. **Broader benchmark**: Span more generators, real-world capture-and-redistribution pipelines to more accurately assess deployment impact.
+5. **Methodology ideas**: Scalar severity estimate could be replaced by richer self-supervised degradation description, frequency branch improvements like learnable band structures, top-k coefficient selection etc.
