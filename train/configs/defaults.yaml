@@ -13,11 +13,11 @@
 # eval/configs/ and load_data/configs/, so there is one description of each in
 # the project. Every script below is run from the repo root.
 #
-#   python scripts/train_probe.py       train/configs/probe/<name>.yaml   # PoC only
-#   python scripts/build_cache.py       train/configs/cache/<name>.yaml [--dry-run]
-#   python scripts/train_adapter.py     train/configs/train/<name>.yaml
-#   python scripts/train_enrich.py      train/configs/train/<name>.yaml
-#   python scripts/run_eval.py --config eval/configs/runs/<name>.yaml
+#   python scripts/main/train_probe.py       train/configs/probe/<name>.yaml   # PoC only
+#   python scripts/main/build_cache.py       train/configs/cache/<name>.yaml [--dry-run]
+#   python scripts/main/train_adapter.py     train/configs/train/<name>.yaml
+#   python scripts/main/train_enrich.py.py      train/configs/train/<name>.yaml
+#   python scripts/main/run_eval.py --config eval/configs/runs/<name>.yaml
 #   python scripts/compare.py --baseline <json> --adapted <json>
 
 
@@ -30,14 +30,14 @@
 # other detector arrives with its head already trained by its authors and never
 # touches this directory.
 #
-#   python scripts/train_probe.py train/configs/probe/<name>.yaml
+#   python scripts/main/train_probe.py train/configs/probe/<name>.yaml
 #
 # Clean images only, no degradation augmentation. That is the premise -- a head
 # trained under augmentation would have partly solved the problem GRACE exists to
 # solve, and every retention number downstream would measure the augmentation.
 
-run_id: dinov3_wildfake
-detector: eval/configs/detectors/dinov3-wildfake.yaml
+run_id: dinov3_wildfake_multiscale
+detector: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
 dataset: load_data/configs/datasets/wildfake_train.yaml        # split: train
 val_dataset:                # one path, or several -- selection is the unweighted
   - load_data/configs/datasets/wildfake_train_val.yaml
@@ -65,7 +65,7 @@ decay_gate: true            # false exempts gate_logit from weight_decay and
                             # so with this on the gate opens whether or not the
                             # objective asks it to -- and measurably does: decay
                             # accounts for the whole of the gate's drift in
-                            # the reference arm dinov3_clean.
+                            # the reference arm dinov3_multiscale.
 batch_size: 32              # images per trunk forward, during feature extraction
 head_batch_size: 64         # features per optimizer step -- the trunk runs once
 num_workers: 4
@@ -88,7 +88,7 @@ wandb:                      # off by default. summary.json next to the checkpoin
 # ------------------------------------------------------------------ cache ----
 # train/configs/cache/<name>.yaml
 
-detector: eval/configs/detectors/dinov3-wildfake.yaml
+detector: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
 split: eval.splits.dinov3.DINOv3Split # dotted path to the SplitDetector
 split_args: {}              # keyword arguments for the split, built with none
                             # by default
@@ -125,10 +125,10 @@ schedule:
 # train/configs/train/<name>.yaml -- the label-free adapter.
 # `run_id` and `cache_dir` are the only keys without a default.
 
-run_id: dinov3_clean
-cache_dir: cache/dinov3-wildfake
+run_id: dinov3_multiscale
+cache_dir: cache_ms/dinov3-wildfake-multiscale
 
-detector: eval/configs/detectors/dinov3-wildfake.yaml
+detector: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
 split: eval.splits.dinov3.DINOv3Split
 dataset: load_data/configs/datasets/wildfake_train.yaml
 # The detector is loaded even in `source: cache` mode: the frozen head is what
@@ -356,8 +356,8 @@ enricher:
 name: dinov3+grace
 target: grace_adapter.detectors.adapted.AdaptedDetector
 args:
-  base: eval/configs/detectors/dinov3-wildfake.yaml
+  base: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
   split: eval.splits.dinov3.DINOv3Split
-  checkpoint: checkpoints/grace/dinov3_clean/ema.pt  # null = identity, i.e. the
-                                                     # untouched base detector
+  checkpoint: checkpoints/grace/dinov3_multiscale/ema.pt  # null = identity, i.e. the
+                                                          # untouched base detector
 device: auto

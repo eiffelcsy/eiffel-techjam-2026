@@ -416,15 +416,15 @@ def test_run_config_takes_one_detector_or_many(tmp_path):
         )
         return path
 
-    one = load_run_config(write("detector: eval/configs/detectors/dinov3-wildfake.yaml\n"))
-    assert [d.name for d in one.detectors] == ["dinov3-wildfake"]
+    one = load_run_config(write("detector: eval/configs/detectors/dinov3-wildfake-multiscale.yaml\n"))
+    assert [d.name for d in one.detectors] == ["dinov3-wildfake-multiscale"]
 
     many = load_run_config(write(
         "detectors:\n"
-        "  - eval/configs/detectors/dinov3-wildfake.yaml\n"
-        "  - eval/configs/detectors/dinov3-wildfake-crop.yaml\n"
+        "  - eval/configs/detectors/dinov3-wildfake-multiscale.yaml\n"
+        "  - eval/configs/detectors/dinov3-wildfake-crop200.yaml\n"
     ))
-    assert [d.name for d in many.detectors] == ["dinov3-wildfake", "dinov3-wildfake-crop"]
+    assert [d.name for d in many.detectors] == ["dinov3-wildfake-multiscale", "dinov3-wildfake-crop200"]
 
     with pytest.raises(KeyError):
         load_run_config(write("detector: x\ndetectors: [y]\n"))

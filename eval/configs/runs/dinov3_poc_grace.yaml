@@ -13,7 +13,7 @@
 # schema as the baseline, because it is the same harness and the same code path.
 # The detectors differ by one config file each.
 #
-#   python scripts/run_eval.py --config eval/configs/runs/dinov3_poc_grace.yaml
+#   python scripts/main/run_eval.py --config eval/configs/runs/dinov3_poc_grace.yaml
 #
 # Detectors are loaded, scored and released one at a time, so this costs one
 # model's memory however many are listed.

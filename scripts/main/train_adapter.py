@@ -1,7 +1,7 @@
 """Stage 1: train one label-free adapter against one rendered cache.
 
-    python scripts/train_adapter.py train/configs/train/dinov3_clean.yaml
-    python scripts/train_adapter.py train/configs/train/dinov3_clean.yaml --seed 1 --run-id dinov3_clean_s1
+    python scripts/main/train_adapter.py train/configs/train/dinov3_multiscale.yaml
+    python scripts/main/train_adapter.py train/configs/train/dinov3_multiscale.yaml --seed 1 --run-id dinov3_multiscale_s1
 
 CLI overrides exist for one reason: the seed and geometry sweep is this script in
 a shell loop, and a sweep should not need a config file per point.

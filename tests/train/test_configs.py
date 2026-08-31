@@ -72,9 +72,9 @@ CROP_CONFIGS = {
 }
 """Every config carrying the multi-scale window protocol.
 
-Grew to this set when the whole `train/` ablation family (everything but
-dinov3_clean.yaml, kept as the pre-multiscale baseline) was re-pointed at the
-multiscale reference arm, dinov3_multiscale.yaml. The number has to be restated
+Grew to this set when the whole `train/` ablation family was re-pointed at the
+multiscale reference arm, dinov3_multiscale.yaml (the pre-multiscale resize arm
+and its detectors were dropped). The number has to be restated
 wherever the protocol is: stage 0 fits the head on those windows, four caches
 render them, and every stage-1/stage-2 run below fingerprints them.
 `after_fetch.sh --write-range` writes every entry from one audit;
@@ -253,7 +253,7 @@ def test_detector_configs_are_in_the_harness_shape(path):
 
 
 @pytest.mark.parametrize(
-    "arm", ["crop200", "r512"]
+    "arm", ["crop200"]
 )
 def test_freq_arms_differ_from_their_control_in_one_key(arm):
     """E10 and E12 are read off three files that must be one key apart.
@@ -302,9 +302,9 @@ def test_both_arms_wrap_the_same_base_detector(family):
 def test_arms_differ_only_in_target_view(family):
     """Arm A and arm B must be one key apart, or the ablation is not an ablation.
 
-    Arm B is dinov3_multiscale.yaml, not dinov3_clean.yaml: the ablation family
-    was re-pointed at the multiscale reference arm, and dinov3_clean.yaml is
-    kept only as the pre-multiscale baseline -- it is no longer arm A's control.
+    Arm B is dinov3_multiscale.yaml, the multiscale reference arm the ablation
+    family was re-pointed at; the pre-multiscale resize arm was dropped with the
+    detectors it trained on.
     """
     a = yaml.safe_load((CONFIGS / f"train/{family}_degraded.yaml").read_text())
     b = yaml.safe_load((CONFIGS / f"train/{family}_multiscale.yaml").read_text())

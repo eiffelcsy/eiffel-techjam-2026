@@ -2,7 +2,7 @@
 # 0.25 / 1 / 4 / 16, and 16 is dinov3_multiscale.yaml itself. Identical to the
 # reference except `loss.w_cos` and `loss.w_err`.
 #
-#   python scripts/train_adapter.py configs/train/dinov3_sweep_wratio_1.yaml
+#   python scripts/main/train_adapter.py configs/train/dinov3_sweep_wratio_1.yaml
 
 run_id: dinov3_sweep_wratio_1
 

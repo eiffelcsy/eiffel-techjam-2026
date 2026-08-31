@@ -90,7 +90,7 @@ class FeatureSpec:
         return n
 
     def bytes_per_image(self) -> int:
-        """For the size estimate in `scripts/build_cache.py --dry-run`."""
+        """For the size estimate in `scripts/main/build_cache.py --dry-run`."""
         return self.numel() * int(torch.empty(0, dtype=self.torch_dtype).element_size())
 
     @property

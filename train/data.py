@@ -151,7 +151,7 @@ def build_loader(cfg, cache, manifest, schedule, epoch: int, preprocess=None,
             # the cached clean features are of.
             raise ValueError(
                 "source: live cannot supply the frequency view -- render it with "
-                "scripts/build_cache.py and train the enricher against the cache."
+                "scripts/main/build_cache.py and train the enricher against the cache."
             )
         if preprocess is None:
             raise ValueError("source: live needs the detector's preprocess_fn()")

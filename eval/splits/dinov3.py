@@ -42,7 +42,7 @@ class DINOv3Split(SplitDetector):
                 "(head_checkpoint: null). Trunk features are still valid, so a "
                 "cache rendered from this is fine -- but any logit, AUC or "
                 "head-Jacobian computed from it is noise. Run "
-                "scripts/train_probe.py first.",
+                "scripts/main/train_probe.py first.",
                 stacklevel=2,
             )
 

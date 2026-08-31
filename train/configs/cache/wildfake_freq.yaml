@@ -1,7 +1,7 @@
 # The FREQUENCY cache: spatial features and the patch-DCT view, one render.
 #
-#   python scripts/build_cache.py configs/cache/wildfake_freq.yaml --dry-run
-#   python scripts/build_cache.py configs/cache/wildfake_freq.yaml
+#   python scripts/main/build_cache.py configs/cache/wildfake_freq.yaml --dry-run
+#   python scripts/main/build_cache.py configs/cache/wildfake_freq.yaml
 #
 # One key apart from configs/cache/dinov3_multiscale.yaml -- `freq.enabled` --
 # plus the view count and the out_dir that follow from it.

@@ -1,6 +1,6 @@
 # Stage 0 under the multi-scale protocol -- the head every later arm loads.
 #
-#   python scripts/train_probe.py train/configs/probe/dinov3_wildfake_multiscale.yaml
+#   python scripts/main/train_probe.py train/configs/probe/dinov3_wildfake_multiscale.yaml
 
 run_id: dinov3_wildfake_multiscale
 

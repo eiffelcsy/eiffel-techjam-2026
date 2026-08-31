@@ -9,7 +9,7 @@ winner from it was reading noise.
 
 This script measures that noise floor directly:
 
-    python scripts/seed_stats.py dinov3_clean_final_s*          # one group
+    python scripts/seed_stats.py dinov3_multiscale_final_s*     # one group
     python scripts/seed_stats.py --vs dinov3_sweep_wratio_1     # against a run
 
 The floor it reports is *seed* variance at a fixed configuration, which is the

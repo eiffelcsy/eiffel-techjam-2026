@@ -1,6 +1,7 @@
 # The TRAINING view: multi-scale crops at native pixel scale.
 #
-# Identical to dinov3-wildfake.yaml but for `input_mode`, which is the swept key.
+# The canonical detector: the multi-scale crop protocol. `input_mode` is the key
+# that separates it from the fixed eval arm, dinov3-wildfake-crop200.yaml.
 # It does not change the transform this detector applies -- `multiscale` resolves
 # to the same processor squash `resize` does -- because by the time preprocessing
 # runs the window has already been chosen, upstream, in the dataset, where it can
@@ -16,8 +17,7 @@
 # probe config cannot drift apart.
 #
 # This detector is what stage 0 and the cache render use. It is NOT an evaluation
-# arm: the two arms are dinov3-wildfake-crop200.yaml and dinov3-wildfake-r512.yaml,
-# both of which load THIS head.
+# arm: the evaluation arm is dinov3-wildfake-crop200.yaml, which loads THIS head.
 
 name: dinov3-wildfake-multiscale
 target: eval.detectors.dinov3.DINOv3MLPDetector

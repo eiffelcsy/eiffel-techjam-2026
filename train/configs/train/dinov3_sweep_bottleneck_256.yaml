@@ -2,7 +2,7 @@
 # `adapter.bottleneck` (256 vs the reference's 128). One key off
 # dinov3_multiscale.yaml; every other value is written out verbatim.
 #
-#   python scripts/train_adapter.py configs/train/dinov3_sweep_bottleneck_256.yaml
+#   python scripts/main/train_adapter.py configs/train/dinov3_sweep_bottleneck_256.yaml
 
 run_id: dinov3_sweep_bottleneck_256
 

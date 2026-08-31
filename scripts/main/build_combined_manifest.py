@@ -1,8 +1,8 @@
 """Build a combined manifest: the existing WildFake manifest + new sources.
 
-    python scripts/build_combined_manifest.py load_data/configs/datasets/wildfake_train_combined.yaml
+    python scripts/main/build_combined_manifest.py load_data/configs/datasets/wildfake_train_combined.yaml
 
-Unlike `scripts/build_manifest.py`, this does NOT rebuild from scratch. It loads
+Unlike `scripts/main/build_manifest.py`, this does NOT rebuild from scratch. It loads
 the existing manifest in place -- preserving its row order and indices, which
 are the image identity that seeds every degradation and crop -- and appends the
 new single-class sources with fresh, non-colliding indices. That is what makes

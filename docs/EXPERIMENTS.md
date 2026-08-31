@@ -51,15 +51,12 @@ normalised by the detector's *own* clean AUC. See
 `scripts/compare.py` for why retention is normalised against the *baseline's*
 clean AUC rather than each arm's own.
 
-Two evaluation arms are used, and they answer different questions:
+One evaluation arm is used:
 
 - **crop200** — a 200×200 window at native pixel scale. In distribution for a
   multi-scale-trained head, and the informative arm. Every real in the benchmark
   is exactly 200×200, so nothing is upsampled and the dimension shortcut is
   0.5 by construction.
-- **r512** — the whole image squashed to 512. Out of distribution and
-  spectrally confounded (reals upsampled, fakes downsampled). A robustness
-  check, not evidence about generation traces.
 
 ---
 
@@ -107,33 +104,9 @@ until one is fit. Each probe run trains a small MLP head on clean features only
 (no degradation augmentation), then selects an epoch on the held-out validation
 split.
 
-### `dinov3_wildfake` — resize head (PoC)
-
-`python scripts/train_probe.py train/configs/probe/dinov3_wildfake.yaml`
-
-Whole-image resize to 224×224. The original PoC head, kept as the pre-crop
-reference.
-
-### `dinov3_wildfake_crop` — crop head
-
-`python scripts/train_probe.py train/configs/probe/dinov3_wildfake_crop.yaml`
-
-Feeds a crop at native pixel scale instead of a whole-image squash. Identical to
-`dinov3_wildfake` on every other axis (same manifest, selection split, geometry,
-optimizer, seed).
-
-- **Rationale**: this is the preprocessing ablation, and it decides whether
-  GRACE has a gap to close at all. On SID_Set (two datasets ago), the resize
-  head hit 0.9999 val AUC by reading *content* ("prompt imagery" vs
-  "photograph"), which is invariant to every degradation in the grid — its
-  retention curve was a flat line at 100%, leaving no room for a repair. A head
-  that reads local high-frequency traces collapses under blur/resize; one that
-  reads content does not. The crop vs resize comparison is the experiment (D1)
-  that establishes which the WildFake head is doing.
-
 ### `dinov3_wildfake_multiscale` — the head everything downstream loads
 
-`python scripts/train_probe.py train/configs/probe/dinov3_wildfake_multiscale.yaml`
+`python scripts/main/train_probe.py train/configs/probe/dinov3_wildfake_multiscale.yaml`
 
 The crop-era head, fit under the multi-scale protocol (128–256px windows,
 `input_mode: multiscale`). This is the head the stage-1 adapter and the cache
@@ -148,9 +121,9 @@ render all load.
 
 ## 3. Baselines — the denominator
 
-### `dinov3_poc_baseline` — unadapted retention (resize arm)
+### `dinov3_poc_baseline` — unadapted retention (multiscale arm)
 
-`python scripts/run_eval.py --config eval/configs/runs/dinov3_poc_baseline.yaml`
+`python scripts/main/run_eval.py --config eval/configs/runs/dinov3_poc_baseline.yaml`
 
 The unadapted detector's retention curve on the benchmark. This is the number
 every GRACE arm is compared against, and it comes out of this file alone so
@@ -160,38 +133,25 @@ nothing re-derives it.
   here, there is no gap for GRACE to close and the PoC has answered its own
   question early (~300k forwards vs ~4.2M for the stage-1 cache).
 
-### `dinov3_poc_baseline_arms` — both evaluation arms
+### `dinov3_poc_baseline_arms` — the crop200 evaluation arm
 
-`python scripts/run_eval.py --config eval/configs/runs/dinov3_poc_baseline_arms.yaml`
+`python scripts/main/run_eval.py --config eval/configs/runs/dinov3_poc_baseline_arms.yaml`
 
-The same unadapted detector scored on both `crop200` and `r512` in a single run,
-so both columns come from one condition lattice (every detector sees
-byte-identical degraded images).
+The same unadapted detector scored on the `crop200` arm — a 200×200 window at
+native pixel scale, in distribution for a multi-scale-trained head, and the
+informative arm for frequency. (The `r512` robustness arm was dropped: it was
+out of distribution and spectrally confounded, and the informative arm answers
+the question on its own.)
 
-- **Rationale**: the two arms are deliberately *not* a fair fight. `crop200` is
-  in distribution and informative; `r512` is a robustness check. This run
-  decides the project's first real measurement: if retention doesn't collapse on
-  `crop200`, the frequency branch has nothing to enrich and the finding is
-  reported *before* anything is trained.
-
-### `dinov3_poc_baseline_crop` — the preprocessing ablation, scored
-
-`python scripts/run_eval.py --config eval/configs/runs/dinov3_poc_baseline_crop.yaml`
-
-The crop-fed head's retention curve, written as its own result beside the
-resize baseline so `report.py` can compare the two.
-
-- **Rationale**: read the two baselines against each other, not in isolation —
-  crop collapses and resize doesn't → the resize head took the semantic shortcut
-  (refit on the crop detector); both collapse → preprocessing wasn't the
-  confound; neither collapses → the *dataset* separates on content, and no
-  adapter fixes that.
+- **Rationale**: this run decides the project's first real measurement: if
+  retention doesn't collapse on `crop200`, the frequency branch has nothing to
+  enrich and the finding is reported *before* anything is trained.
 
 ---
 
 ## 4. `dinov3_poc_identity` — the null adapter (E1)
 
-`python scripts/run_eval.py --config eval/configs/runs/dinov3_poc_identity.yaml`
+`python scripts/main/run_eval.py --config eval/configs/runs/dinov3_poc_identity.yaml`
 (read with `scripts/compare.py --assert-identity`)
 
 The null adapter (`checkpoint: null`) — the trunk/head split wired up with no
@@ -213,20 +173,15 @@ The adapter is trained label-free: it maps degraded trunk features back toward
 clean ones through a frozen head, with a small MLP "severity head" estimating
 how far each image has drifted. See `PIPELINE.md` for the mechanism.
 
-### `dinov3_clean` — resize reference arm
-
-`python scripts/train_adapter.py train/configs/train/dinov3_clean.yaml`
-
-The reference under the whole-image resize protocol, kept as the pre-multiscale
-baseline.
-
 ### `dinov3_multiscale` — the reference arm
 
-`python scripts/train_adapter.py train/configs/train/dinov3_multiscale.yaml`
+`python scripts/main/train_adapter.py train/configs/train/dinov3_multiscale.yaml`
 
-`dinov3_clean` re-pointed at windowed pixels under the multi-scale protocol.
-Every stage-1 ablation in this family is this file with one key changed, and
-every detector config loads this run's `ema.pt`.
+The reference arm under the multi-scale protocol, trained on windowed pixels at
+native scale (128–256px). Every stage-1 ablation in this family is this file
+with one key changed, and every detector config loads this run's `ema.pt`
+(`checkpoints/grace/dinov3_multiscale/ema.pt`). The pre-multiscale resize arm
+(`dinov3_clean`) was dropped with the detectors it trained on.
 
 - **Rationale for the re-render**: the trunk now sees 128–256px windows at
   native pixel scale — a different feature space, not a harder version of the
@@ -238,7 +193,7 @@ every detector config loads this run's `ema.pt`.
 
 ### `dinov3_poc_grace` — the adapted detector vs the baseline
 
-`python scripts/run_eval.py --config eval/configs/runs/dinov3_poc_grace.yaml`
+`python scripts/main/run_eval.py --config eval/configs/runs/dinov3_poc_grace.yaml`
 
 `head(adapter(trunk(x)))` scored under the same conditions as the baseline, with
 retention normalized by the *baseline's* clean AUC (`compare.py` refuses two
@@ -258,7 +213,7 @@ against the reference shows the single variable. They exist to answer
 
 ### Loss — `dinov3_plain_mse` (Jacobian weighting off)
 
-`python scripts/train_adapter.py train/configs/train/dinov3_plain_mse.yaml`
+`python scripts/main/train_adapter.py train/configs/train/dinov3_plain_mse.yaml`
 
 `loss.weighting: none` makes the error term exactly `F.mse_loss` (pinned by
 `tests/test_losses.py`), against the reference's Jacobian-weighted error through
@@ -270,8 +225,8 @@ the frozen head.
 
 ### Capacity — `dinov3_sweep_bottleneck_256` and `dinov3_sweep_nblocks_2`
 
-`python scripts/train_adapter.py train/configs/train/dinov3_sweep_bottleneck_256.yaml`
-`python scripts/train_adapter.py train/configs/train/dinov3_sweep_nblocks_2.yaml`
+`python scripts/main/train_adapter.py train/configs/train/dinov3_sweep_bottleneck_256.yaml`
+`python scripts/main/train_adapter.py train/configs/train/dinov3_sweep_nblocks_2.yaml`
 
 Doubling the bottleneck (256 vs 128) and dropping from three residual blocks to
 two, respectively.
@@ -283,8 +238,8 @@ two, respectively.
 
 ### Gate — `dinov3_sweep_gate_-3` and `dinov3_gate_nodecay`
 
-`python scripts/train_adapter.py train/configs/train/dinov3_sweep_gate_-3.yaml`
-`python scripts/train_adapter.py train/configs/train/dinov3_gate_nodecay.yaml`
+`python scripts/main/train_adapter.py train/configs/train/dinov3_sweep_gate_-3.yaml`
+`python scripts/main/train_adapter.py train/configs/train/dinov3_gate_nodecay.yaml`
 
 Two distinct questions about the gate:
 - `gate_init -3` (sigmoid ≈ 0.047) vs the reference's `-4` (≈ 0.018) — read
@@ -301,7 +256,7 @@ Two distinct questions about the gate:
 
 ### Loss ratio — `dinov3_sweep_wratio_{0.25,1,4}` (16 is the reference)
 
-`python scripts/train_adapter.py train/configs/train/dinov3_sweep_wratio_0.25.yaml` (and `_1`, `_4`)
+`python scripts/main/train_adapter.py train/configs/train/dinov3_sweep_wratio_0.25.yaml` (and `_1`, `_4`)
 
 Sweeps the `w_err / w_cos` ratio over 0.25 / 1 / 4, with 16 being
 `dinov3_multiscale` itself.
@@ -314,7 +269,7 @@ Sweeps the `w_err / w_cos` ratio over 0.25 / 1 / 4, with 16 being
 
 ## 7. Seed variance — `seed_stats`
 
-`python scripts/seed_stats.py dinov3_clean_final_s*`
+`python scripts/seed_stats.py dinov3_multiscale_final_s*`
 
 Aggregates repeated runs into mean / std / CI and says whether a gap is real.
 

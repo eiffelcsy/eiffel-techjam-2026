@@ -1,6 +1,6 @@
 """Materialize a dataset and build its manifest.
 
-    python scripts/build_manifest.py --config load_data/configs/datasets/<name>.yaml
+    python scripts/main/build_manifest.py --config load_data/configs/datasets/<name>.yaml
 
 The dataset config is the same file run_eval.py reads: `source` says how to
 build it, `manifest` says where the table goes. See load_data/configs (dataset shape) and eval/configs/defaults.yaml.

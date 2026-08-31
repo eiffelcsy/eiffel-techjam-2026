@@ -322,5 +322,5 @@ def test_identity_adapter_reproduces_the_base_detector(poc_run, monkeypatch, tmp
 def test_untrained_head_warns_rather_than_scoring_silently(detector_factory):
     """A random head gives ~0.5 AUC, which reads as a failed adapter rather
     than as a missing stage 0."""
-    with pytest.warns(UserWarning, match="scripts/train_probe.py"):
+    with pytest.warns(UserWarning, match="scripts/main/train_probe.py"):
         DINOv3Split(detector_factory())

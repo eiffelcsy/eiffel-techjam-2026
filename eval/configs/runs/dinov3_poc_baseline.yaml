@@ -8,7 +8,7 @@
 # PoC has answered its own question early. That check is worth doing FIRST: it
 # costs ~300k forwards against the ~4.2M the stage-1 cache costs.
 #
-#   python scripts/run_eval.py --config eval/configs/runs/dinov3_poc_baseline.yaml
+#   python scripts/main/run_eval.py --config eval/configs/runs/dinov3_poc_baseline.yaml
 #
 # WHY THE BENCHMARK AND NOT THE VALIDATION SPLIT. wildfake_train_val is a
 # selection set in this project: stage 0 picks the head's epoch on it and stage 1

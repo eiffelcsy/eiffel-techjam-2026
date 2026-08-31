@@ -3,7 +3,7 @@
 # `adapter.gate_init`. Read `grad_norm` and `gate` over the first epoch, not
 # final AUC -- the claim is about the early transient.
 #
-#   python scripts/train_adapter.py configs/train/dinov3_sweep_gate_-3.yaml
+#   python scripts/main/train_adapter.py configs/train/dinov3_sweep_gate_-3.yaml
 
 run_id: dinov3_sweep_gate_-3
 

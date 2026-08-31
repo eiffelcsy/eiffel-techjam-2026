@@ -148,7 +148,7 @@ class CacheSpec:
         if not path.exists():
             raise FileNotFoundError(
                 f"no {SPEC_FILE} under {root} -- build the cache first "
-                f"(scripts/build_cache.py)"
+                f"(scripts/main/build_cache.py)"
             )
         return cls.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
@@ -179,7 +179,7 @@ class CacheSpec:
             if mine and theirs and mine != theirs:
                 raise ValueError(
                     f"cache is stale: {name} differs ({mine} != {theirs}) -- {why}. "
-                    f"Re-render with scripts/build_cache.py."
+                    f"Re-render with scripts/main/build_cache.py."
                 )
         # `crop_sha` is compared strictly, empty included, and that is the one
         # place this method departs from the both-sides-declared rule above. For
@@ -194,7 +194,7 @@ class CacheSpec:
                 f"cache is stale: crop_sha differs ({described(self.crop_sha)} != "
                 f"{described(other.crop_sha)}) -- the multi-scale window protocol "
                 f"changed, so these are features of different windows. Re-render "
-                f"with scripts/build_cache.py, or fix `crop:` in the run config."
+                f"with scripts/main/build_cache.py, or fix `crop:` in the run config."
             )
 
     def assert_freq_available(self, want: FeatureSpec, want_sha: str = "") -> None:
@@ -223,14 +223,14 @@ class CacheSpec:
                 f"frequency view mismatch: cache holds {self.freq_feature.layout}"
                 f"{self.freq_feature.shape}, this run wants {want.layout}"
                 f"{want.shape}. The coefficient set is a render-time commitment "
-                f"-- re-render with scripts/build_cache.py."
+                f"-- re-render with scripts/main/build_cache.py."
             )
         if want_sha and self.freq_sha and self.freq_sha != want_sha:
             raise ValueError(
                 f"cache is stale: freq_sha differs ({self.freq_sha} != {want_sha}) "
                 f"-- the patch size, cell grid or radial ordering changed, so the "
                 f"coefficient axis means something else. Same shape, different "
-                f"frequencies. Re-render with scripts/build_cache.py."
+                f"frequencies. Re-render with scripts/main/build_cache.py."
             )
 
     def bytes_per_view(self) -> int:
@@ -292,7 +292,7 @@ def assert_appendable(old: CacheSpec, new: CacheSpec, new_manifest, epochs) -> i
         raise ValueError(
             f"cannot append: shard_size changed ({old.shard_size} -> "
             f"{new.shard_size}); the reused shards' row layout would no longer "
-            f"hold. Re-render with scripts/build_cache.py."
+            f"hold. Re-render with scripts/main/build_cache.py."
         )
 
     if (old.feature.layout, old.feature.shape, old.feature.dtype) != (
@@ -301,7 +301,7 @@ def assert_appendable(old: CacheSpec, new: CacheSpec, new_manifest, epochs) -> i
         raise ValueError(
             f"cannot append: feature spec changed ({old.feature.to_dict()} -> "
             f"{new.feature.to_dict()}); the reused shards hold different features. "
-            f"Re-render with scripts/build_cache.py."
+            f"Re-render with scripts/main/build_cache.py."
         )
     old_freq, new_freq = old.freq_feature, new.freq_feature
     if (old_freq is None) != (new_freq is None) or (
@@ -311,7 +311,7 @@ def assert_appendable(old: CacheSpec, new: CacheSpec, new_manifest, epochs) -> i
     ):
         raise ValueError(
             "cannot append: the frequency view changed; the reused freq shards "
-            "hold different coefficients. Re-render with scripts/build_cache.py."
+            "hold different coefficients. Re-render with scripts/main/build_cache.py."
         )
 
     for name, why in (
@@ -326,7 +326,7 @@ def assert_appendable(old: CacheSpec, new: CacheSpec, new_manifest, epochs) -> i
                 f"cannot append: {name} differs ({getattr(old, name)} != "
                 f"{getattr(new, name)}) -- {why}. The reused shards would be "
                 f"features of different inputs than the appended ones. Re-render "
-                f"with scripts/build_cache.py."
+                f"with scripts/main/build_cache.py."
             )
 
     required = {view_name(e) for e in [None, *epochs]}
@@ -335,7 +335,7 @@ def assert_appendable(old: CacheSpec, new: CacheSpec, new_manifest, epochs) -> i
             f"cannot append: the rendered view set differs -- the cache holds "
             f"{sorted(old.views)} but the new config needs "
             f"{sorted(required)}. The append renders only the new rows, so the "
-            f"two must be identical. Re-render with scripts/build_cache.py."
+            f"two must be identical. Re-render with scripts/main/build_cache.py."
         )
 
     prefix = sha_manifest(new_manifest.iloc[: old.n])
@@ -345,7 +345,7 @@ def assert_appendable(old: CacheSpec, new: CacheSpec, new_manifest, epochs) -> i
             f"manifest this cache was rendered from (manifest_sha {prefix} != "
             f"{old.manifest_sha}). The old rows must be an exact prefix of the "
             f"new manifest. Rebuild the manifest with the old rows first, or "
-            f"re-render the whole cache with scripts/build_cache.py."
+            f"re-render the whole cache with scripts/main/build_cache.py."
         )
 
     return old.n

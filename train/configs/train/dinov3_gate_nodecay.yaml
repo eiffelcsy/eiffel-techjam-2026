@@ -2,7 +2,7 @@
 # reference arm (dinov3_multiscale.yaml) except `decay_gate: false`, which
 # exempts `gate_logit` from weight decay and leaves everything else untouched.
 #
-#   python scripts/train_adapter.py configs/train/dinov3_gate_nodecay.yaml
+#   python scripts/main/train_adapter.py configs/train/dinov3_gate_nodecay.yaml
 
 run_id: dinov3_gate_nodecay
 

@@ -1,7 +1,7 @@
 # Held-out-image validation cache, multi-scale protocol, frequency read at
 # NATIVE resolution.
 #
-#   python scripts/build_cache.py train/configs/cache/dinov3_multiscale_nativefreq_val.yaml
+#   python scripts/main/build_cache.py train/configs/cache/dinov3_multiscale_nativefreq_val.yaml
 #
 # configs/cache/dinov3_multiscale_nativefreq.yaml with the dataset and out_dir
 # swapped, for the reason the pre-crop pair had: `build_cache.py` derives its

@@ -1,12 +1,12 @@
 # The COMBINED training corpus: the existing WildFake manifest plus new
 # single-class sources appended (FLUX, Seedream, and more reals).
 #
-# Built by scripts/build_combined_manifest.py, NOT scripts/build_manifest.py:
+# Built by scripts/main/build_combined_manifest.py, NOT scripts/main/build_manifest.py:
 # the combined manifest is the existing wildfake_train manifest read IN PLACE
 # (indices preserved) with the new rows appended after it. That prefix property
 # is what lets scripts/append_cache.py reuse the already-rendered cache shards.
 #
-#   python scripts/build_combined_manifest.py \
+#   python scripts/main/build_combined_manifest.py \
 #       load_data/configs/datasets/wildfake_train_combined.yaml
 #
 # Expect one manifest, two splits (existing + new):

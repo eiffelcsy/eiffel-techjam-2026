@@ -1,7 +1,7 @@
 """Render a feature cache. The expensive step, run once per detector.
 
-    python scripts/build_cache.py train/configs/cache/dinov3.yaml --dry-run
-    python scripts/build_cache.py train/configs/cache/dinov3.yaml
+    python scripts/main/build_cache.py train/configs/cache/dinov3_multiscale.yaml --dry-run
+    python scripts/main/build_cache.py train/configs/cache/dinov3_multiscale.yaml
 
 `--dry-run` prints the CacheSpec and the on-disk size and exits.
 

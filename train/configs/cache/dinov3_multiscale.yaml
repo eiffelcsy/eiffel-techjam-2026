@@ -1,17 +1,11 @@
-# The spatial cache under the MULTI-SCALE protocol -- the crop-era dinov3.yaml.
+# The canonical spatial cache, under the MULTI-SCALE protocol. The old whole-image
+# cache (dinov3.yaml) was dropped with the resize-protocol detector it rendered.
 #
-#   python scripts/build_cache.py configs/cache/dinov3_multiscale.yaml --dry-run
-#   python scripts/build_cache.py configs/cache/dinov3_multiscale.yaml
+#   python scripts/main/build_cache.py configs/cache/dinov3_multiscale.yaml --dry-run
+#   python scripts/main/build_cache.py configs/cache/dinov3_multiscale.yaml
 #
-# Two keys apart from configs/cache/dinov3.yaml: the detector (which records the
-# protocol) and the `crop:` block (which supplies it). They are one change --
-# `probe.train._assert_crop_matches_input_mode` refuses either without the other.
-#
-# WHY A SECOND CACHE RATHER THAN AN EDIT. The old one is not wrong, it is
-# whole-image, and `CacheSpec.crop_sha` compares strictly with the empty string
-# included -- so a run configured for windows can never read it by accident. Two
-# roots, two protocols, no ambiguity about which produced a number. Delete the
-# old one when the crop-era numbers are in, not before.
+# `CacheSpec.crop_sha` compares strictly with the empty string included, so a run
+# configured for windows can never read a whole-image root by accident.
 #
 # WHY IT HAS TO BE RE-RENDERED AT ALL. The trunk now sees 128-S_MAX px windows at
 # native pixel scale. That is a different feature space, not a harder version of

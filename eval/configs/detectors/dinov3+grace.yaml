@@ -1,6 +1,7 @@
-# GRACE on the PoC detector -- DINOv3 with the trained, LABEL-FREE adapter.
+# GRACE on the canonical PoC detector -- DINOv3 with the trained, LABEL-FREE
+# adapter, wrapped around the multi-scale protocol's detector.
 #
-#   python scripts/run_eval.py --config eval/configs/runs/dinov3_poc_grace.yaml
+#   python scripts/main/run_eval.py --config eval/configs/runs/dinov3_poc_grace.yaml
 #
 # Same conditions, same clean threshold rule, same retention denominator, same
 # result JSON as the baseline, because it is the same harness. The baseline and
@@ -12,7 +13,7 @@
 name: dinov3+grace
 target: grace_adapter.detectors.adapted.AdaptedDetector
 args:
-  base: eval/configs/detectors/dinov3-wildfake.yaml
+  base: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
   split: eval.splits.dinov3.DINOv3Split
-  checkpoint: checkpoints/grace/dinov3_clean/ema.pt
+  checkpoint: checkpoints/grace/dinov3_multiscale/ema.pt
 device: auto

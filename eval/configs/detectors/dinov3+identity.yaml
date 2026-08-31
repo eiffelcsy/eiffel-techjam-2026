@@ -12,7 +12,7 @@
 name: dinov3+identity
 target: grace_adapter.detectors.adapted.AdaptedDetector
 args:
-  base: eval/configs/detectors/dinov3-wildfake.yaml
+  base: eval/configs/detectors/dinov3-wildfake-multiscale.yaml
   split: eval.splits.dinov3.DINOv3Split
   checkpoint: null
 device: auto

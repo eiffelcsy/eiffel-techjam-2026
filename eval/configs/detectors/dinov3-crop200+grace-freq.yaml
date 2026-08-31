@@ -22,5 +22,5 @@ args:
   base: eval/configs/detectors/dinov3-wildfake-crop200.yaml
   split: eval.splits.dinov3.DINOv3Split
   checkpoint: checkpoints/grace/dinov3_multiscale/ema.pt
-  enricher: checkpoints/grace/dinov3_enrich/enricher.pt   # THE swept key
+  enricher: checkpoints/grace/dinov3_enrich_nativefreq/enricher.pt   # THE swept key
 device: auto

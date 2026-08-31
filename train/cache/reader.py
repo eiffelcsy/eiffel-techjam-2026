@@ -116,7 +116,7 @@ class FeatureCache:
             raise FileNotFoundError(
                 f"{self.root} was rendered without a frequency view, so the "
                 f"enricher has nothing to read. Re-render with `freq.enabled: "
-                f"true` (scripts/build_cache.py configs/cache/wildfake_freq.yaml), "
+                f"true` (scripts/main/build_cache.py configs/cache/wildfake_freq.yaml), "
                 f"or train the plain adapter."
             )
         return self._gather(name, self.rows_for(indices), self._spec.freq_feature)

@@ -55,9 +55,9 @@ tens of GB rather than hundreds. For more information on data pipeline, see
 
 ## Typical flow
 
-1. Fit the head (stage 0): `python scripts/train_probe.py train/configs/probe/dinov3_wildfake_multiscale.yaml`
-2. Render the feature cache: `python scripts/build_cache.py train/configs/cache/dinov3_multiscale.yaml`
-3. Train the adapter (stage 1): `python scripts/train_adapter.py train/configs/train/dinov3_multiscale.yaml`
-4. Evaluate: `python scripts/run_eval.py --config eval/configs/runs/dinov3_poc_baseline.yaml`
+1. Fit the head (stage 0): `python scripts/main/train_probe.py train/configs/probe/dinov3_wildfake_multiscale.yaml`
+2. Render the feature cache: `python scripts/main/build_cache.py train/configs/cache/dinov3_multiscale.yaml`
+3. Train the adapter (stage 1): `python scripts/main/train_adapter.py train/configs/train/dinov3_multiscale.yaml`
+4. Evaluate: `python scripts/main/run_eval.py --config eval/configs/runs/dinov3_poc_baseline.yaml`
 
 Run the tests with `pytest`.

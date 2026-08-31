@@ -3,7 +3,7 @@
     configs/datasets/<name>.yaml    how to build a dataset, where its manifest
                                     lives, which split to score
 
-`source` is only needed by scripts/build_manifest.py; once the manifest
+`source` is only needed by scripts/main/build_manifest.py; once the manifest
 exists, everything downstream reads `manifest` and `split` and ignores it.
 
 Components are named by dotted import path rather than by a registry key, so
@@ -23,7 +23,7 @@ from common.io import resolve_ref
 class DatasetConfig:
     """One dataset: how to materialize it, and how to read it back.
 
-    `source` is only needed by scripts/build_manifest.py; once the manifest
+    `source` is only needed by scripts/main/build_manifest.py; once the manifest
     exists, evaluation reads `manifest` and `split` and ignores it.
     """
 

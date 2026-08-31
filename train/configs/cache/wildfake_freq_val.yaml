@@ -1,6 +1,6 @@
 # The frequency cache for the held-out IMAGES. Stage-2 validation reads this.
 #
-#   python scripts/build_cache.py configs/cache/wildfake_freq_val.yaml
+#   python scripts/main/build_cache.py configs/cache/wildfake_freq_val.yaml
 #
 # configs/cache/wildfake_freq.yaml with the dataset and out_dir swapped, and the
 # same reason as every other val pair here: `build_cache.py` names its root after

@@ -1,7 +1,7 @@
 # Held-out-image validation cache, combined corpus, multi-scale protocol,
 # frequency read at NATIVE resolution.
 #
-#   python scripts/build_cache.py train/configs/cache/dinov3_multiscale_nativefreq_val_combined.yaml
+#   python scripts/main/build_cache.py train/configs/cache/dinov3_multiscale_nativefreq_val_combined.yaml
 #
 # The val cache does not exist yet, so this is a FULL render (build_cache.py, not
 # append_cache.py) into a fresh out_dir. It renders the combined validation

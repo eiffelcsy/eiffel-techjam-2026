@@ -10,8 +10,8 @@
 # Adding a dataset is one new file under datasets/. Adding a detector is one
 # new file under detectors/. Pairing them is one new file under runs/.
 #
-#   python scripts/build_manifest.py --config load_data/configs/datasets/<name>.yaml
-#   python scripts/run_eval.py       --config eval/configs/runs/<name>.yaml
+#   python scripts/main/build_manifest.py --config load_data/configs/datasets/<name>.yaml
+#   python scripts/main/run_eval.py       --config eval/configs/runs/<name>.yaml
 
 
 # ---------------------------------------------------------------- dataset ----

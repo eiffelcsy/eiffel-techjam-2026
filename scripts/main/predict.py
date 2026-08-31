@@ -1,6 +1,6 @@
 """Score a directory of images.
 
-    python scripts/predict.py --image-dir path/to/images \
+    python scripts/main/predict.py --image-dir path/to/images \
         --detector eval/configs/detectors/<detector>.yaml --out preds.json
 
 Output: JSON list of {"image_path": str, "pred": float}, pred = P(AI-generated).

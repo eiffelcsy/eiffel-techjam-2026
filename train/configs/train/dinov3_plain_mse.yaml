@@ -3,7 +3,7 @@
 # `loss.weighting` -- every other loss key is written out verbatim so the diff
 # is exactly one key.
 #
-#   python scripts/train_adapter.py configs/train/dinov3_plain_mse.yaml
+#   python scripts/main/train_adapter.py configs/train/dinov3_plain_mse.yaml
 
 run_id: dinov3_plain_mse
 

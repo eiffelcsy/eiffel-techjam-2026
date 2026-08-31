@@ -16,7 +16,7 @@ from typing import Any
 def _ensure_cwd_importable() -> None:
     """Put the working directory on sys.path.
 
-    `python scripts/run_eval.py` puts `scripts/` on sys.path, not the directory
+    `python scripts/main/run_eval.py` puts `scripts/` on sys.path, not the directory
     the user is standing in -- so without this, a detector or source they wrote
     in their own project could be named by import path but never imported, and
     only installed packages would resolve. Same reason uvicorn and hydra do it.

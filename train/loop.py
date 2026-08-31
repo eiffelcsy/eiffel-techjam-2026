@@ -156,7 +156,7 @@ def _load_val_sets(cfg, spec, expect: CacheSpec | None = None) -> list:
             raise RuntimeError(
                 f"{cache_dir} holds {val_cache.spec.n} rows but {ds_path} selects "
                 f"{len(val_manifest)}. The cache was rendered from a different "
-                f"manifest -- re-render it with scripts/build_cache.py."
+                f"manifest -- re-render it with scripts/main/build_cache.py."
             )
         if (val_cache.spec.feature.layout, val_cache.spec.feature.shape) != (
             spec.layout, spec.shape

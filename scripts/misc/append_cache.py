@@ -52,7 +52,7 @@ def main():
     except FileNotFoundError as e:
         raise SystemExit(
             f"{root} has no cache to append to. Render it first with "
-            f"scripts/build_cache.py."
+            f"scripts/main/build_cache.py."
         ) from e
 
     old_n = assert_appendable(old_spec, spec, manifest, epochs)

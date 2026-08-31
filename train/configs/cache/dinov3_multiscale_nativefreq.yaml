@@ -2,7 +2,7 @@
 # reading the image at NATIVE resolution -- the complementarity premise's
 # strongest test.
 #
-#   python scripts/build_cache.py train/configs/cache/dinov3_multiscale_nativefreq.yaml
+#   python scripts/main/build_cache.py train/configs/cache/dinov3_multiscale_nativefreq.yaml
 #
 # One key from configs/cache/dinov3_multiscale.yaml: `freq.source: native`.
 #

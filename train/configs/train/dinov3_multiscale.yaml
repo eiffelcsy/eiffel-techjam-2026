@@ -1,8 +1,9 @@
-# THE REFERENCE ARM under the multi-scale crop protocol -- dinov3_clean.yaml,
-# re-pointed at windowed pixels. Every ablation in this family is this file
-# with one key changed, and every detector config loads this run's `ema.pt`.
+# THE REFERENCE ARM under the multi-scale crop protocol. The pre-multiscale
+# resize arm (dinov3_clean) was dropped with the detectors it trained on. Every
+# ablation in this family is this file with one key changed, and every detector
+# config loads this run's `ema.pt`.
 #
-#   python scripts/train_adapter.py train/configs/train/dinov3_multiscale.yaml
+#   python scripts/main/train_adapter.py train/configs/train/dinov3_multiscale.yaml
 
 run_id: dinov3_multiscale
 

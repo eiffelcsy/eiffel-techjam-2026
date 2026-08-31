@@ -1,6 +1,6 @@
 """Aggregate results/*.json into the summary tables + figures.
 
-    python scripts/report.py --results results/ --out results/summary
+    python scripts/main/report.py --results results/ --out results/summary
 """
 
 import argparse

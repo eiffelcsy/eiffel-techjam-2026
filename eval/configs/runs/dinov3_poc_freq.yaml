@@ -1,32 +1,21 @@
-# THE HEADLINE RUN for the frequency branch: six detectors, both eval arms.
+# THE HEADLINE RUN for the frequency branch: three detectors on the crop200 arm.
 #
-#   python scripts/run_eval.py --config eval/configs/runs/dinov3_poc_freq.yaml
+#   python scripts/main/run_eval.py --config eval/configs/runs/dinov3_poc_freq.yaml
 #
-# Every arm is scored on BOTH evaluation arms, so every table in the writeup is
-# two columns. That is not thoroughness for its own sake -- the two arms answer
-# different questions and neither answers the other's:
+# Scored on the crop200 evaluation arm -- a 200x200 window at native pixel
+# scale, in distribution for a multi-scale-trained head, and the informative arm
+# for frequency. Within the arm every image has identical dimensions, so the
+# dimension shortcut -- which scores AUC 1.0000 on this benchmark raw -- is 0.5
+# by construction rather than by normalisation.
 #
-#   crop200  a 200x200 window at native pixel scale. In distribution for a
-#            multi-scale-trained head, and the informative arm for frequency.
-#   r512     the whole image squashed to 512. Out of distribution (training never
-#            squashes a whole image) and spectrally confounded: it upsamples
-#            WildFake's 200x200 reals 2.56x while downsampling the fakes 2x, so
-#            the reals carry near-zero energy above 200-Nyquist BY CONSTRUCTION
-#            and the rolloff floor sits very high. A robustness check, not
-#            evidence about generation traces.
-#
-# Within either arm every image has identical dimensions, so the dimension
-# shortcut -- which scores AUC 1.0000 on this benchmark raw -- is 0.5 by
-# construction rather than by normalisation.
-#
-# THREE ROWS PER ARM, one key apart each:
+# THREE ROWS, one key apart each:
 #
 #   +grace             the adapter alone. E12's control.
 #   +grace-freq-null   a fresh enricher. MUST equal the row above to the last
 #                      decimal (E10). If it does not, stop.
 #   +grace-freq        the trained enricher. E12.
 #
-# All six run in ONE invocation so the condition lattice is built once: it is
+# All three run in ONE invocation so the condition lattice is built once: it is
 # seeded on the image index, so every detector sees byte-identical degraded
 # images and a difference between two rows is never a difference in the draw.
 #
@@ -38,12 +27,9 @@
 run_id: dinov3_poc_freq
 
 detectors:
-  - grace_adapter/configs/detectors/dinov3-crop200+grace.yaml
-  # - grace_adapter/configs/detectors/dinov3-crop200+grace-freq-null.yaml
-  # - grace_adapter/configs/detectors/dinov3-crop200+grace-freq.yaml
-  # - grace_adapter/configs/detectors/dinov3-r512+grace.yaml
-  # - grace_adapter/configs/detectors/dinov3-r512+grace-freq-null.yaml
-  # - grace_adapter/configs/detectors/dinov3-r512+grace-freq.yaml
+  - eval/configs/detectors/dinov3-crop200+grace.yaml
+  # - eval/configs/detectors/dinov3-crop200+grace-freq-null.yaml
+  - eval/configs/detectors/dinov3-crop200+grace-freq.yaml
 
 datasets:
   - load_data/configs/datasets/wildfake_coco_dalle3.yaml

@@ -1,6 +1,6 @@
 # Stage-1 image-level validation cache, multi-scale protocol.
 #
-#   python scripts/build_cache.py configs/cache/dinov3_multiscale_val.yaml
+#   python scripts/main/build_cache.py configs/cache/dinov3_multiscale_val.yaml
 #
 # configs/cache/dinov3_multiscale.yaml with the dataset and out_dir swapped, for
 # the reason the pre-crop pair had: `build_cache.py` derives its root from the

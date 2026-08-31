@@ -84,7 +84,7 @@
 # -- and no re-encode, which on a JPEG benchmark would resample away the very
 # artifacts under test.
 #
-#   python scripts/build_manifest.py --config load_data/configs/datasets/wildfake_coco_dalle3.yaml
+#   python scripts/main/build_manifest.py --config load_data/configs/datasets/wildfake_coco_dalle3.yaml
 #
 # Expect: 13841 rows (4998 real / 8843 generated).
 

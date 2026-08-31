@@ -1,6 +1,6 @@
 """THE deliverable: clean vs composed-degradation AUC for one detector.
 
-    python scripts/run_eval.py --config eval/configs/runs/<name>.yaml
+    python scripts/main/run_eval.py --config eval/configs/runs/<name>.yaml
 
 A run is one detector against a set of datasets. Writes
 results/{run_id}__{detector}__{dataset}.json per dataset and prints the

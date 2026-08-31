@@ -1,7 +1,7 @@
 """Stage 2: train the frequency enricher against a FROZEN stage-1 adapter.
 
-    python scripts/train_enrich.py train/configs/train/dinov3_enrich.yaml
-    python scripts/train_enrich.py train/configs/train/dinov3_enrich.yaml --finetune-head --run-id dinov3_enrich_ft
+    python scripts/main/train_enrich.py.py train/configs/train/dinov3_enrich.yaml
+    python scripts/main/train_enrich.py.py train/configs/train/dinov3_enrich.yaml --finetune-head --run-id dinov3_enrich_ft
 
 The adapter stays frozen; only the enricher trains. This reads the image a
 second time, in a basis the trunk's resize threw away -- which is why it can

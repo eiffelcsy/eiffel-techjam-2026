@@ -1,6 +1,6 @@
 """Resolve a cache config into the inputs a render or append needs.
 
-`scripts/build_cache.py` and `scripts/append_cache.py` share this so the
+`scripts/main/build_cache.py` and `scripts/append_cache.py` share this so the
 `CacheSpec` -- and therefore every fingerprint it carries -- is computed
 identically in both. A drift here would let an append silently reuse shards
 rendered from different inputs, which is exactly the failure

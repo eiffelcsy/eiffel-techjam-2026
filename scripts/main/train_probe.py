@@ -1,6 +1,6 @@
 """Stage 0: fit the PoC detector's classification head on clean features.
 
-    python scripts/train_probe.py train/configs/probe/dinov3_wildfake.yaml
+    python scripts/main/train_probe.py train/configs/probe/dinov3_wildfake_multiscale.yaml
 
 See `train.probe`.
 
