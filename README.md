@@ -60,19 +60,134 @@ python scripts/main/build_combined_manifest.py load_data/configs/datasets/wildfa
 ```
 
 Each WildFake archive is mined for just the sampled members and deleted, so peak
-disk is tens of GB rather than hundreds; the SOTA images stream on demand. See
-`docs/DATA.md` for the full data pipeline.
+disk is tens of GB rather than hundreds; the SOTA images stream on demand.
 
-## Typical flow
+#### Test / benchmark data (`wildfake-coco-dalle3`)
 
-1. Fit the head (stage 0): `python scripts/main/train_probe.py train/configs/probe/dinov3_wildfake_multiscale.yaml`
-2. Render the base feature cache (spatial + native-frequency): `python scripts/main/build_cache.py train/configs/cache/dinov3_multiscale_nativefreq.yaml`
-3. Append the SOTA rows: `python scripts/misc/append_cache.py train/configs/cache/dinov3_multiscale_nativefreq_combined.yaml`
-4. Train the GRACE adapter (stage 1): `python scripts/main/train_adapter.py train/configs/train/dinov3_multiscale.yaml`
-5. Train the frequency enricher (stage 2): `python scripts/main/train_enrich.py train/configs/train/dinov3_enrich_nativefreq.yaml`
-6. Evaluate: `python scripts/main/run_eval.py --config eval/configs/runs/dinov3_poc_baseline.yaml`
+The evaluation benchmark is **13,841 images = 4,998 COCO val2017 reals + 8,843
+DALL-E 3 "Advanced" fakes**, held out from training by construction (`DALLE` and
+`coco` are excluded from the training sample). The metadata tables and both image
+archives come from the WildFake ModelScope repo (`hy2628982280/WildFake`); the
+metadata is small, the images are not (`coco.zip` ~2.4 GB, `DALLE.zip` ~25 GB):
 
-Run the tests with `pytest`.
+```bash
+pip install modelscope
+
+# On Windows, set PYTHONIOENCODING=utf-8 first -- the downloader prints a "->"
+# through the console codepage and dies on the encode otherwise.
+modelscope download --dataset hy2628982280/WildFake \
+    split_train_test/csv_file/total_split/test_metadata.csv \
+    split_train_test/csv_file/total_split/train_metadata.csv \
+    Images/Real/coco.zip \
+    Images/Diffusion_based/DALLE.zip \
+    --local_dir data/wildfake_test
+```
+
+Unpack both archives under `data/wildfake_test/images/` so the tables' paths
+hang off it — they name `./Real/coco/...` and `./Diffusion_based/DALLE/...`, so
+those two directories must be immediate children of `data/wildfake_test/images/`:
+
+```bash
+mkdir -p data/wildfake_test/images
+unzip -o data/wildfake_test/coco.zip  -d data/wildfake_test/images
+unzip -o data/wildfake_test/DALLE.zip -d data/wildfake_test/images
+rm data/wildfake_test/coco.zip data/wildfake_test/DALLE.zip
+```
+
+Expected layout:
+
+```
+data/wildfake_test/split_train_test/csv_file/total_split/test_metadata.csv
+data/wildfake_test/split_train_test/csv_file/total_split/train_metadata.csv
+data/wildfake_test/images/Real/coco/coco2017/val2017/*.jpg
+data/wildfake_test/images/Diffusion_based/DALLE/Advanced/DALLE3/*/*.jpg
+```
+
+Build the manifest — 13,841 rows (4,998 real / 8,843 generated):
+
+```bash
+python scripts/main/build_manifest.py --config load_data/configs/datasets/wildfake_coco_dalle3.yaml
+```
+
+Images are referenced in place (no second copy, no re-encode), so only the two
+archives are ever on disk at once. See `docs/DATA.md` for the full data pipeline.
+
+## Reproducing the results
+
+Everything runs from the repo root with the venv active. The full chain, in
+order — data, then train each stage, then evaluate on the held-out benchmark:
+
+0. **Data** — train and test corpora (see [Data](#data)):
+
+   ```bash
+   python scripts/misc/fetch_wildfake_train.py
+   python scripts/main/build_combined_manifest.py load_data/configs/datasets/wildfake_train_combined.yaml
+   python scripts/main/build_manifest.py --config load_data/configs/datasets/wildfake_coco_dalle3.yaml
+   ```
+
+1. **Stage 0 — probe** (fit the frozen trunk's classification head on clean
+   features):
+
+   ```bash
+   python scripts/main/train_probe.py train/configs/probe/dinov3_wildfake_multiscale.yaml
+   ```
+
+   Writes `checkpoints/probe/dinov3_wildfake_multiscale/head.pt`, loaded by
+   every detector config.
+
+2. **Render the feature cache** (spatial + native-frequency), then append the
+   SOTA rows:
+
+   ```bash
+   python scripts/main/build_cache.py train/configs/cache/dinov3_multiscale_nativefreq.yaml
+   python scripts/misc/append_cache.py train/configs/cache/dinov3_multiscale_nativefreq_combined.yaml
+   ```
+
+3. **Stage 1 — GRACE adapter**:
+
+   ```bash
+   python scripts/main/train_adapter.py train/configs/train/dinov3_multiscale.yaml
+   ```
+
+   Writes `checkpoints/grace/dinov3_multiscale/ema.pt`, loaded by every adapted
+   detector config.
+
+4. **Stage 2 — frequency enricher**:
+
+   ```bash
+   python scripts/main/train_enrich.py train/configs/train/dinov3_enrich_nativefreq.yaml
+   ```
+
+   Writes `checkpoints/grace/dinov3_enrich_nativefreq/enricher.pt`.
+
+5. **Evaluate** on the held-out benchmark, crop200 arm. Each run writes
+   `results/{run_id}__{detector}__{dataset}.json` and prints the headline
+   retention table:
+
+   ```bash
+   python scripts/main/run_eval.py --config eval/configs/runs/dinov3_poc_baseline_arms.yaml   # unadapted retention (the denominator)
+   python scripts/main/run_eval.py --config eval/configs/runs/dinov3_poc_freq.yaml            # +grace and +grace-freq (the headline rows)
+   ```
+
+6. **Report** — baseline-normalized retention and the summary tables/figures:
+
+   ```bash
+   python scripts/misc/compare.py \
+     --baseline results/dinov3_poc_baseline_arms__dinov3-wildfake-crop200__wildfake-coco-dalle3.json \
+     --adapted  results/dinov3_poc_freq__dinov3-crop200+grace__wildfake-coco-dalle3.json
+
+   python scripts/misc/compare.py \
+     --baseline results/dinov3_poc_baseline_arms__dinov3-wildfake-crop200__wildfake-coco-dalle3.json \
+     --adapted  results/dinov3_poc_freq__dinov3-crop200+grace-freq__wildfake-coco-dalle3.json
+
+   python scripts/main/report.py --results results/ --out results/summary
+   ```
+
+Optional gate and ablations: the identity null-adapter check
+(`eval/configs/runs/dinov3_poc_identity.yaml` + `compare.py --assert-identity`)
+runs right after the baseline, before anything is trained; all stage-1 sweeps
+and seed-variance runs are in `docs/EXPERIMENTS.md`. Run the tests with
+`pytest`.
 
 ## Dashboard
 
