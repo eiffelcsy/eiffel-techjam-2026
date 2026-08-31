@@ -56,17 +56,17 @@ def score_dir(detector, image_dir, batch_size: int = 16, num_workers: int = 0):
 
 
 def main():
-    st.set_page_config(page_title="AIGC Detector", page_icon="🔍")
-    st.title("AI-generated image detector")
+    st.set_page_config(page_title="RESONANCE", page_icon="🔍")
+    st.title("RESONANCE — AI-generated image detector")
 
     with st.sidebar:
         st.header("Model")
-        cfg_path = st.selectbox(
-            "Detector", DETECTOR_CONFIGS,
-            index=DETECTOR_CONFIGS.index(
-                str(DETECTOR_DIR / "dinov3-crop200+grace.yaml")
-            ) if str(DETECTOR_DIR / "dinov3-crop200+grace.yaml") in DETECTOR_CONFIGS else 0,
-        )
+        cfg_labels = {Path(p).name: p for p in DETECTOR_CONFIGS}
+        cfg_path = cfg_labels[st.selectbox(
+            "Detector", sorted(cfg_labels),
+            index=sorted(cfg_labels).index("dinov3-crop200+grace.yaml")
+            if "dinov3-crop200+grace.yaml" in cfg_labels else 0,
+        )]
         device = st.selectbox("Device", ["auto", "cpu", "cuda"])
         batch_size = st.slider("Batch size", 1, 64, 16)
         detector, n_params = load_detector(cfg_path, device)
