@@ -1,4 +1,5 @@
-> **Report (PDF):** [RESONANCE — Frequency-Aware GRACE-fully Corrected Pixel Features for Robust AIGC Image Detection Under Real-World Transformations](report/Resonance_Tiktok_Techjam_2026.pdf)
+> **Report (PDF) INCLUDES ROBUSTNESS EVALUATION SUMMARY AND ERROR ANALYSIS NOTE:** 
+[RESONANCE — Frequency-Aware GRACE-fully Corrected Pixel Features for Robust AIGC Image Detection Under Real-World Transformations](report/Resonance_Tiktok_Techjam_2026.pdf)
 
 # RESONANCE: Frequency-Aware GRACE-fully Corrected Pixel Features for Robust AIGC Image Detection Under Real-World Transformations
 
