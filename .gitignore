@@ -18,8 +18,8 @@ __pycache__/
 /cache_ms_val/
 /cache_ms_nativefreq/
 /cache_ms_nativefreq_val/
-/checkpoints/
-/results/*
+# /checkpoints/
+# /results/*
 !/results/.gitkeep
 /logs/
 /wandb/

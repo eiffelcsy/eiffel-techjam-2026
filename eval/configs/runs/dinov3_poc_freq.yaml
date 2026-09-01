@@ -27,9 +27,9 @@
 run_id: dinov3_poc_freq
 
 detectors:
-  - eval/configs/detectors/dinov3-crop200+grace.yaml
   # - eval/configs/detectors/dinov3-crop200+grace-freq-null.yaml
   - eval/configs/detectors/dinov3-crop200+grace-freq.yaml
+  - eval/configs/detectors/dinov3-crop200+grace.yaml
 
 datasets:
   - load_data/configs/datasets/wildfake_coco_dalle3.yaml
