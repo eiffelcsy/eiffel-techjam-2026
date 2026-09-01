@@ -16,6 +16,19 @@ multi-scale crops (128–256 px), so no global resolution shortcut survives. See
 `docs/PIPELINE.md` (how the model works), `docs/DATA.md` (what it's trained on),
 and `docs/EXPERIMENTS.md` (what's been run and why).
 
+### Model sizes
+
+| Detector | Trainable modules | Parameters |
+|---|---|---|
+| Baseline (`head(trunk(x))`) | frozen DINOv3 ViT-S/16 trunk + fitted MLP probe head | ~22.0M |
+| + GRACE | baseline + gated residual adapter + severity head | ~22.8M |
+| + GRACE-freq | GRACE + frequency enricher (band-gated cross-attention) | ~24.3M |
+
+The trunk is frozen in every variant; the corrective modules add ~0.8M and
+~1.5M parameters respectively on top of the base detector. The auxiliary head
+used to train the enricher is a training-only scaffold and does not ship at
+inference. Counts from `scripts/misc/count_params.py`.
+
 ## Setup
 
 Requires Python 3.10+.
